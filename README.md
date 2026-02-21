@@ -44,7 +44,7 @@ demo.launch(share=True)
 ## Instalación local
 
 ```bash
-git clone https://github.com/TU_USUARIO/v2v.git
+git clone https://github.com/almagomen/v2v.git
 cd v2v
 python -m venv .venv
 .venv\Scripts\activate   # Windows
