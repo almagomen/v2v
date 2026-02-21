@@ -12,17 +12,11 @@ class OneLineLogger:
     def debug(self, msg):
         if msg.startswith("[download]"):
             print(end="\r" + msg, flush=True)
-            if "100%" in msg:
-                print()
+            if "100%" in msg: print()
 
-    def info(self, msg):
-        print(f"\nℹ️ {msg}")
-
-    def warning(self, msg):
-        print(f"\n⚠️ {msg}")
-
-    def error(self, msg):
-        pass
+    def info(self, msg): print(f"\nℹ️ {msg}")
+    def warning(self, msg): print(f"\n⚠️ {msg}")
+    def error(self, msg): pass
 
 
 def download_video(
@@ -88,15 +82,15 @@ def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[P
         print("✅ Audio de voz ya existe.")
         return vocals_path, no_vocals_path
 
-    if not DEMUCS_DIR.exists():
-        raise FileNotFoundError(
-            f"Demucs no encontrado en {DEMUCS_DIR}. "
-            "En Colab ejecuta el script de setup o clona: git clone https://github.com/adefossez/demucs.git /content/demucs"
-        )
+    # if not DEMUCS_DIR.exists():
+    #     raise FileNotFoundError(
+    #         f"Demucs no encontrado en {DEMUCS_DIR}. "
+    #         "En Colab ejecuta el script de setup o clona: git clone https://github.com/adefossez/demucs.git /content/demucs"
+    #     )
 
     original_dir = os.getcwd()
     try:
-        os.chdir(DEMUCS_DIR)
+        # os.chdir(DEMUCS_DIR)
         cmd = f'python -m demucs.separate "{video_path}" --two-stems vocals -o "{output_dir}"'
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
 
