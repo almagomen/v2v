@@ -5,12 +5,10 @@ Detecta Colab vs local y carga secretos desde Colab userdata o variables de ento
 from pathlib import Path
 import os
 import sys
-
 import torch
 
 # Detección Colab
-def is_colab() -> bool:
-    return "google.colab" in sys.modules
+def is_colab() -> bool: return "google.colab" in sys.modules
 
 
 # Rutas
@@ -27,8 +25,8 @@ if is_colab() and _google_drive:
     try:
         from google.colab import drive
         drive.mount("/content/drive")
-    except Exception:
-        pass
+    except Exception: pass
+
 google_drive = is_colab() and _google_drive
 DRIVE_DIR = Path("/content/drive/MyDrive/v2v") if google_drive else None
 
@@ -57,10 +55,9 @@ def get_lmnt_api_key() -> str | None:
         try:
             from google.colab import userdata
             return userdata.get("LMNT_API_KEY") or None
-        except Exception:
-            return os.getenv("LMNT_API_KEY")
+        except Exception: return os.getenv("LMNT_API_KEY")
+
     return os.getenv("LMNT_API_KEY")
 
 
-def get_drive_mount() -> bool:
-    return _google_drive and is_colab()
+def get_drive_mount() -> bool: return _google_drive and is_colab()
