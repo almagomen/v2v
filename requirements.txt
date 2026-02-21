@@ -1,0 +1,30 @@
+# v2v - Video2Video pipeline
+# Python 3.10+ recommended. GPU recommended for Whisper/Pyannote/Demucs.
+
+# Core
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# YouTube & audio separation
+yt-dlp[default]>=2024.1.0
+
+# STT (stable_whisper from stable-ts)
+openai-whisper>=20231117
+git+https://github.com/jianfch/stable-ts.git
+
+# Diarization
+pyannote-audio>=3.0.0
+pyannote-core>=6.0.1
+sentencex
+
+# Translation (Gemini)
+google-genai>=0.3.0
+
+# TTS (LMNT API)
+requests>=2.28.0
+
+# App
+gradio>=4.0.0
+
+# Optional for local .env
+python-dotenv>=1.0.0

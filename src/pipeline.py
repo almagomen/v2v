@@ -1,0 +1,105 @@
+"""
+Pipeline: cola de videos, transcripción, división en secuencias.
+"""
+import contextlib
+import io
+import pickle
+from pathlib import Path
+from typing import Union, Optional
+
+import torchaudio
+
+from src.download import yt
+from src.stt import run_main
+from src.config import QUEUE_DIR
+
+
+def process_video_queue(
+    urls: list[str],
+    translate_lang: Union[bool, str] = False,
+) -> list[dict]:
+    """
+    Procesa una cola de videos: descarga, transcribe y traduce.
+    Returns: lista de dicts con path, output_name, url, texts, result, transcription, diarization.
+    """
+    results = []
+    for idx, u in enumerate(urls, 1):
+        print(f"Procesando: {u} {idx}/{len(urls)}")
+        try:
+            path, info = yt(u, demucs=True)
+            translated_result, output_name, result, transcription, diarization = run_main(
+                path, u, translate=translate_lang
+            )
+            output_file = path.with_name("result.pkl")
+            with open(output_file, "wb") as f:
+                pickle.dump(
+                    (translated_result, output_name, u, result, transcription, diarization),
+                    f,
+                )
+            print(f"✅ Video procesado:{' ' + translate_lang + ',' if translate_lang else ''} {len(translated_result)} segmentos")
+            print("=" * 60 + "\n")
+            results.append({
+                "path": path,
+                "output_name": output_name,
+                "url": u,
+                "texts": translated_result,
+                "src_lang": transcription.language,
+                "result": result,
+                "transcription": transcription,
+                "diarization": diarization,
+            })
+        except Exception as e:
+            print(f"❌ Error procesando {u}: {e}\n")
+            continue
+    print(f"✅ Procesamiento completado: {len(results)}/{len(urls)} videos")
+    return results
+
+
+def split_audio_sequences(
+    audio_path: Path,
+    texts: list[dict],
+    output_dir: Optional[Path] = None,
+    edit_indices: Optional[list[int]] = None,
+) -> list[Path]:
+    """Divide el audio en secuencias según los segmentos de texto."""
+    if output_dir is None:
+        output_dir = audio_path.parent / "Seqs_src"
+    output_dir.mkdir(exist_ok=True)
+
+    arr, org_sr = torchaudio.load(str(audio_path))
+    generated_files = []
+
+    texts_to_process = texts if edit_indices is None else [texts[i - 1] for i in edit_indices]
+
+    for idx, text_dict in enumerate(texts_to_process):
+        start = int(text_dict["start"] * org_sr)
+        end = int(text_dict["end"] * org_sr)
+        arr_split = arr[:, start:end]
+
+        seq_num = edit_indices[idx] if edit_indices else texts.index(text_dict) + 1
+        audio_filename = f"{audio_path.stem}_{seq_num:04d}.wav"
+        audio_path_out = output_dir / audio_filename
+
+        f_err = io.StringIO()
+        with contextlib.redirect_stderr(f_err):
+            torchaudio.save(str(audio_path_out), arr_split, sample_rate=org_sr)
+        generated_files.append(audio_path_out)
+
+    return generated_files
+
+
+def split_all_sequences(video_paths: list[Path]) -> None:
+    """Divide el audio de todos los videos en secuencias."""
+    for path in video_paths:
+        texts_file = path.with_name("result.pkl")
+        if not texts_file.exists():
+            print(f"⚠️ Saltando {path.stem}: no hay archivo de textos")
+            continue
+        with open(texts_file, "rb") as f:
+            texts, output_name, url, result, transcription, diarization = pickle.load(f)
+        split_audio_sequences(
+            audio_path=path.with_name("vocals.wav"),
+            texts=texts,
+            output_dir=path.parent / "Seqs_src",
+        )
+        print(f"✅ Secuencias: {path.stem}")

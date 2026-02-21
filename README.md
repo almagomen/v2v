@@ -1,0 +1,97 @@
+# Video2Video
+
+Pipeline de **traducción y doblaje** de videos de YouTube: descarga → transcripción (Whisper) → diarización (Pyannote) → traducción (Gemini) → TTS (LMNT) → render con ffmpeg.
+
+## Requisitos
+
+- Python 3.10+
+- GPU recomendada (Whisper, Pyannote, Demucs)
+- **ffmpeg** en el PATH
+
+## Variables de entorno / Secrets
+
+| Variable         | Uso                          |
+|------------------|------------------------------|
+| `GOOGLE_API_KEY` | Gemini (traducción, títulos)  |
+| `LMNT_API_KEY`   | LMNT TTS (clonado de voz)     |
+| `DRIVE_MOUNT`    | Opcional: `true` para montar Drive en Colab |
+
+En Colab: panel izquierdo → **Secrets** y añade `GOOGLE_API_KEY` y `LMNT_API_KEY`.
+
+## Uso en Google Colab
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/TU_USUARIO/v2v/blob/main/colab_launch.ipynb)
+
+1. Abre [colab_launch.ipynb](colab_launch.ipynb) (o el enlace de arriba tras sustituir `TU_USUARIO` por tu usuario de GitHub).
+2. **Runtime → Change runtime type → T4 GPU**.
+3. Añade en **Secrets**: `GOOGLE_API_KEY`, `LMNT_API_KEY`.
+4. Ejecuta las celdas: clonar repo → `pip install -r requirements.txt` → `demo.launch(share=True)`.
+5. Usa el enlace público que muestra Gradio para abrir la app en el navegador.
+
+Si no usas GitHub, sube esta carpeta a Colab (o a Drive y monta Drive), entra en la carpeta y ejecuta:
+
+```bash
+pip install -r requirements.txt
+```
+
+Luego en una celda:
+
+```python
+from app_gradio import demo
+demo.launch(share=True)
+```
+
+## Instalación local
+
+```bash
+git clone https://github.com/TU_USUARIO/v2v.git
+cd v2v
+python -m venv .venv
+.venv\Scripts\activate   # Windows
+# source .venv/bin/activate  # Linux/macOS
+pip install -r requirements.txt
+```
+
+Copia `.env.example` a `.env` y rellena `GOOGLE_API_KEY` y `LMNT_API_KEY`.
+
+```bash
+python app_gradio.py
+```
+
+## Demucs (separación de voces)
+
+En Colab, si quieres usar Demucs para separar voz/instrumental:
+
+```bash
+git clone https://github.com/adefossez/demucs.git /content/demucs
+pip install -e /content/demucs
+```
+
+Opcional: [pesos preentrenados](https://drive.google.com/drive/folders/1T3M5K-67CQpCI6IC9d2xjga6r4QcjkFo) en `/content/demucs/demucs`.
+
+## Estructura del repo
+
+```
+v2v/
+├── README.md
+├── requirements.txt
+├── .env.example
+├── app_gradio.py       # Interfaz Gradio
+├── colab_launch.ipynb   # Notebook mínimo para Colab
+└── src/
+    ├── config.py       # Rutas, device, API keys
+    ├── models.py       # Caché de modelos
+    ├── audio_utils.py  # Ajuste duración, clone_voice_segments, merge
+    ├── translation.py  # Gemini: traducir, título TikTok
+    ├── download.py     # yt-dlp, Demucs
+    ├── stt.py          # Whisper, run_main
+    ├── diarization.py  # Pyannote
+    ├── tts.py          # LMNT
+    ├── pipeline.py     # process_video_queue, split_audio_sequences
+    ├── render.py       # ffmpeg, preview
+    └── edit_utils.py   # Edición de textos, regenerate_segments
+```
+
+## Licencia
+
+Uso bajo tu propia responsabilidad. No incluyas claves API en el código ni en el repo.
