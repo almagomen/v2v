@@ -2,8 +2,8 @@
 # Python 3.10+ recommended. GPU recommended for Whisper/Pyannote/Demucs.
 
 # Core
-torch>=2.0.0
-torchaudio>=2.0.0
+# torch>=2.0.0
+# torchaudio>=2.0.0
 
 # YouTube & audio separation
 yt-dlp[default]
