@@ -7,7 +7,7 @@
 
 # YouTube & audio separation
 yt-dlp[default]
-git+https://github.com/adefossez/demucs.git
+# git+https://github.com/adefossez/demucs.git
 
 # STT 
 git+https://github.com/jianfch/stable-ts.git
