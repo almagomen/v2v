@@ -5,8 +5,7 @@ import io
 import time
 
 import requests
-import torchaudio
-import torch
+import torchaudio, torch
 
 from src.config import get_lmnt_api_key, get_lmnt_auth0_cookie, get_mixpanel_cookie
 
