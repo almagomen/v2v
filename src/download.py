@@ -45,7 +45,11 @@ def download_video(
         "outtmpl": str(output_dir / "%(title)s" / "%(title)s.%(ext)s"),
         "format": f"{video} + {audio}",
         "merge_output_format": "mp4",
+        'js_runtimes': {'node': {}},
+        'remote_components': ['ejs:github'],
         "logger": OneLineLogger(),
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "referer": "https://www.google.com/",
         "quiet": True,
     }
     if cookies_file and cookies_file.exists():
