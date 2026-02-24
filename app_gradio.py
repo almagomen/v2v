@@ -37,10 +37,10 @@ def _run_pipeline_core(
     urls: list[str],
     translate_lang: str | None,
     speaker_name: str,
-) -> Path | None:
+) -> list[Path]:
     """
     Lógica de la pipeline. Debe ejecutarse con sys.stdout ya reemplazado por QueueWriter.
-    Returns: path del último video renderizado o None.
+    Returns: lista de paths de videos renderizados.
     """
     from src.config import TEMP_DIR
     from src.pipeline import process_video_queue, split_all_sequences
@@ -56,9 +56,10 @@ def _run_pipeline_core(
     results = process_video_queue(urls, translate_lang=translate_lang)
     if not results:
         print("❌ No se pudo procesar ningún video.")
-        return None
+        return []
 
-    last_output_path: Path | None = None
+    output_paths: list[Path] = []
+    print("\n🚀 Inferencia iniciada...\n")
 
     for idx, r in enumerate(results):
         path = r["path"]
@@ -67,7 +68,7 @@ def _run_pipeline_core(
         transcription = r["transcription"]
         lang = translate_lang if translate_lang else transcription.language
 
-        print(f"\n✂️ [{idx + 1}/{len(results)}] Dividiendo en secuencias: {path.stem}")
+        print(f"✂️ Segmentos: {path.stem}  [{idx + 1}/{len(results)}]")
         split_all_sequences([path])
 
         print("🎙️ Clonando voz...")
@@ -101,10 +102,11 @@ def _run_pipeline_core(
 
         print("🎬 Renderizando video...")
         output_path = render_video(path, output_name, vocals_es_path, no_vocals_path)
-        last_output_path = output_path
+        output_paths.append(output_path)
         print(f"✅ Listo: {output_path}")
+        print("=" * 60 + "\n")
 
-    return last_output_path
+    return output_paths
 
 
 def _worker(
@@ -117,12 +119,12 @@ def _worker(
     old_stdout = sys.stdout
     try:
         sys.stdout = QueueWriter(log_queue)
-        path = _run_pipeline_core(urls, translate_lang, speaker_name)
-        result_queue.put((path,))
+        paths = _run_pipeline_core(urls, translate_lang, speaker_name)
+        result_queue.put((paths,))
     except Exception as e:
         import traceback
         sys.stdout.write(traceback.format_exc() + f"\n❌ Error: {e}\n")
-        result_queue.put((None,))
+        result_queue.put(([],))
     finally:
         sys.stdout = old_stdout
         log_queue.put(None)
@@ -132,13 +134,14 @@ def process_streaming(
     url_input: str,
     translate_lang: str,
     speaker_name: str,
+    progress: gr.Progress | None = None,
 ):
     """
     Handler generador: ejecuta la pipeline en un hilo y va devolviendo el log en vivo.
     """
     urls = [u.strip() for u in url_input.strip().splitlines() if u.strip()]
     if not urls:
-        yield "❌ Introduce al menos una URL de YouTube (una por línea).", None, None
+        yield "❌ Introduce al menos una URL de YouTube (una por línea).", gr.update(), None, None
         return
 
     translate = None if translate_lang == "None" or not translate_lang else translate_lang
@@ -152,7 +155,11 @@ def process_streaming(
     )
     thread.start()
 
+    if progress is not None:
+        progress(0, desc="Iniciando...")
+
     log_parts: list[str] = []
+    step = 0
     while True:
         try:
             item = log_queue.get(timeout=0.05)
@@ -164,20 +171,34 @@ def process_streaming(
             break
         log_parts.append(item)
         current_log = "".join(log_parts)
-        yield current_log, None, None
+        step += 1
+        if progress is not None and step % 20 == 0:
+            progress(min(0.95, step * 0.01), desc="Procesando...")
+        yield current_log, gr.update(), None, None
 
     try:
-        output_path, = result_queue.get(timeout=1.0)
+        output_paths, = result_queue.get(timeout=1.0)
     except queue.Empty:
-        output_path = None
+        output_paths = []
 
     thread.join()
     final_log = "".join(log_parts)
 
-    if output_path and Path(output_path).exists():
-        yield final_log, str(output_path), str(output_path)
-    else:
-        yield final_log, None, None
+    if progress is not None:
+        progress(1, desc="Completado")
+
+    if not output_paths:
+        yield final_log, gr.update(), None, None
+        return
+
+    choices = [(Path(p).name, str(p)) for p in output_paths]
+    first_path = str(output_paths[0])
+    yield (
+        final_log,
+        gr.update(choices=choices, value=first_path),
+        first_path,
+        first_path,
+    )
 
 
 def build_demo():
@@ -204,13 +225,34 @@ def build_demo():
         btn = gr.Button("Procesar", variant="primary")
 
         log_out = gr.Textbox(label="Log", lines=12, interactive=False)
-        video_out = gr.Video(label="Video resultante")
+
+        with gr.Row():
+            with gr.Column(scale=2):
+                video_out = gr.Video(label="Vista previa")
+            with gr.Column(scale=1):
+                video_selector = gr.Dropdown(
+                    label="Elegir video",
+                    choices=[],
+                    value=None,
+                    interactive=True,
+                )
         file_out = gr.File(label="Descargar video")
+
+        def on_select_video(path):
+            if path and Path(path).exists():
+                return path, path
+            return None, None
+
+        video_selector.change(
+            fn=on_select_video,
+            inputs=[video_selector],
+            outputs=[video_out, file_out],
+        )
 
         btn.click(
             fn=process_streaming,
             inputs=[url_in, translate_in, speaker_in],
-            outputs=[log_out, video_out, file_out],
+            outputs=[log_out, video_selector, video_out, file_out],
         )
 
     return demo

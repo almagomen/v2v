@@ -9,10 +9,11 @@ from src.config import BASE_DIR, QUEUE_DIR, DRIVE_DIR, google_drive
 
 
 class OneLineLogger:
+    """Solo imprime una línea por descarga (al 100%%) para no saturar el log."""
     def debug(self, msg):
         if msg.startswith("[download]"):
-            print(end="\r" + msg, flush=True)
-            if "100%" in msg: print()
+            if "100%" in msg:
+                print(msg)
 
     def info(self, msg): print(f"\nℹ️ {msg}")
     def warning(self, msg): print(f"\n⚠️ {msg}")
@@ -45,12 +46,12 @@ def download_video(
         "outtmpl": str(output_dir / "%(title)s" / "%(title)s.%(ext)s"),
         "format": f"{video} + {audio}",
         "merge_output_format": "mp4",
+        "logger": OneLineLogger(),
+        "quiet": True,
         'js_runtimes': {'node': {}},
         'remote_components': ['ejs:github'],
-        # "logger": OneLineLogger(),
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "referer": "https://www.google.com/",
-        "quiet": True,
     }
     if cookies_file and cookies_file.exists():
         opts["cookiefile"] = str(cookies_file)
@@ -59,10 +60,11 @@ def download_video(
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             media = info["requested_downloads"][0]["filepath"]
-            print(
-                f"✅ {Path(media).name}, {info.get('format', 'N/A')}, "
-                f"{info.get('fps', 'N/A')}, {info.get('vcodec', 'N/A')}, {info.get('acodec', 'N/A')}"
-            )
+            vcodec = info.get("vcodec", "N/A")
+            acodec = info.get("acodec", "N/A")
+            fmt = info.get("format", "N/A")
+            fps = info.get("fps", "N/A")
+            print(f"✅ {Path(media).name}  =>  {vcodec}  ||  {acodec}  ||  {fmt}  ||  {fps}")
             return Path(media), info
     except Exception as e:
         print(f"❌ Error al descargar video: {e}")
@@ -118,7 +120,6 @@ def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[P
 
 def yt(url: str, demucs: bool = True) -> tuple[Path, dict]:
     """Descarga video y opcionalmente separa voces. Returns (path, info)."""
-    print(url)
     path, info = download_video(url)
     if demucs:
         separate_vocals(path)

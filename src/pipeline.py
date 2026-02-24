@@ -24,7 +24,7 @@ def process_video_queue(
     """
     results = []
     for idx, u in enumerate(urls, 1):
-        print(f"Procesando: {u} {idx}/{len(urls)}")
+        print(f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
         try:
             path, info = yt(u, demucs=True)
             translated_result, output_name, result, transcription, diarization = run_main(
@@ -36,7 +36,7 @@ def process_video_queue(
                     (translated_result, output_name, u, result, transcription, diarization),
                     f,
                 )
-            print(f"✅ Video procesado:{' ' + translate_lang + ',' if translate_lang else ''} {len(translated_result)} segmentos")
+            print(f"✅ {output_name}  =>  {len(translated_result)} segmentos")
             print("=" * 60 + "\n")
             results.append({
                 "path": path,
@@ -102,4 +102,3 @@ def split_all_sequences(video_paths: list[Path]) -> None:
             texts=texts,
             output_dir=path.parent / "Seqs_src",
         )
-        print(f"✅ Secuencias: {path.stem}")
