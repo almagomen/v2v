@@ -36,7 +36,7 @@ def process_video_queue(
                     (translated_result, output_name, u, result, transcription, diarization),
                     f,
                 )
-            print(f"✅ {output_name}  =>  {len(translated_result)} segmentos")
+            print(f"✅ {output_name}  🚩  {len(translated_result)} segmentos")
             print("=" * 60 + "\n")
             results.append({
                 "path": path,
@@ -51,7 +51,6 @@ def process_video_queue(
         except Exception as e:
             print(f"❌ Error procesando {u}: {e}\n")
             continue
-    print(f"✅ Procesamiento completado: {len(results)}/{len(urls)} videos")
     return results
 
 

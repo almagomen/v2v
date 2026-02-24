@@ -47,12 +47,16 @@ def _run_pipeline_core(
     from src.audio_utils import clone_voice_segments, merge_cloned_audio
     from src.render import render_video
     from src.tts import model_tts
+    from src.stt import get_whisper_model
+    from src.diarization import get_diarization_model
 
     import torchaudio
 
-    speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
-
+    get_whisper_model()
+    get_diarization_model()
+    print("✅ Modelos cargados.\n")
     print("📥 Descargando y transcribiendo...")
+    speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
     results = process_video_queue(urls, translate_lang=translate_lang)
     if not results:
         print("❌ No se pudo procesar ningún video.")
@@ -103,9 +107,11 @@ def _run_pipeline_core(
         print("🎬 Renderizando video...")
         output_path = render_video(path, output_name, vocals_es_path, no_vocals_path)
         output_paths.append(output_path)
-        print(f"✅ Listo: {output_path}")
         print("=" * 60 + "\n")
 
+    n = len(output_paths)
+    if n:
+        print(f"✅ Inferencia Completada [{n}/{len(results)}]")
     return output_paths
 
 
@@ -160,12 +166,18 @@ def process_streaming(
 
     log_parts: list[str] = []
     step = 0
+    spinner = ("|", "/", "-", "\\")
     while True:
         try:
             item = log_queue.get(timeout=0.05)
         except queue.Empty:
             if not thread.is_alive():
                 break
+            # Animación ASCII para indicar que sigue ejecutando (la barra de Gradio puede ocultarse)
+            step += 1
+            spin = spinner[step % 4]
+            current_log = "".join(log_parts)
+            yield current_log + "\n\n⏳ Procesando " + spin, gr.update(), None, None
             continue
         if item is None:
             break
