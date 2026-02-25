@@ -242,7 +242,7 @@ def build_demo():
 
         with gr.Row():
             with gr.Column(scale=2):
-                video_out = gr.Video(label="Vista previa", height=360)
+                video_out = gr.Video(label="Vista previa", height=720)
             with gr.Column(scale=1):
                 video_selector = gr.Dropdown(
                     label="Elegir video",
