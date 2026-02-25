@@ -119,5 +119,4 @@ def run_main(
     else:
         output_name = media_path.stem
 
-    print(f"✅ {output_name}")
     return translated_result, output_name, result, transcription, diarization

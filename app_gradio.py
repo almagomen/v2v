@@ -72,10 +72,11 @@ def _run_pipeline_core(
         transcription = r["transcription"]
         lang = translate_lang if translate_lang else transcription.language
 
-        print(f"✂️ Segmentos: {path.stem}  [{idx + 1}/{len(results)}]")
+        # Dividir audio en secuencias (no imprime nada extra)
         split_all_sequences([path])
 
-        print("🎙️ Clonando voz...")
+        # Log principal por video
+        print(f"🎙️ Clonando voz: {output_name}  [{idx + 1}/{len(results)}]")
         paths_es, times, freq = clone_voice_segments(
             path,
             texts,
@@ -166,18 +167,26 @@ def process_streaming(
 
     log_parts: list[str] = []
     step = 0
-    spinner = ("|", "/", "-", "\\")
+    spinner = ("◐", "◓", "◑", "◒")
     while True:
         try:
             item = log_queue.get(timeout=0.05)
         except queue.Empty:
             if not thread.is_alive():
                 break
-            # Animación ASCII para indicar que sigue ejecutando (la barra de Gradio puede ocultarse)
+            # Animación ASCII por fase (carga modelos, descarga, inferencia)
             step += 1
             spin = spinner[step % 4]
             current_log = "".join(log_parts)
-            yield current_log + "\n\n⏳ Procesando " + spin, gr.update(), None, None
+            if "✅ Modelos cargados." not in current_log:
+                label = "Cargando modelos..."
+            elif "📥 Descargando y transcribiendo..." in current_log and "🚀 Inferencia iniciada..." not in current_log:
+                label = "Descargando y transcribiendo..."
+            elif "🚀 Inferencia iniciada..." in current_log and "✅ Inferencia Completada" not in current_log:
+                label = "Inferencia en curso..."
+            else:
+                label = "Procesando..."
+            yield current_log + f"\n\n{spin} {label}", gr.update(), None, None
             continue
         if item is None:
             break
@@ -240,7 +249,7 @@ def build_demo():
 
         with gr.Row():
             with gr.Column(scale=2):
-                video_out = gr.Video(label="Vista previa")
+                video_out = gr.Video(label="Vista previa", height=360)
             with gr.Column(scale=1):
                 video_selector = gr.Dropdown(
                     label="Elegir video",
