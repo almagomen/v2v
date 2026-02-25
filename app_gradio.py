@@ -47,14 +47,9 @@ def _run_pipeline_core(
     from src.audio_utils import clone_voice_segments, merge_cloned_audio
     from src.render import render_video
     from src.tts import model_tts
-    from src.stt import get_whisper_model
-    from src.diarization import get_diarization_model
 
     import torchaudio
 
-    get_whisper_model()
-    get_diarization_model()
-    print("✅ Modelos cargados.\n")
     print("📥 Descargando y transcribiendo... \n")
     speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
     results = process_video_queue(urls, translate_lang=translate_lang)
@@ -178,14 +173,12 @@ def process_streaming(
             step += 1
             spin = spinner[step % 4]
             current_log = "".join(log_parts)
-            if "✅ Modelos cargados." not in current_log:
-                label = "Cargando modelos..."
-            elif "📥 Descargando y transcribiendo..." in current_log and "🚀 Inferencia iniciada..." not in current_log:
-                label = "Descargando y transcribiendo..."
-            elif "🚀 Inferencia iniciada..." in current_log and "✅ Inferencia Completada" not in current_log:
+            if "🚀 Inferencia iniciada..." in current_log and "✅ Inferencia Completada" not in current_log:
                 label = "Inferencia en curso..."
+            elif "📥 Descargando y transcribiendo..." in current_log:
+                label = "Descargando y transcribiendo..."
             else:
-                label = "Procesando..."
+                label = "Cargando modelos..."
             yield current_log + f"\n\n{spin} {label}", gr.update(), None, None
             continue
         if item is None:
