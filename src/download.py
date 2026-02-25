@@ -8,32 +8,15 @@ from pathlib import Path
 
 from src.config import BASE_DIR, QUEUE_DIR, DRIVE_DIR, google_drive
 
-# Guarda la última línea de progreso por archivo (100%) para formatear con codec después
-_download_progress_lines: list[str] = []
-
-
 class OneLineLogger:
-    """Acumula una línea por descarga (al 100%) para formatear después con codec."""
+    """Solo imprime una línea por descarga (al 100%%) para no saturar el log."""
     def debug(self, msg):
-        if msg.startswith("[download]") and "100%" in msg:
-            # Extraer "2.84MiB in 00:00:00 at 4.38MiB/s"
-            m = re.search(r"100%\s+of\s+(\S+)\s+in\s+(\S+)\s+at\s+(\S+)", msg)
-            if m:
-                _download_progress_lines.append(f"{m.group(1)} in {m.group(2)} at {m.group(3)}")
+        if msg.startswith("[download]"):
+            if "100%" in msg: print(msg)
 
     def info(self, msg): print(f"\nℹ️ {msg}")
     def warning(self, msg): print(f"\n⚠️ {msg}")
     def error(self, msg): pass
-
-
-def _format_size(path: str) -> str:
-    try:
-        n = os.path.getsize(path)
-        if n >= 1024 * 1024:
-            return f"{n / (1024*1024):.2f}MiB"
-        return f"{n / 1024:.2f}KiB"
-    except Exception:
-        return "?"
 
 
 def download_video(
@@ -46,16 +29,14 @@ def download_video(
     Descarga un video de YouTube y extrae información.
     Returns: (path, info)
     """
-    if output_dir is None:
-        output_dir = QUEUE_DIR
+    if output_dir is None: output_dir = QUEUE_DIR
 
     from yt_dlp import YoutubeDL
 
     cookies_file = (DRIVE_DIR / "cookies.txt") if DRIVE_DIR else None
 
     video = "bv[vcodec^=avc1]"
-    if resolution:
-        video += f"[width<={resolution}]"
+    if resolution: video += f"[width<={resolution}]"
     audio = f"ba[language^={language}]" if language else "ba"
 
     opts = {
@@ -69,36 +50,22 @@ def download_video(
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "referer": "https://www.google.com/",
     }
-    if cookies_file and cookies_file.exists():
-        opts["cookiefile"] = str(cookies_file)
+    if cookies_file and cookies_file.exists(): opts["cookiefile"] = str(cookies_file)
 
-    global _download_progress_lines
-    _download_progress_lines.clear()
     try:
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            requested = info.get("requested_downloads") or []
-            for i, d in enumerate(requested):
-                codec = d.get("vcodec") or d.get("acodec") or "N/A"
-                progress_part = _download_progress_lines[i] if i < len(_download_progress_lines) else _format_size(d.get("filepath", ""))
-                print(f"{progress_part}  [ {codec} ]")
+            media = info["requested_downloads"][0]["filepath"]
+            vcodec = info.get("vcodec", "N/A")
+            acodec = info.get("acodec", "N/A")
             fmt = info.get("format", "N/A")
             fps = info.get("fps", "N/A")
-            # Archivo final: con merge suele ser el primero; si hay 2, el merge está en title.mp4
-            if requested:
-                media = requested[0]["filepath"]
-                p = Path(media)
-                if len(requested) >= 2 and (not p.exists() or ".f" in p.name):
-                    merged = p.parent / f"{info.get('title', p.stem)}.mp4"
-                    if merged.exists():
-                        media = str(merged)
-            else:
-                media = None
-            print(f"✅ {Path(media).name}  🚩  {fmt}  ||  {fps}")
+            print(f"✅ {Path(media).name}  🚩  {vcodec}  ||  {acodec}  ||  {fmt}  ||  {fps}")
             return Path(media), info
     except Exception as e:
         print(f"❌ Error al descargar video: {e}")
         raise
+
 
 
 def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[Path, Path]:

@@ -55,7 +55,7 @@ def _run_pipeline_core(
     get_whisper_model()
     get_diarization_model()
     print("✅ Modelos cargados.\n")
-    print("📥 Descargando y transcribiendo...")
+    print("📥 Descargando y transcribiendo... \n")
     speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
     results = process_video_queue(urls, translate_lang=translate_lang)
     if not results:
@@ -76,7 +76,7 @@ def _run_pipeline_core(
         split_all_sequences([path])
 
         # Log principal por video
-        print(f"🎙️ Clonando voz: {output_name}  [{idx + 1}/{len(results)}]")
+        print(f"🎙️ Clonando voz: {path.stem}  [{idx + 1}/{len(results)}]")
         paths_es, times, freq = clone_voice_segments(
             path,
             texts,
