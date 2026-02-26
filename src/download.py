@@ -4,6 +4,8 @@ Descarga de videos YouTube (yt-dlp) y separación de voces (BS-RoFormer).
 import os
 import re
 import subprocess
+import io
+import contextlib
 from pathlib import Path
 
 from src.config import BASE_DIR, QUEUE_DIR, DRIVE_DIR, google_drive
@@ -49,7 +51,6 @@ def _load_bs_roformer():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
-    print(f"BS-RoFormer cargado en {device}\n")
 
     return config, model, device
 
@@ -143,15 +144,17 @@ def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[P
     config, model, device = get_roformer_model()
 
     # 2) Leer audio directamente del video con torchaudio (backend ffmpeg)
-    print(f"Processing audio from video: {video_path.name}")
+    print(f"🎧 Separando audio (BS-RoFormer): {video_path.stem}")
     mix, sr = torchaudio.load(str(video_path))
     original_channels = mix.shape[0]
     if original_channels == 1:
         mix = torch.cat([mix, mix], dim=0)
     mixture = mix.to(torch.float32)
 
+    # 3) Separar stems con BS-RoFormer, ocultando logs internos de la librería
     with torch.no_grad():
-        result, _ = demix_track(config, model, mixture, device)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            result, _ = demix_track(config, model, mixture, device)
 
     # Guardar stems individuales (vocals, drums, bass, etc.)
     for instrument, audio in result.items():

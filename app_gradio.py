@@ -7,6 +7,7 @@ import queue
 import sys
 import threading
 from pathlib import Path
+import zipfile
 
 import gradio as gr
 
@@ -143,7 +144,7 @@ def process_streaming(
     """
     urls = [u.strip() for u in url_input.strip().splitlines() if u.strip()]
     if not urls:
-        yield "❌ Introduce al menos una URL de YouTube (una por línea).", gr.update(), None, None
+        yield "❌ Introduce al menos una URL de YouTube (una por línea).", gr.update(), None, None, None
         return
 
     translate = None if translate_lang == "None" or not translate_lang else translate_lang
@@ -169,17 +170,19 @@ def process_streaming(
         except queue.Empty:
             if not thread.is_alive():
                 break
-            # Animación ASCII por fase (carga modelos, descarga, inferencia)
+            # Animación ASCII por fase (carga modelos, descarga, separación, inferencia)
             step += 1
             spin = spinner[step % 4]
             current_log = "".join(log_parts)
             if "🚀 Inferencia iniciada..." in current_log and "✅ Inferencia Completada" not in current_log:
                 label = "Inferencia en curso..."
+            elif "🎧 Separando audio (BS-RoFormer)" in current_log:
+                label = "Separando audio..."
             elif "📥 Descargando y transcribiendo..." in current_log:
                 label = "Descargando y transcribiendo..."
             else:
-                label = "Cargando modelos..."
-            yield current_log + f"\n\n{spin} {label}", gr.update(), None, None
+                label = "Preparando pipeline..."
+            yield current_log + f"\n\n{spin} {label}", gr.update(), None, None, None
             continue
         if item is None:
             break
@@ -188,7 +191,7 @@ def process_streaming(
         step += 1
         if progress is not None and step % 20 == 0:
             progress(min(0.95, step * 0.01), desc="Procesando...")
-        yield current_log, gr.update(), None, None
+        yield current_log, gr.update(), None, None, None
 
     try:
         output_paths, = result_queue.get(timeout=1.0)
@@ -202,17 +205,35 @@ def process_streaming(
         progress(1, desc="Completado")
 
     if not output_paths:
-        yield final_log, gr.update(), None, None
+        yield final_log, gr.update(), None, None, None
         return
 
-    choices = [(Path(p).name, str(p)) for p in output_paths]
-    first_path = str(output_paths[0])
+    # Guardar lista de paths para descarga individual y como .zip
+    str_paths = [str(p) for p in output_paths]
+    choices = [(Path(p).name, str(p)) for p in str_paths]
+    first_path = str_paths[0]
     yield (
         final_log,
         gr.update(choices=choices, value=first_path),
         first_path,
         first_path,
+        str_paths,
     )
+
+
+def _zip_videos(paths: list[str] | None) -> str | None:
+    """Crea un zip con todos los videos inferidos y devuelve su path."""
+    if not paths:
+        return None
+    from src.config import TEMP_DIR
+
+    zip_path = TEMP_DIR / "videos_inferidos.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in paths:
+            p_path = Path(p)
+            if p_path.exists():
+                zf.write(p_path, arcname=p_path.name)
+    return str(zip_path)
 
 
 def build_demo():
@@ -250,7 +271,10 @@ def build_demo():
                     value=None,
                     interactive=True,
                 )
+                download_all_btn = gr.Button("Descargar todos (.zip)")
         file_out = gr.File(label="Descargar video")
+        zip_out = gr.File(label="Descargar todos los videos (.zip)")
+        videos_state = gr.State([])
 
         def on_select_video(path):
             if path and Path(path).exists():
@@ -263,10 +287,16 @@ def build_demo():
             outputs=[video_out, file_out],
         )
 
+        download_all_btn.click(
+            fn=_zip_videos,
+            inputs=[videos_state],
+            outputs=[zip_out],
+        )
+
         btn.click(
             fn=process_streaming,
             inputs=[url_in, translate_in, speaker_in],
-            outputs=[log_out, video_selector, video_out, file_out],
+            outputs=[log_out, video_selector, video_out, file_out, videos_state],
         )
 
     return demo
