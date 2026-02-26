@@ -314,8 +314,11 @@ def regenerate_single_segment(video_path: str, df: pd.DataFrame, row_idx: int | 
     except Exception as e:
         return None, f"❌ Error en los datos del segmento: {e}"
 
-    # Slicing del audio original (necesario para el clonado)
-    split_audio_sequences(p.with_name('vocals.wav'), [t_edit], edit_indices=[seg_num])
+    # Usar una lista temporal para que split_audio_sequences encuentre el índice correcto
+    # y use los tiempos (start/end) actualizados de la tabla
+    texts_for_split = list(texts_original)
+    texts_for_split[seg_num - 1] = t_edit
+    split_audio_sequences(p.with_name('vocals.wav'), texts_for_split, edit_indices=[seg_num])
 
     speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
     lang = translate_lang if translate_lang and translate_lang != "None" else "es" # fallback
@@ -377,7 +380,8 @@ def regenerate_edited_video(video_path: str, df: pd.DataFrame, translate_lang: s
     # Si hay cambios detectados que NO han sido regenerados individualmente todavía, los regeneramos ahora
     if changed_indices:
         progress(0.3, desc=f"Regenerando {len(changed_indices)} segmentos pendientes...")
-        split_audio_sequences(p.with_name('vocals.wav'), texts_original, edit_indices=changed_indices)
+        # Usar texts_edited para que el slicing use los nuevos tiempos de inicio/fin
+        split_audio_sequences(p.with_name('vocals.wav'), texts_edited, edit_indices=changed_indices)
         speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
         lang = translate_lang if translate_lang and translate_lang != "None" else transcription.language
 
