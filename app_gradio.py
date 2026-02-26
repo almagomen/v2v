@@ -8,6 +8,7 @@ import sys
 import threading
 from pathlib import Path
 import zipfile
+import pickle
 
 import gradio as gr
 
@@ -240,6 +241,166 @@ def _zip_videos(paths: list[str] | None) -> str | None:
     return str(zip_path)
 
 
+def find_changed_segments(original_texts: list[dict], edited_texts: list[dict]) -> list[int]:
+    """Encuentra los índices (1-indexed) de los segmentos que han cambiado."""
+    changed = []
+    for idx, (orig, edit) in enumerate(zip(original_texts, edited_texts), 1):
+        if str(orig) != str(edit):
+            changed.append(idx)
+    return changed
+
+
+def _regenerate_worker(
+    path: str,
+    edited_data: list[list],
+    speaker_name: str,
+    translate_lang: str,
+    log_queue: queue.Queue,
+    result_queue: queue.Queue,
+):
+    old_stdout = sys.stdout
+    try:
+        sys.stdout = QueueWriter(log_queue)
+        
+        path_obj = Path(path)
+        with open(path_obj.with_name('result.pkl'), 'rb') as f:
+            original_texts, output_name, url, result, transcription, diarization = pickle.load(f)
+
+        # Reconstruir textos a partir de la tabla (edited_data formato lista de listas)
+        edited_texts = []
+        for row in edited_data:
+            edited_texts.append({
+                'start': float(row[0]),
+                'end': float(row[1]),
+                'text': str(row[2]),
+                'speaker': str(row[3])
+            })
+
+        changed_indices = find_changed_segments(original_texts, edited_texts)
+        if not changed_indices:
+            print("✅ No hay cambios detectados")
+            result_queue.put((str(path_obj),))
+            return
+
+        print(f"🔄 Regenerando {len(changed_indices)} segmento(s): {changed_indices}\n")
+
+        from src.pipeline import split_audio_sequences
+        from src.audio_utils import clone_voice_segments, merge_cloned_audio
+        from src.render import render_video
+        from src.tts import model_tts
+        import torchaudio
+
+        speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
+        lang = translate_lang if translate_lang and translate_lang != "None" else transcription.language
+
+        # Dividir secuencias de audio originales
+        print("🎙️ Extrayendo audios originales...")
+        split_audio_sequences(
+            audio_path=path_obj.with_name('vocals.wav'),
+            texts=edited_texts,
+            edit_indices=changed_indices
+        )
+
+        # Clonar voz para los segmentos modificados
+        print("\n🎙️ Generando nuevas voces...")
+        paths_es, times, freq = clone_voice_segments(
+            path_obj,
+            edited_texts,
+            lang,
+            speaker_audio,
+            model_tts,
+            only_indices=changed_indices,
+            slowdown_range=(0.5, 0.8),
+            stretch_target_ratio=0.85,
+        )
+
+        if not paths_es:
+            print("❌ No se generaron nuevos segmentos de audio.")
+            result_queue.put((str(path_obj),))
+            return
+
+        # Actualizar mix local 
+        print("\n🎵 Combinando audios...")
+        seqs_es_dir = path_obj.parent / 'Seqs_trg'
+        all_paths_es = sorted(seqs_es_dir.glob("*.wav"))
+        
+        # Calcular nuevos tiempos de inicio
+        all_times = [int(text_dict['start'] * freq) for text_dict in edited_texts]
+
+        arr, org_sr = torchaudio.load(str(path_obj.with_name('vocals.wav')))
+        fix_es = torchaudio.functional.resample(arr, orig_freq=org_sr, new_freq=freq)
+        fix_es[:, :] = 0
+
+        for start_samples, audio_es_path in zip(all_times, all_paths_es):
+            arr_es, _ = torchaudio.load(str(audio_es_path))
+            end_samples = start_samples + arr_es.shape[1]
+            if end_samples <= fix_es.shape[1]:
+                fix_es[:, start_samples:end_samples] = arr_es
+
+        vocals_es_path = path_obj.with_name('vocals_es.wav')
+        torchaudio.save(str(vocals_es_path), fix_es, freq)
+
+        no_vocals_path = path_obj.with_name('no_vocals.wav')
+        print("🎬 Renderizando video final...")
+        output_video = render_video(path_obj, f"{output_name}_edited", vocals_es_path, no_vocals_path)
+
+        # Actualizar result.pkl con los nuevos textos
+        with open(path_obj.with_name('result.pkl'), "wb") as f: 
+            pickle.dump((edited_texts, f"{output_name}_edited", url, result, transcription, diarization), f)
+
+        print(f"✅ Renderización completa: {output_video.name}")
+        result_queue.put((str(output_video),))
+
+    except Exception as e:
+        import traceback
+        sys.stdout.write(traceback.format_exc() + f"\n❌ Error: {e}\n")
+        result_queue.put((path,))
+    finally:
+        sys.stdout = old_stdout
+        log_queue.put(None)
+
+
+def regenerate_and_render(
+    path: str | None,
+    edited_data: list[list],
+    speaker_name: str,
+    translate_lang: str,
+):
+    if not path or not Path(path).exists() or not edited_data:
+        yield "❌ Selecciona un video y asegúrate de cargar los textos.", gr.update()
+        return
+
+    log_queue: queue.Queue = queue.Queue()
+    result_queue: queue.Queue = queue.Queue()
+
+    thread = threading.Thread(
+        target=_regenerate_worker,
+        args=(path, edited_data, speaker_name, translate_lang, log_queue, result_queue),
+    )
+    thread.start()
+
+    log_parts: list[str] = []
+    while True:
+        try:
+            item = log_queue.get(timeout=0.05)
+        except queue.Empty:
+            if not thread.is_alive():
+                break
+            continue
+        if item is None:
+            break
+        log_parts.append(item)
+        yield "".join(log_parts), gr.update()
+
+    try:
+        updated_path, = result_queue.get(timeout=1.0)
+    except queue.Empty:
+        updated_path = path
+
+    thread.join()
+    yield "".join(log_parts), updated_path
+
+
 def build_demo():
     with gr.Blocks(title="Video2Video", theme=gr.themes.Soft()) as demo:
         gr.Markdown("# 🎬 Video2Video – Traducción y doblaje con IA")
@@ -268,6 +429,19 @@ def build_demo():
         with gr.Row():
             with gr.Column(scale=2):
                 video_out = gr.Video(label="Vista previa", height=720)
+                
+                with gr.Accordion("✏️ Editar Textos y Regenerar", open=False):
+                    texts_editor = gr.Dataframe(
+                        headers=["start", "end", "text", "speaker"],
+                        datatype=["number", "number", "str", "str"],
+                        interactive=True,
+                        label="Textos (modifica solo la columna 'text')",
+                        wrap=True
+                    )
+                    with gr.Row():
+                        regen_btn = gr.Button("🔄 Regenerar y Renderizar", variant="secondary")
+                    regen_log = gr.Textbox(label="Log Regeneración", lines=6, interactive=False)
+
             with gr.Column(scale=1):
                 video_selector = gr.Dropdown(
                     label="Elegir video",
@@ -280,13 +454,29 @@ def build_demo():
 
         def on_select_video(path):
             if path and Path(path).exists():
-                return path
-            return None
+                pkl_path = Path(path).with_name('result.pkl')
+                try:
+                    with open(pkl_path, 'rb') as f:
+                        texts, *_ = pickle.load(f)
+                    
+                    # Convertir textos a formato de lista de listas para Dataframe
+                    df_data = [[t['start'], t['end'], t['text'], t['speaker']] for t in texts]
+                    return path, df_data
+                except Exception as e:
+                    print(f"Error cargando pkl: {e}")
+                    return path, []
+            return None, []
 
         video_selector.change(
             fn=on_select_video,
             inputs=[video_selector],
-            outputs=[video_out],
+            outputs=[video_out, texts_editor],
+        )
+
+        regen_btn.click(
+            fn=regenerate_and_render,
+            inputs=[video_selector, texts_editor, speaker_in, translate_in],
+            outputs=[regen_log, video_out],
         )
 
         download_all_btn.click(
