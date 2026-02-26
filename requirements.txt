@@ -7,7 +7,7 @@
 
 # YouTube & audio separation
 yt-dlp[default]
-# git+https://github.com/adefossez/demucs.git
+bs-roformer-infer
 
 # STT 
 git+https://github.com/jianfch/stable-ts.git

@@ -16,20 +16,15 @@ from src.translation import translate_text_list, generate_tiktok_title
 
 WHISPER_DIR = DRIVE_DIR / "whisper_turbo" if DRIVE_DIR else None
 
-_whisper_model: Any = None
-
 
 def get_whisper_model():
-    global _whisper_model
-    if _whisper_model is None:
-        _whisper_model = get_or_load_model(
-            "whisper",
-            stable_whisper.load_model,
-            "turbo",
-            device=DEVICE,
-            download_root=WHISPER_DIR,
-        )
-    return _whisper_model
+    return get_or_load_model(
+        "whisper",
+        stable_whisper.load_model,
+        "turbo",
+        device=DEVICE,
+        download_root=WHISPER_DIR,
+    )
 
 
 def transcribe_and_process(

@@ -1,5 +1,5 @@
 """
-Descarga de videos YouTube (yt-dlp) y separación de voces (Demucs).
+Descarga de videos YouTube (yt-dlp) y separación de voces (BS-RoFormer).
 """
 import os
 import re
@@ -7,6 +7,58 @@ import subprocess
 from pathlib import Path
 
 from src.config import BASE_DIR, QUEUE_DIR, DRIVE_DIR, google_drive
+from src.models import get_or_load_model
+
+ROFORMER_DIR = DRIVE_DIR / "bs-roformer-revive3e" if DRIVE_DIR else None
+
+
+def _load_bs_roformer():
+    """
+    Loader puro de BS-RoFormer. Devuelve (config, model, device).
+    Se cachea vía get_or_load_model.
+    """
+    import torch
+    import yaml
+    from ml_collections import ConfigDict
+    from bs_roformer.utils import get_model_from_config
+    from bs_roformer.inference import SafeLoaderWithTuple
+
+    if not ROFORMER_DIR or not ROFORMER_DIR.exists():
+        raise FileNotFoundError(
+            "No se encontró el directorio de BS-RoFormer. "
+            "Asegúrate de montar Drive y crear la carpeta 'bs-roformer-revive3e' en "
+            f"{DRIVE_DIR} con los archivos del modelo."
+        )
+
+    model_path = ROFORMER_DIR / "bs_roformer_revive3e.ckpt"
+    config_path = ROFORMER_DIR / "config.yaml"
+
+    if not model_path.exists() or not config_path.exists():
+        raise FileNotFoundError(
+            "No se encontraron los archivos de BS-RoFormer en "
+            f"{ROFORMER_DIR}. Esperado: bs_roformer_revive3e.ckpt y config.yaml."
+        )
+
+    with open(config_path) as f:
+        config = ConfigDict(yaml.load(f, Loader=SafeLoaderWithTuple))
+
+    model = get_model_from_config("bs_roformer", config)
+    state = torch.load(model_path, map_location="cpu")
+    model.load_state_dict(state)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    model.eval()
+    print(f"BS-RoFormer cargado en {device}\n")
+
+    return config, model, device
+
+
+def get_roformer_model():
+    """
+    Helper para Colab y para separación: usa caché global de modelos.
+    """
+    return get_or_load_model("bs_roformer", _load_bs_roformer)
 
 class OneLineLogger:
     """Solo imprime una línea por descarga (al 100%%) para no saturar el log."""
@@ -70,10 +122,12 @@ def download_video(
 
 def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[Path, Path]:
     """
-    Separa las voces del audio usando Demucs.
+    Separa las voces del audio usando BS-RoFormer.
     Returns: (vocals_path, no_vocals_path)
     """
-    from src.config import DEMUCS_DIR
+    import torch
+    import torchaudio
+    from bs_roformer.utils import demix_track
 
     if output_dir is None:
         output_dir = video_path.parent
@@ -85,34 +139,42 @@ def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[P
         print("✅ Audio de voz ya existe.")
         return vocals_path, no_vocals_path
 
-    if not DEMUCS_DIR.exists():
-        raise FileNotFoundError(
-            f"Demucs no encontrado en {DEMUCS_DIR}. "
-            "En Colab ejecuta el script de setup o clona: git clone https://github.com/adefossez/demucs.git /content/demucs"
-        )
+    # 1) Cargar modelo BS-RoFormer (cacheado con get_or_load_model)
+    config, model, device = get_roformer_model()
 
-    original_dir = os.getcwd()
-    try:
-        os.chdir(DEMUCS_DIR)
-        cmd = f'python -m demucs.separate "{video_path}" --two-stems vocals -o "{output_dir}"'
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    # 2) Leer audio directamente del video con torchaudio (backend ffmpeg)
+    print(f"Processing audio from video: {video_path.name}")
+    mix, sr = torchaudio.load(str(video_path))
+    original_channels = mix.shape[0]
+    if original_channels == 1:
+        mix = torch.cat([mix, mix], dim=0)
+    mixture = mix.to(torch.float32)
 
-        if result.returncode != 0:
-            print(f"⚠️ Advertencia en separación: {result.stderr}")
+    with torch.no_grad():
+        result, _ = demix_track(config, model, mixture, device)
 
-        demucs_output = output_dir / "htdemucs" / video_path.stem
-        if demucs_output.exists():
-            vocals_temp = demucs_output / "vocals.wav"
-            no_vocals_temp = demucs_output / "no_vocals.wav"
-            if vocals_temp.exists():
-                vocals_temp.rename(vocals_path)
-            if no_vocals_temp.exists():
-                no_vocals_temp.rename(no_vocals_path)
-            subprocess.run(f'rm -rf "{demucs_output.parent}"', shell=True)
+    # Guardar stems individuales (vocals, drums, bass, etc.)
+    for instrument, audio in result.items():
+        output = torch.from_numpy(audio)
+        if original_channels == 1:
+            output = output[0:1, :]
+        output_path = output_dir / f"{instrument}.wav"
+        torchaudio.save(str(output_path), output, sr)
 
-        return vocals_path, no_vocals_path
-    finally:
-        os.chdir(original_dir)
+    # Calcular pista sin voz (no_vocals.wav) a partir del mix original
+    if "vocals" in result:
+        mix_cpu = mixture.cpu()
+        vocals_np = result["vocals"]
+        vocals_tensor = torch.from_numpy(vocals_np).to(mix_cpu.dtype)
+        instrumental = mix_cpu - vocals_tensor
+
+        if original_channels == 1:
+            instrumental = instrumental[0:1, :]
+
+        torchaudio.save(str(no_vocals_path), instrumental, sr)
+        print(f"Saved: {no_vocals_path}")
+
+    return vocals_path, no_vocals_path
 
 
 def yt(url: str, demucs: bool = True) -> tuple[Path, dict]:

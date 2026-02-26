@@ -14,20 +14,20 @@ from src.models import get_or_load_model
 
 DIARIZATION_DIR = DRIVE_DIR / "speaker-diarization-community-1" if DRIVE_DIR else None
 
-_diarization_model: Pipeline | None = None
+
+def _load_diarization_model() -> Pipeline:
+    pretrained = (
+        DIARIZATION_DIR
+        if DIARIZATION_DIR and DIARIZATION_DIR.exists()
+        else "pyannote/speaker-diarization-3.1"
+    )
+    model = Pipeline.from_pretrained(pretrained)
+    model.to(torch.device(DEVICE))
+    return model
 
 
 def get_diarization_model() -> Pipeline:
-    global _diarization_model
-    if _diarization_model is None:
-        pretrained = DIARIZATION_DIR if DIARIZATION_DIR and DIARIZATION_DIR.exists() else "pyannote/speaker-diarization-3.1"
-        _diarization_model = get_or_load_model(
-            "community-1",
-            Pipeline.from_pretrained,
-            pretrained,
-        )
-        _diarization_model.to(torch.device(DEVICE))
-    return _diarization_model
+    return get_or_load_model("community-1", _load_diarization_model)
 
 
 def speaker_diarization(diarization_model: Pipeline, wav_audio: str, num_speakers: int | None = None) -> Any:
