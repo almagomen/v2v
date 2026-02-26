@@ -64,8 +64,9 @@ def get_roformer_model():
 class OneLineLogger:
     """Solo imprime una línea por descarga (al 100%%) para no saturar el log."""
     def debug(self, msg):
-        if msg.startswith("[download]"):
-            if "100%" in msg: print(msg)
+        print(msg)
+        # if msg.startswith("[download]"):
+        #     if "100%" in msg: print(msg)
 
     def info(self, msg): print(f"\nℹ️ {msg}")
     def warning(self, msg): print(f"\n⚠️ {msg}")
@@ -144,7 +145,7 @@ def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[P
     config, model, device = get_roformer_model()
 
     # 2) Leer audio directamente del video con torchaudio (backend ffmpeg)
-    print(f"🎧 Separando audio (BS-RoFormer): {video_path.stem}")
+    
     mix, sr = torchaudio.load(str(video_path))
     original_channels = mix.shape[0]
     if original_channels == 1:
@@ -175,7 +176,7 @@ def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[P
             instrumental = instrumental[0:1, :]
 
         torchaudio.save(str(no_vocals_path), instrumental, sr)
-        print(f"Saved: {no_vocals_path}")
+        print(f"🎧 Audio separado correctamente")
 
     return vocals_path, no_vocals_path
 

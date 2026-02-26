@@ -27,9 +27,12 @@ def process_video_queue(
         print(f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
         try:
             path, info = yt(u, vocals_separation=True)
+            print("📝 Transcribiendo audio (Whisper + diarización)...")
             translated_result, output_name, result, transcription, diarization = run_main(
                 path, u, translate=translate_lang
             )
+            if translate_lang:
+                print("🔤 Traduciendo texto con Gemini...")
             output_file = path.with_name("result.pkl")
             with open(output_file, "wb") as f:
                 pickle.dump(

@@ -170,12 +170,16 @@ def process_streaming(
         except queue.Empty:
             if not thread.is_alive():
                 break
-            # Animación ASCII por fase (carga modelos, descarga, separación, inferencia)
+            # Animación ASCII por fase (descarga, separación, transcripción, traducción, inferencia)
             step += 1
             spin = spinner[step % 4]
             current_log = "".join(log_parts)
             if "🚀 Inferencia iniciada..." in current_log and "✅ Inferencia Completada" not in current_log:
                 label = "Inferencia en curso..."
+            elif "🔤 Traduciendo texto con Gemini..." in current_log:
+                label = "Traduciendo texto..."
+            elif "📝 Transcribiendo audio (Whisper + diarización)..." in current_log:
+                label = "Transcribiendo audio..."
             elif "🎧 Separando audio (BS-RoFormer)" in current_log:
                 label = "Separando audio..."
             elif "📥 Descargando y transcribiendo..." in current_log:
