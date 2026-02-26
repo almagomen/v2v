@@ -482,8 +482,17 @@ def build_demo():
             outputs=[texts_df, regen_btn],
         )
 
+        def get_row_index(evt: gr.SelectData):
+            """Captura el índice de la fila seleccionada en el dataframe."""
+            if evt is not None and evt.index is not None:
+                return evt.index[0]
+            return None
+
         # Capturar el índice de la fila seleccionada
-        texts_df.select(lambda evt: evt.index[0], None, selected_row_index)
+        texts_df.select(
+            fn=get_row_index,
+            outputs=[selected_row_index]
+        )
 
         regen_segment_btn.click(
             fn=regenerate_single_segment,

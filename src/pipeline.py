@@ -26,10 +26,51 @@ def process_video_queue(
     for idx, u in enumerate(urls, 1):
         print(f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
         try:
+            # --- Pre-verificación de Caché por URL ---
+            found_in_cache = False
+            # Escanear carpetas en Queue para ver si alguna tiene este link
+            for folder in QUEUE_DIR.glob("*"):
+                pkl_file = folder / "result.pkl"
+                if pkl_file.exists():
+                    try:
+                        with open(pkl_file, "rb") as f:
+                            cached_data = pickle.load(f)
+                            # pkl: (translated_result, output_name, url, result, transcription, diarization)
+                            if len(cached_data) >= 3 and cached_data[2] == u:
+                                print(f"♻️ Link encontrado en caché local: {folder.name}")
+                                translated_result, output_name, url, result, transcription, diarization = cached_data
+                                
+                                # Encontrar el archivo de video original (.mp4) dentro de la carpeta
+                                # yt-dlp lo guarda como folder_name.mp4 dentro de folder_name/
+                                video_files = list(folder.glob("*.mp4"))
+                                # Excluir el resultante si tiene el mismo nombre, preferimos el original
+                                # pero si solo hay uno, usamos ese.
+                                if video_files:
+                                    path = video_files[0]
+                                    results.append({
+                                        "path": path,
+                                        "output_name": output_name,
+                                        "url": u,
+                                        "texts": translated_result,
+                                        "src_lang": transcription.language,
+                                        "result": result,
+                                        "transcription": transcription,
+                                        "diarization": diarization,
+                                        "cached": True
+                                    })
+                                    print(f"✅ Cargado desde caché: {output_name}")
+                                    found_in_cache = True
+                                    break
+                    except: continue
+            
+            if found_in_cache:
+                continue
+            # ---------------------------------------
+
             path, info = yt(u, vocals_separation=True)
             output_file = path.with_name("result.pkl")
             
-            # --- Lógica de Caché ---
+            # --- Lógica de Caché por Path (en caso de que el URL no se detectó antes pero el archivo sí existe) ---
             if output_file.exists():
                 print(f"♻️ Cargando resultados de caché para: {path.name}")
                 with open(output_file, "rb") as f:
