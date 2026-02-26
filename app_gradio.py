@@ -260,31 +260,30 @@ def _zip_videos(paths: list[str] | None) -> str | None:
 def load_texts_df(video_path: str):
     """Carga los textos desde result.pkl y los convierte a formato de DataFrame."""
     if not video_path: 
-        return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto"]), gr.update(interactive=False)
+        return pd.DataFrame(columns=["Seg", "Inicio", "Final", "Texto"]), gr.update(interactive=False)
     
     p = Path(video_path)
-    # Si el video está en temp, buscamos su carpeta original en Queue si es posible, 
-    # pero al renderizar en path.parent esto ya no debería pasar.
     pkl_path = p.with_name("result.pkl")
     
     if not pkl_path.exists():
         print(f"⚠️ No se encontró result.pkl en: {pkl_path}")
-        return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto"]), gr.update(interactive=False)
+        return pd.DataFrame(columns=["Seg", "Inicio", "Final", "Texto"]), gr.update(interactive=False)
 
     try:
         with open(pkl_path, "rb") as f:
             data_pkl = pickle.load(f)
-            # El pkl tiene (translated_result, output_name, url, result, transcription, diarization)
             texts = data_pkl[0]
 
         data = []
         for idx, t in enumerate(texts, 1):
             data.append([idx, f"{t['start']:.2f}", f"{t['end']:.2f}", t['text']])
-        df = pd.DataFrame(data, columns=["Segmento", "Inicio", "Fin", "Texto"])
+
+        df = pd.DataFrame(data, columns=["Seg", "Inicio", "Final", "Texto"])
         return df, gr.update(interactive=True)
     except Exception as e:
         print(f"❌ Error cargando textos desde {pkl_path}: {e}")
-        return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto"]), gr.update(interactive=False)
+        return pd.DataFrame(columns=["Seg", "Inicio", "Final", "Texto"]), gr.update(interactive=False)
+
 
 def regenerate_single_segment(video_path: str, df: pd.DataFrame, row_idx: int | None, translate_lang: str, speaker_name: str):
     """Regenera y devuelve el audio de un único segmento seleccionado."""
@@ -304,10 +303,10 @@ def regenerate_single_segment(video_path: str, df: pd.DataFrame, row_idx: int | 
 
     try:
         row = df.iloc[row_idx]
-        seg_num = int(row["Segmento"])
+        seg_num = int(row["Seg"])
         t_edit = {
             "start": float(row["Inicio"]),
-            "end": float(row["Fin"]),
+            "end": float(row["Final"]),
             "text": str(row["Texto"]),
             "speaker": texts_original[seg_num-1].get("speaker", "SPEAKER_00")
         }
@@ -326,7 +325,7 @@ def regenerate_single_segment(video_path: str, df: pd.DataFrame, row_idx: int | 
     # Regenerar solo este segmento
     paths_es, _, _ = clone_voice_segments(
         p,
-        [t_edit],
+        texts_for_split,
         lang,
         speaker_audio,
         model_tts,
@@ -366,10 +365,10 @@ def regenerate_edited_video(video_path: str, df: pd.DataFrame, translate_lang: s
     texts_edited = []
 
     for i, row in df.iterrows():
-        idx = int(row["Segmento"])
+        idx = int(row["Seg"])
         t_edit = {
             "start": float(row["Inicio"]),
-            "end": float(row["Fin"]),
+            "end": float(row["Final"]),
             "text": str(row["Texto"]),
             "speaker": texts_original[idx-1].get("speaker", "SPEAKER_00")
         }
@@ -454,11 +453,12 @@ def build_demo():
             selected_row_index = gr.State(None)
             
             texts_df = gr.Dataframe(
-                headers=["Segmento", "Inicio", "Fin", "Texto"],
+                headers=["Seg", "Inicio", "Final", "Texto"],
                 datatype=["number", "number", "number", "str"],
                 col_count=(4, "fixed"),
                 interactive=True,
-                wrap=True
+                wrap=True,
+                column_widths=["10%", "15%", "15%", "60%"]
             )
             
             with gr.Row():
