@@ -20,25 +20,51 @@ def process_video_queue(
 ) -> list[dict]:
     """
     Procesa una cola de videos: descarga, transcribe y traduce.
-    Returns: lista de dicts con path, output_name, url, texts, result, transcription, diarization.
+    Si ya existe un procesamiento previo completo, lo carga de caché.
     """
     results = []
     for idx, u in enumerate(urls, 1):
         print(f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
         try:
             path, info = yt(u, vocals_separation=True)
+            output_file = path.with_name("result.pkl")
+            
+            # --- Lógica de Caché ---
+            if output_file.exists():
+                print(f"♻️ Cargando resultados de caché para: {path.name}")
+                with open(output_file, "rb") as f:
+                    cached_data = pickle.load(f)
+                    # El pkl guarda: (translated_result, output_name, url, result, transcription, diarization)
+                    translated_result, output_name, url, result, transcription, diarization = cached_data
+                
+                results.append({
+                    "path": path,
+                    "output_name": output_name,
+                    "url": u,
+                    "texts": translated_result,
+                    "src_lang": transcription.language,
+                    "result": result,
+                    "transcription": transcription,
+                    "diarization": diarization,
+                    "cached": True
+                })
+                print(f"✅ Cargado desde caché: {output_name}")
+                continue
+            # -----------------------
+
             print("📝 Transcribiendo audio (Whisper + diarización)...")
             translated_result, output_name, result, transcription, diarization = run_main(
                 path, u, translate=translate_lang
             )
             if translate_lang:
                 print("🔤 Traduciendo texto con Gemini...")
-            output_file = path.with_name("result.pkl")
+            
             with open(output_file, "wb") as f:
                 pickle.dump(
                     (translated_result, output_name, u, result, transcription, diarization),
                     f,
                 )
+            
             print(f"✅ {output_name}  🚩  {len(translated_result)} segmentos")
             print("=" * 60 + "\n")
             results.append({
@@ -50,6 +76,7 @@ def process_video_queue(
                 "result": result,
                 "transcription": transcription,
                 "diarization": diarization,
+                "cached": False
             })
         except Exception as e:
             print(f"❌ Error procesando {u}: {e}\n")
