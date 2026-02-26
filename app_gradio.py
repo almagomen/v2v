@@ -14,6 +14,7 @@ import gradio as gr
 import pandas as pd
 import torchaudio
 from IPython.display import Audio, display
+from src.config import QUEUE_DIR, TEMP_DIR
 
 # Mapeo speaker: nombre en UI -> voice_id LMNT o nombre de voz
 SPEAKER_OPTIONS = {
@@ -515,4 +516,8 @@ demo = build_demo()
 
 if __name__ == "__main__":
     # En Colab usar demo.launch(share=True) para enlace público
-    demo.launch(share=False)
+    # Añadimos allowed_paths para que Gradio pueda acceder a los videos en Queue y temp
+    demo.launch(
+        share=False, 
+        allowed_paths=[str(QUEUE_DIR), str(TEMP_DIR)]
+    )
