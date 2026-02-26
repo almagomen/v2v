@@ -177,9 +177,9 @@ def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[P
     return vocals_path, no_vocals_path
 
 
-def yt(url: str, demucs: bool = True) -> tuple[Path, dict]:
+def yt(url: str, vocals_separation: bool = True) -> tuple[Path, dict]:
     """Descarga video y opcionalmente separa voces. Returns (path, info)."""
     path, info = download_video(url)
-    if demucs:
+    if vocals_separation:
         separate_vocals(path)
     return path, info

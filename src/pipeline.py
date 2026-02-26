@@ -26,7 +26,7 @@ def process_video_queue(
     for idx, u in enumerate(urls, 1):
         print(f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
         try:
-            path, info = yt(u, demucs=True)
+            path, info = yt(u, vocals_separation=True)
             translated_result, output_name, result, transcription, diarization = run_main(
                 path, u, translate=translate_lang
             )

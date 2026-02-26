@@ -14,10 +14,9 @@ def is_colab() -> bool: return "google.colab" in sys.modules
 # Rutas
 if is_colab():
     BASE_DIR = Path("/content")
-    DEMUCS_DIR = Path("/content/demucs")
 else:
     BASE_DIR = Path(os.getenv("V2V_BASE_DIR", ".")).resolve()
-    DEMUCS_DIR = Path(os.getenv("V2V_DEMUCS_DIR", "/content/demucs"))  # Colab path when run there
+
 
 # Google Drive (solo Colab). No montamos aquí: en Colab ejecuta una celda con drive.mount("/content/drive") antes de lanzar Gradio.
 _google_drive = os.getenv("DRIVE_MOUNT", "true").lower() in ("1", "true", "yes")

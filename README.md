@@ -5,7 +5,7 @@ Pipeline de **traducción y doblaje** de videos de YouTube: descarga → transcr
 ## Requisitos
 
 - Python 3.10+
-- GPU recomendada (Whisper, Pyannote, Demucs)
+- GPU recomendada (Whisper, Pyannote, Roformer)
 - **ffmpeg** en el PATH
 
 ## Variables de entorno / Secrets
@@ -58,17 +58,6 @@ Copia `.env.example` a `.env` y rellena `GOOGLE_API_KEY` y `LMNT_API_KEY`.
 python app_gradio.py
 ```
 
-## Demucs (separación de voces)
-
-En Colab, si quieres usar Demucs para separar voz/instrumental:
-
-```bash
-git clone https://github.com/adefossez/demucs.git /content/demucs
-pip install -e /content/demucs
-```
-
-Opcional: [pesos preentrenados](https://drive.google.com/drive/folders/1T3M5K-67CQpCI6IC9d2xjga6r4QcjkFo) en `/content/demucs/demucs`.
-
 ## Estructura del repo
 
 ```
@@ -83,7 +72,7 @@ v2v/
     ├── models.py       # Caché de modelos
     ├── audio_utils.py  # Ajuste duración, clone_voice_segments, merge
     ├── translation.py  # Gemini: traducir, título TikTok
-    ├── download.py     # yt-dlp, Demucs
+    ├── download.py     # yt-dlp, Roformer
     ├── stt.py          # Whisper, run_main
     ├── diarization.py  # Pyannote
     ├── tts.py          # LMNT

@@ -1,5 +1,5 @@
 # v2v - Video2Video pipeline
-# Python 3.10+ recommended. GPU recommended for Whisper/Pyannote/Demucs.
+# Python 3.10+ recommended. GPU recommended for Whisper/Pyannote/RoFormer.
 
 # Core
 # torch>=2.0.0
