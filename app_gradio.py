@@ -144,7 +144,7 @@ def process_streaming(
     """
     urls = [u.strip() for u in url_input.strip().splitlines() if u.strip()]
     if not urls:
-        yield "❌ Introduce al menos una URL de YouTube (una por línea).", gr.update(), None, None, None, gr.update()
+        yield "❌ Introduce al menos una URL de YouTube (una por línea).", gr.update(), None, None, gr.update()
         return
 
     translate = None if translate_lang == "None" or not translate_lang else translate_lang
@@ -186,7 +186,7 @@ def process_streaming(
                 label = "Descargando y transcribiendo..."
             else:
                 label = "Preparando pipeline..."
-            yield current_log + f"\n\n{spin} {label}", gr.update(), None, None, None, gr.update()
+            yield current_log + f"\n\n{spin} {label}", gr.update(), None, None, gr.update()
             continue
         if item is None:
             break
@@ -195,7 +195,7 @@ def process_streaming(
         step += 1
         if progress is not None and step % 20 == 0:
             progress(min(0.95, step * 0.01), desc="Procesando...")
-        yield current_log, gr.update(), None, None, None, gr.update()
+        yield current_log, gr.update(), None, None, gr.update()
 
     try:
         output_paths, = result_queue.get(timeout=1.0)
@@ -209,7 +209,7 @@ def process_streaming(
         progress(1, desc="Completado")
 
     if not output_paths:
-        yield final_log, gr.update(), None, None, None, gr.update()
+        yield final_log, gr.update(), None, None, gr.update()
         return
 
     # Guardar lista de paths para descarga individual y como .zip
@@ -219,7 +219,6 @@ def process_streaming(
     yield (
         final_log,
         gr.update(choices=choices, value=first_path),
-        first_path,
         first_path,
         str_paths,
         gr.update(interactive=True),
@@ -277,18 +276,17 @@ def build_demo():
                     interactive=True,
                 )
                 download_all_btn = gr.DownloadButton("Descargar todos (.zip)", interactive=False, variant="secondary")
-        file_out = gr.File(label="Descargar video")
         videos_state = gr.State([])
 
         def on_select_video(path):
             if path and Path(path).exists():
-                return path, path
-            return None, None
+                return path
+            return None
 
         video_selector.change(
             fn=on_select_video,
             inputs=[video_selector],
-            outputs=[video_out, file_out],
+            outputs=[video_out],
         )
 
         download_all_btn.click(
@@ -300,7 +298,7 @@ def build_demo():
         btn.click(
             fn=process_streaming,
             inputs=[url_in, translate_in, speaker_in],
-            outputs=[log_out, video_selector, video_out, file_out, videos_state, download_all_btn],
+            outputs=[log_out, video_selector, video_out, videos_state, download_all_btn],
         )
 
     return demo
