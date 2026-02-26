@@ -279,12 +279,11 @@ def load_texts_df(video_path: str):
         data = []
         for idx, t in enumerate(texts, 1):
             data.append([idx, f"{t['start']:.2f}", f"{t['end']:.2f}", t['text']])
-
         df = pd.DataFrame(data, columns=["Segmento", "Inicio", "Fin", "Texto"])
         return df, gr.update(interactive=True)
+    except Exception as e:
         print(f"❌ Error cargando textos desde {pkl_path}: {e}")
         return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto"]), gr.update(interactive=False)
-
 
 def regenerate_single_segment(video_path: str, df: pd.DataFrame, row_idx: int | None, translate_lang: str, speaker_name: str):
     """Regenera y devuelve el audio de un único segmento seleccionado."""
