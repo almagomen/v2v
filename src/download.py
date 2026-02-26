@@ -64,15 +64,19 @@ def get_roformer_model():
 class OneLineLogger:
     """Solo imprime una línea por descarga (al 100%%) para no saturar el log."""
     def debug(self, msg):
-        if not msg.startswith("[") and msg.strip():
-            self.last = msg.split()[-1]
         if msg.startswith("[download]"):
-            if "100%" in msg: print(msg.replace("download", self.last))
+            if "100%" in msg: print(msg)
 
     def info(self, msg): print(f"\nℹ️ {msg}")
     def warning(self, msg): print(f"\n⚠️ {msg}")
     def error(self, msg): pass
 
+def print_codecs(info): 
+    v = info.get("requested_formats", [])[0] 
+    a = info.get("requested_formats", [])[1] 
+
+    print(f"Video: itag {v['format_id']} | {v.get('ext')} | {v.get('vcodec')} | {v.get('height')}p | {v.get('fps')}fps") 
+    print(f"Audio: itag {a['format_id']} | {a.get('ext')} | {a.get('acodec')} | {a.get('asr')}Hz | {a.get('abr')}kbps")
 
 def download_video(
     url: str,
@@ -109,13 +113,10 @@ def download_video(
 
     try:
         with YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            info = ydl.extract_info(url, download=False)
             media = info["requested_downloads"][0]["filepath"]
-            vcodec = info.get("vcodec", "N/A")
-            acodec = info.get("acodec", "N/A")
-            fmt = info.get("format", "N/A")
-            fps = info.get("fps", "N/A")
-            print(f"✅ {Path(media).name}  🚩  {vcodec}  ||  {acodec}  ||  {fmt}  ||  {fps}")
+            print_codecs(info)
+            ydl.download([url])
             return Path(media), info
     except Exception as e:
         print(f"❌ Error al descargar video: {e}")
