@@ -458,7 +458,7 @@ def build_demo():
                 col_count=(4, "fixed"),
                 interactive=True,
                 wrap=True,
-                column_widths=["10%", "15%", "15%", "60%"]
+                column_widths=["5%", "5%", "5%", "85%"]
             )
             
             with gr.Row():
