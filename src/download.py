@@ -64,9 +64,10 @@ def get_roformer_model():
 class OneLineLogger:
     """Solo imprime una línea por descarga (al 100%%) para no saturar el log."""
     def debug(self, msg):
-        print(msg)
-        # if msg.startswith("[download]"):
-        #     if "100%" in msg: print(msg)
+        if not msg.startswith("[") and msg.strip():
+            self.last = msg.split()[-1]
+        if msg.startswith("[download]"):
+            if "100%" in msg: print(msg.replace("download", self.last))
 
     def info(self, msg): print(f"\nℹ️ {msg}")
     def warning(self, msg): print(f"\n⚠️ {msg}")
