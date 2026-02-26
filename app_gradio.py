@@ -245,13 +245,13 @@ def _zip_videos(paths: list[str] | None) -> str | None:
 
 
 def load_texts_df(video_path: str):
-    """Carga loss textos desde result.pkl y los convierte a formato de DataFrame."""
-    if not video_path: return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto", "Speaker"]), gr.update(interactive=False)
+    """Carga los textos desde result.pkl y los convierte a formato de DataFrame."""
+    if not video_path: return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto"]), gr.update(interactive=False)
     p = Path(video_path)
-    if not p.exists(): return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto", "Speaker"]), gr.update(interactive=False)
+    if not p.exists(): return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto"]), gr.update(interactive=False)
 
     pkl_path = p.with_name("result.pkl")
-    if not pkl_path.exists(): return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto", "Speaker"]), gr.update(interactive=False)
+    if not pkl_path.exists(): return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto"]), gr.update(interactive=False)
 
     try:
         with open(pkl_path, "rb") as f:
@@ -259,12 +259,12 @@ def load_texts_df(video_path: str):
 
         data = []
         for idx, t in enumerate(texts, 1):
-            data.append([idx, f"{t['start']:.2f}", f"{t['end']:.2f}", t['text'], t['speaker']])
+            data.append([idx, f"{t['start']:.2f}", f"{t['end']:.2f}", t['text']])
 
-        return pd.DataFrame(data, columns=["Segmento", "Inicio", "Fin", "Texto", "Speaker"]), gr.update(interactive=True)
+        return pd.DataFrame(data, columns=["Segmento", "Inicio", "Fin", "Texto"]), gr.update(interactive=True)
     except Exception as e:
         print(f"Error cargando textos: {e}")
-        return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto", "Speaker"]), gr.update(interactive=False)
+        return pd.DataFrame(columns=["Segmento", "Inicio", "Fin", "Texto"]), gr.update(interactive=False)
 
 
 def regenerate_edited_video(video_path: str, df: pd.DataFrame, translate_lang: str, speaker_name: str, progress=gr.Progress()):
@@ -300,15 +300,18 @@ def regenerate_edited_video(video_path: str, df: pd.DataFrame, translate_lang: s
         except ValueError:
             return None, f"❌ Error numérico en la fila {idx}. Verifica inicio/fin."
 
+        # Mantener el speaker original (no se edita en UI por ahora)
+        orig_speaker = texts_original[idx-1].get("speaker", "SPEAKER_00")
+
         t_edit = {
             "start": start_f,
             "end": end_f,
             "text": str(row["Texto"]),
-            "speaker": str(row["Speaker"])
+            "speaker": orig_speaker
         }
         texts_edited.append(t_edit)
 
-        # Usar representación string para comparar de forma segura, como en el notebook
+        # Comparar con el original para detectar cambios
         if str(texts_original[idx-1]) != str(t_edit):
             changed_indices.append(idx)
 
@@ -404,16 +407,16 @@ def build_demo():
                 )
                 download_all_btn = gr.DownloadButton("Descargar todos (.zip)", interactive=False, variant="secondary")
         
-        with gr.Accordion("✏️ Editar Subtítulos", open=False):
-            gr.Markdown("Selecciona un video arriba para cargar sus subtítulos generados. Puedes editar la columna de Texto y regenerar únicamente esas frases sin tener que rehacer todo el video de nuevo.")
+        with gr.Accordion("✏️ Editar Segmentos y Tiempos", open=False):
+            gr.Markdown("Aquí puedes corregir los textos generados o ajustar los tiempos. Si modificas algo, el sistema regenerará solo las partes afectadas.")
             texts_df = gr.Dataframe(
-                headers=["Segmento", "Inicio", "Fin", "Texto", "Speaker"],
-                datatype=["number", "number", "number", "str", "str"],
-                col_count=(5, "fixed"),
+                headers=["Segmento", "Inicio", "Fin", "Texto"],
+                datatype=["number", "number", "number", "str"],
+                col_count=(4, "fixed"),
                 interactive=True,
                 wrap=True
             )
-            regen_btn = gr.Button("Regenerar Video", interactive=False, variant="primary")
+            regen_btn = gr.Button("Aplicar Cambios y Regenerar", interactive=False, variant="primary")
             regen_status = gr.Textbox(label="Estado", show_label=False, interactive=False)
 
         videos_state = gr.State([])
