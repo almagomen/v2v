@@ -114,7 +114,7 @@ def download_video(
     try:
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            media = info["requested_downloads"][0]["filepath"]
+            media = ydl.prepare_filename(info)
             print_codecs(info)
             ydl.download([url])
             return Path(media), info
