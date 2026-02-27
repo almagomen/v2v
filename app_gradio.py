@@ -415,6 +415,34 @@ def regenerate_edited_video(video_path: str, df: pd.DataFrame, translate_lang: s
     return str(output_video), "✅ Cambios aplicados y video final regenerado."
 
 
+def handle_low_res_preview(video_path: str):
+    """Genera una versión de baja resolución del video seleccionado."""
+    if not video_path or not Path(video_path).exists():
+        return None, "⚠️ Video no encontrado para procesar."
+    
+    from src.render import create_low_res_preview
+    try:
+        out_path = create_low_res_preview(Path(video_path))
+        return str(out_path), f"✅ Vista previa generada: {out_path.name}"
+    except Exception as e:
+        return None, f"❌ Error al crear preview: {e}"
+
+
+def handle_share_catbox(video_path: str):
+    """Sube el video a Catbox y devuelve la URL."""
+    if not video_path or not Path(video_path).exists():
+        return "⚠️ Video no encontrado para subir."
+    
+    from src.render import upload_to_catbox
+    try:
+        url = upload_to_catbox(Path(video_path))
+        if url:
+            return url
+        return "❌ No se recibió una URL de Catbox (posible error de red o tamaño de archivo)."
+    except Exception as e:
+        return f"❌ Error al compartir: {e}"
+
+
 def build_demo():
     with gr.Blocks(title="Video2Video", theme=gr.themes.Soft()) as demo:
         gr.Markdown("# 🎬 Video2Video – Traducción y doblaje con IA")
@@ -443,6 +471,10 @@ def build_demo():
         with gr.Row():
             with gr.Column(scale=2):
                 video_out = gr.Video(label="Vista previa", height=720)
+                with gr.Row():
+                    low_res_btn = gr.Button("📉 Preview Baja Res", variant="secondary")
+                    share_btn = gr.Button("🔗 Compartir (24h)", variant="secondary")
+                share_url_out = gr.Textbox(label="Enlace Catbox (Temporal)", interactive=False, show_copy_button=True)
             with gr.Column(scale=1):
                 video_selector = gr.Dropdown(
                     label="Elegir video",
@@ -512,6 +544,18 @@ def build_demo():
             fn=regenerate_edited_video,
             inputs=[video_selector, texts_df, translate_in, speaker_in],
             outputs=[video_out, regen_status]
+        )
+
+        low_res_btn.click(
+            fn=handle_low_res_preview,
+            inputs=[video_selector],
+            outputs=[video_out, regen_status]
+        )
+
+        share_btn.click(
+            fn=handle_share_catbox,
+            inputs=[video_selector],
+            outputs=[share_url_out]
         )
 
         download_all_btn.click(
