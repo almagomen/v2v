@@ -459,7 +459,35 @@ def handle_share_catbox(video_path: str):
 
 
 def build_demo():
-    with gr.Blocks(title="Video2Video", theme=gr.themes.Soft()) as demo:
+    # Tema premium personalizado (Deep Space)
+    custom_theme = gr.themes.Soft(
+        primary_hue="blue",
+        secondary_hue="indigo",
+        neutral_hue="slate",
+        font=[gr.themes.GoogleFont("Outfit"), "ui-sans-serif", "system-ui", "sans-serif"],
+        font_mono=[gr.themes.GoogleFont("Fira Code"), "ui-monospace", "SFMono-Regular", "monospace"],
+    ).set(
+        body_background_fill="#0b0f19",
+        body_background_fill_dark="#0b0f19",
+        block_background_fill="#161b22",
+        block_background_fill_dark="#161b22",
+        block_border_width="1px",
+        block_title_text_color="#60a5fa",
+        input_background_fill="#0d1117",
+        input_background_fill_dark="#0d1117",
+    )
+
+    custom_css = """
+    #log-box textarea {
+        font-family: 'Fira Code', 'ui-monospace', 'monospace' !important;
+        font-size: 0.85em !important;
+        line-height: 1.5 !important;
+        background-color: #0d1117 !important;
+        color: #d1d5db !important;
+    }
+    """
+
+    with gr.Blocks(title="Video2Video", theme=custom_theme, css=custom_css) as demo:
         gr.Markdown("# 🎬 Video2Video – Traducción y doblaje con IA")
 
         with gr.Row():
@@ -481,7 +509,7 @@ def build_demo():
             )
         btn = gr.Button("Procesar", variant="primary")
 
-        log_out = gr.Textbox(label="Log", lines=12, interactive=False)
+        log_out = gr.Textbox(label="Log", lines=12, interactive=False, elem_id="log-box")
 
         with gr.Row():
             with gr.Column(scale=2):
