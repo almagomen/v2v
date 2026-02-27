@@ -500,12 +500,12 @@ def build_demo():
                     interactive=True,
                 )
                 with gr.Row():
-                    share_btn = gr.Button("🔗", variant="secondary")
-                    toggle_quality_btn = gr.Button("SD", variant="secondary")
-                    download_all_btn = gr.DownloadButton("📥", interactive=False, variant="secondary")
+                    share_btn = gr.Button("🔗", variant="secondary", scale=1, min_width=0)
+                    toggle_quality_btn = gr.Button("SD", variant="secondary", scale=1, min_width=0)
+                    download_all_btn = gr.DownloadButton("📥", interactive=False, variant="secondary", scale=1, min_width=0)
                 
                 share_url_out = gr.Textbox(
-                    label="Enlace de compartición (Catbox)", 
+                    label="Enlace para compartir (Catbox 24hs)", 
                     interactive=False, 
                     show_copy_button=True, 
                     visible=False
