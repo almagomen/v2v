@@ -58,7 +58,6 @@ def process_video_queue(
                                         "diarization": diarization,
                                         "cached": True
                                     })
-                                    print(f"✅ Cargado desde caché: {output_name}")
                                     found_in_cache = True
                                     break
                     except: continue
@@ -89,7 +88,7 @@ def process_video_queue(
                     "diarization": diarization,
                     "cached": True
                 })
-                print(f"✅ Cargado desde caché: {output_name}")
+                print(f"✅ {output_name}")
                 continue
             # -----------------------
 

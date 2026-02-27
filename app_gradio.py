@@ -77,7 +77,6 @@ def _run_pipeline_core(
 
         # --- Lógica de Caché para Clonado y Renderizado ---
         if output_video_path.exists():
-            print(f"✅ Video final ya existe en caché: {output_video_path.name}")
             output_paths.append(output_video_path)
             continue
         # -------------------------------------------------
@@ -415,17 +414,33 @@ def regenerate_edited_video(video_path: str, df: pd.DataFrame, translate_lang: s
     return str(output_video), "✅ Cambios aplicados y video final regenerado."
 
 
-def handle_low_res_preview(video_path: str):
-    """Genera una versión de baja resolución del video seleccionado."""
-    if not video_path or not Path(video_path).exists():
-        return None, "⚠️ Video no encontrado para procesar."
+def handle_toggle_quality(current_preview_path: str, full_quality_path: str):
+    """Alterna entre la versión de alta y baja resolución del video."""
+    if not full_quality_path: 
+        return current_preview_path, gr.update(), "⚠️ Selecciona un video primero."
     
-    from src.render import create_low_res_preview
-    try:
-        out_path = create_low_res_preview(Path(video_path))
-        return str(out_path), f"✅ Vista previa generada: {out_path.name}"
-    except Exception as e:
-        return None, f"❌ Error al crear preview: {e}"
+    p_full = Path(full_quality_path)
+    # Ruta esperada para la versión SD
+    sd_path = p_full.parent / f"{p_full.stem}_sd.mp4"
+    
+    # Comprobar si estamos mostrando actualmente la versión SD
+    is_currently_sd = current_preview_path and Path(current_preview_path).name == sd_path.name
+    
+    if not is_currently_sd:
+        # Queremos pasar a SD
+        if sd_path.exists():
+            return str(sd_path), gr.update(value="📈"), "✅ Cargada vista previa SD (Caché)"
+        
+        from src.render import create_low_res_preview
+        try:
+            # Generar indicando la ruta específica con _sd
+            out_path = create_low_res_preview(p_full, sd_path)
+            return str(out_path), gr.update(value="📈"), "✅ Vista previa SD generada"
+        except Exception as e:
+            return current_preview_path, gr.update(), f"❌ Error al generar SD: {e}"
+    else:
+        # Queremos volver a Full Quality
+        return str(p_full), gr.update(value="📉"), "✅ Cambiado a Calidad Completa"
 
 
 def handle_share_catbox(video_path: str):
@@ -438,7 +453,7 @@ def handle_share_catbox(video_path: str):
         url = upload_to_catbox(Path(video_path))
         if url:
             return url
-        return "❌ No se recibió una URL de Catbox (posible error de red o tamaño de archivo)."
+        return "❌ Error: Catbox no devolvió URL."
     except Exception as e:
         return f"❌ Error al compartir: {e}"
 
@@ -471,10 +486,7 @@ def build_demo():
         with gr.Row():
             with gr.Column(scale=2):
                 video_out = gr.Video(label="Vista previa", height=720)
-                with gr.Row():
-                    low_res_btn = gr.Button("📉 Preview Baja Res", variant="secondary")
-                    share_btn = gr.Button("🔗 Compartir (24h)", variant="secondary")
-                share_url_out = gr.Textbox(label="Enlace Catbox (Temporal)", interactive=False, show_copy_button=True)
+                share_url_out = gr.Textbox(label="Enlace de compartición (Catbox)", interactive=False, show_copy_button=True)
             with gr.Column(scale=1):
                 video_selector = gr.Dropdown(
                     label="Elegir video",
@@ -482,7 +494,10 @@ def build_demo():
                     value=None,
                     interactive=True,
                 )
-                download_all_btn = gr.DownloadButton("Descargar todos (.zip)", interactive=False, variant="secondary")
+                with gr.Row():
+                    toggle_quality_btn = gr.Button("📉", variant="secondary", tooltip="Alternar Calidad (SD/Full)")
+                    share_btn = gr.Button("🔗", variant="secondary", tooltip="Compartir en Catbox")
+                    download_all_btn = gr.DownloadButton("📥", interactive=False, variant="secondary", tooltip="Descargar todos (.zip)")
         
         with gr.Accordion("✏️ Editar Segmentos y Tiempos", open=False):
             gr.Markdown("Haz clic en una fila de la tabla para seleccionarla. Luego puedes regenerar/probar ese audio individualmente o aplicar todos los cambios al final.")
@@ -517,6 +532,9 @@ def build_demo():
             inputs=[video_selector],
             outputs=[video_out],
         ).then(
+            fn=lambda: gr.update(value="📉"), # Reset a icono Full Quality cuando cambia el video
+            outputs=[toggle_quality_btn]
+        ).then(
             fn=load_texts_df,
             inputs=[video_selector],
             outputs=[texts_df, regen_btn],
@@ -546,10 +564,10 @@ def build_demo():
             outputs=[video_out, regen_status]
         )
 
-        low_res_btn.click(
-            fn=handle_low_res_preview,
-            inputs=[video_selector],
-            outputs=[video_out, regen_status]
+        toggle_quality_btn.click(
+            fn=handle_toggle_quality,
+            inputs=[video_out, video_selector],
+            outputs=[video_out, toggle_quality_btn, regen_status]
         )
 
         share_btn.click(
