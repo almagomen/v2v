@@ -299,7 +299,7 @@ def regenerate_single_segment(video_path: str, df: pd.DataFrame, row_idx: int | 
     if not pkl_path.exists(): return None, "❌ result.pkl no encontrado."
 
     with open(pkl_path, "rb") as f:
-        texts_original, _, _, _, _, _ = pickle.load(f)
+        texts_original, output_name, url, result, transcription, diarization = pickle.load(f)
 
     try:
         row = df.iloc[row_idx]
@@ -315,9 +315,9 @@ def regenerate_single_segment(video_path: str, df: pd.DataFrame, row_idx: int | 
 
     # Usar una lista temporal para que split_audio_sequences encuentre el índice correcto
     # y use los tiempos (start/end) actualizados de la tabla
-    texts_for_split = list(texts_original)
-    texts_for_split[seg_num - 1] = t_edit
-    split_audio_sequences(p.with_name('vocals.wav'), texts_for_split, edit_indices=[seg_num])
+    texts_edited = list(texts_original)
+    texts_edited[seg_num - 1] = t_edit
+    split_audio_sequences(p.with_name('vocals.wav'), texts_edited, edit_indices=[seg_num])
 
     speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
     lang = translate_lang if translate_lang and translate_lang != "None" else "es" # fallback
@@ -325,7 +325,7 @@ def regenerate_single_segment(video_path: str, df: pd.DataFrame, row_idx: int | 
     # Regenerar solo este segmento
     paths_es, _, _ = clone_voice_segments(
         p,
-        texts_for_split,
+        texts_edited,
         lang,
         speaker_audio,
         model_tts,
@@ -336,6 +336,10 @@ def regenerate_single_segment(video_path: str, df: pd.DataFrame, row_idx: int | 
 
     if not paths_es:
         return None, "❌ No se pudo generar el audio."
+
+    # Actualizar pickle para que regenerate_edited_video sepa que esto ya se hizo
+    with open(pkl_path, "wb") as f:
+        pickle.dump((texts_edited, output_name, url, result, transcription, diarization), f)
 
     return str(paths_es[0]), f"✅ Segmento {seg_num} regenerado correctamente."
 
@@ -462,7 +466,7 @@ def build_demo():
             )
             
             with gr.Row():
-                regen_segment_btn = gr.Button("🎧 Regenerar y Escuchar Segmento Seleccionado", variant="secondary")
+                regen_segment_btn = gr.Button("🎧 Regenerar Segmento Seleccionado", variant="secondary")
                 segment_preview_audio = gr.Audio(label="Vista previa audio", type="filepath", interactive=False, autoplay=True)
             
             gr.Markdown("---")

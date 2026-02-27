@@ -18,7 +18,10 @@ def render_video(
     """Renderiza el video final combinando video original con audio clonado."""
     if output_dir is None:
         output_dir = TEMP_DIR
-    output_path = output_dir / f"{output_name}.mp4"
+    
+    final_output_path = output_dir / f"{output_name}.mp4"
+    # Renderizar a un archivo temporal para evitar conflictos si input == output
+    temp_output_path = output_dir / f"temp_{output_name}.mp4"
 
     cmd = [
         "ffmpeg", "-y", "-v", "error",
@@ -30,12 +33,18 @@ def render_video(
         "-map", "0:v",
         "-map", "[a]",
         "-c:v", "copy",
-        str(output_path),
+        str(temp_output_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
-        return output_path
+        if final_output_path.exists():
+            final_output_path.unlink()
+        temp_output_path.rename(final_output_path)
+        return final_output_path
+    
     print(f"❌ Error al renderizar: {result.stderr}")
+    if temp_output_path.exists():
+        temp_output_path.unlink()
     raise RuntimeError(f"Error en ffmpeg: {result.stderr}")
 
 
