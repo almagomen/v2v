@@ -414,25 +414,16 @@ def regenerate_edited_video(video_path: str, df: pd.DataFrame, translate_lang: s
     return str(output_video), "✅ Cambios aplicados y video final regenerado."
 
 
-def handle_toggle_quality(current_preview: str | dict, full_quality_path: str):
+def handle_toggle_quality(current_btn_val: str, full_quality_path: str):
     """Alterna entre la versión de alta y baja resolución del video."""
     if not full_quality_path: 
-        return current_preview, gr.update(), "⚠️ Selecciona un video primero."
-    
-    # En Gradio 5, el valor del video puede ser un diccionario
-    path_now = current_preview["path"] if isinstance(current_preview, dict) else current_preview
+        return None, gr.update(), "⚠️ Selecciona un video primero."
     
     p_full = Path(full_quality_path)
-    # Nombre del archivo SD basado en el original
-    sd_filename = f"{p_full.stem}_sd.mp4"
+    sd_path = p_full.parent / f"{p_full.stem}_sd.mp4"
     
-    # Comprobar si estamos mostrando actualmente la versión SD
-    # Usamos .name para ignorar rutas temporales de Gradio
-    is_currently_sd = path_now and Path(path_now).name == sd_filename
-    
-    if not is_currently_sd:
-        # Estamos en FULL -> Queremos pasar a SD
-        sd_path = p_full.parent / sd_filename
+    # Si el botón dice "SD", el usuario quiere bajar la calidad
+    if current_btn_val == "SD":
         if sd_path.exists():
             return str(sd_path), gr.update(value="HD"), "✅ Cargada vista previa SD (Caché)"
         
@@ -441,9 +432,9 @@ def handle_toggle_quality(current_preview: str | dict, full_quality_path: str):
             out_path = create_low_res_preview(p_full, sd_path)
             return str(out_path), gr.update(value="HD"), "✅ Vista previa SD generada"
         except Exception as e:
-            return current_preview, gr.update(), f"❌ Error al generar SD: {e}"
+            return str(p_full), gr.update(), f"❌ Error al generar SD: {e}"
     else:
-        # Estamos en SD -> Queremos volver a FULL
+        # Si el botón dice "HD", el usuario quiere volver a la calidad original
         return str(p_full), gr.update(value="SD"), "✅ Cambiado a Calidad Completa"
 
 
@@ -610,7 +601,7 @@ def build_demo():
 
         toggle_quality_btn.click(
             fn=handle_toggle_quality,
-            inputs=[video_out, video_selector],
+            inputs=[toggle_quality_btn, video_selector],
             outputs=[video_out, toggle_quality_btn, regen_status]
         )
 
