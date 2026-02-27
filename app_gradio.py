@@ -241,19 +241,38 @@ def process_streaming(
     )
 
 
-def _zip_videos(paths: list[str] | None) -> str | None:
+def _zip_videos(paths: list[str] | None, progress=gr.Progress()) -> str | None:
     """Crea un zip con todos los videos inferidos y devuelve su path."""
     if not paths:
         return None
     from src.config import TEMP_DIR
 
     zip_path = TEMP_DIR / "videos_inferidos.zip"
+    
+    valid_paths = [Path(p) for p in paths if Path(p).exists()]
+    if not valid_paths:
+        return None
+
+    progress(0, desc="Preparando archivos para compresión...")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for p in paths:
-            p_path = Path(p)
-            if p_path.exists():
-                zf.write(p_path, arcname=p_path.name)
+        for i, p_path in enumerate(valid_paths):
+            progress((i / len(valid_paths)), desc=f"Comprimiendo {p_path.name}...")
+            zf.write(p_path, arcname=p_path.name)
+            
+    progress(1.0, desc="¡ZIP listo!")
     return str(zip_path)
+
+
+def handle_zip_creation(paths):
+    """Lógica para el botón de descarga: genera el zip y actualiza el botón."""
+    if not paths:
+        return gr.update(), "⚠️ No hay videos para descargar."
+    
+    zip_file = _zip_videos(paths)
+    if zip_file:
+        # Devolvemos el path para que el DownloadButton sepa qué descargar
+        return zip_file, "✅ Archivo ZIP generado con éxito."
+    return gr.update(), "❌ Error al crear el archivo ZIP."
 
 
 def load_texts_df(video_path: str):
@@ -425,17 +444,17 @@ def handle_toggle_quality(current_btn_val: str, full_quality_path: str):
     # Si el botón dice "SD", el usuario quiere bajar la calidad
     if current_btn_val == "SD":
         if sd_path.exists():
-            return str(sd_path), gr.update(value="HD"), "✅ Cargada vista previa SD (Caché)"
+            return str(sd_path), gr.update(value="HD"), gr.update(label="Vista previa SD"), "✅ Cargada vista previa SD (Caché)"
         
         from src.render import create_low_res_preview
         try:
             out_path = create_low_res_preview(p_full, sd_path)
-            return str(out_path), gr.update(value="HD"), "✅ Vista previa SD generada"
+            return str(out_path), gr.update(value="HD"), gr.update(label="Vista previa SD"), "✅ Vista previa SD generada"
         except Exception as e:
-            return str(p_full), gr.update(), f"❌ Error al generar SD: {e}"
+            return str(p_full), gr.update(), gr.update(label="Vista previa HD"), f"❌ Error al generar SD: {e}"
     else:
         # Si el botón dice "HD", el usuario quiere volver a la calidad original
-        return str(p_full), gr.update(value="SD"), "✅ Cambiado a Calidad Completa"
+        return str(p_full), gr.update(value="SD"), gr.update(label="Vista previa HD"), "✅ Cambiado a Calidad Completa"
 
 
 def handle_share_catbox(video_path: str):
@@ -509,7 +528,7 @@ def build_demo():
         with gr.Row():
             with gr.Column(scale=2):
                 video_out = gr.Video(
-                    label="Vista previa", 
+                    label="Vista previa HD", 
                     height=720, 
                     interactive=False, 
                     sources=[], 
@@ -567,8 +586,8 @@ def build_demo():
             inputs=[video_selector],
             outputs=[video_out],
         ).then(
-            fn=lambda: (gr.update(value="SD"), gr.update(visible=False)), # Reset de UI al cambiar video
-            outputs=[toggle_quality_btn, share_url_out]
+            fn=lambda: (gr.update(value="SD"), gr.update(visible=False), gr.update(label="Vista previa HD")), # Reset de UI al cambiar video
+            outputs=[toggle_quality_btn, share_url_out, video_out]
         ).then(
             fn=load_texts_df,
             inputs=[video_selector],
@@ -602,7 +621,7 @@ def build_demo():
         toggle_quality_btn.click(
             fn=handle_toggle_quality,
             inputs=[toggle_quality_btn, video_selector],
-            outputs=[video_out, toggle_quality_btn, regen_status]
+            outputs=[video_out, toggle_quality_btn, video_out, regen_status]
         )
 
         share_btn.click(
@@ -612,9 +631,9 @@ def build_demo():
         )
 
         download_all_btn.click(
-            fn=_zip_videos,
+            fn=handle_zip_creation,
             inputs=[videos_state],
-            outputs=[download_all_btn],
+            outputs=[download_all_btn, regen_status],
         )
 
         btn.click(
