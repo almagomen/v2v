@@ -495,9 +495,9 @@ def build_demo():
                     interactive=True,
                 )
                 with gr.Row():
-                    toggle_quality_btn = gr.Button("📉", variant="secondary", tooltip="Alternar Calidad (SD/Full)")
-                    share_btn = gr.Button("🔗", variant="secondary", tooltip="Compartir en Catbox")
-                    download_all_btn = gr.DownloadButton("📥", interactive=False, variant="secondary", tooltip="Descargar todos (.zip)")
+                    toggle_quality_btn = gr.Button("📉", variant="secondary")
+                    share_btn = gr.Button("🔗", variant="secondary")
+                    download_all_btn = gr.DownloadButton("📥", interactive=False, variant="secondary")
         
         with gr.Accordion("✏️ Editar Segmentos y Tiempos", open=False):
             gr.Markdown("Haz clic en una fila de la tabla para seleccionarla. Luego puedes regenerar/probar ese audio individualmente o aplicar todos los cambios al final.")

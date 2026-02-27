@@ -71,7 +71,7 @@ def process_video_queue(
             
             # --- Lógica de Caché por Path (en caso de que el URL no se detectó antes pero el archivo sí existe) ---
             if output_file.exists():
-                print(f"♻️ Cargando resultados de caché para: {path.name}")
+                print(f"♻️ Cargando caché: {path.name}")
                 with open(output_file, "rb") as f:
                     cached_data = pickle.load(f)
                     # El pkl guarda: (translated_result, output_name, url, result, transcription, diarization)
