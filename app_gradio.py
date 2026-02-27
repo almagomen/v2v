@@ -429,18 +429,18 @@ def handle_toggle_quality(current_preview_path: str, full_quality_path: str):
     if not is_currently_sd:
         # Queremos pasar a SD
         if sd_path.exists():
-            return str(sd_path), gr.update(value="📈"), "✅ Cargada vista previa SD (Caché)"
+            return str(sd_path), gr.update(value="HD"), "✅ Cargada vista previa SD (Caché)"
         
         from src.render import create_low_res_preview
         try:
             # Generar indicando la ruta específica con _sd
             out_path = create_low_res_preview(p_full, sd_path)
-            return str(out_path), gr.update(value="📈"), "✅ Vista previa SD generada"
+            return str(out_path), gr.update(value="HD"), "✅ Vista previa SD generada"
         except Exception as e:
             return current_preview_path, gr.update(), f"❌ Error al generar SD: {e}"
     else:
         # Queremos volver a Full Quality
-        return str(p_full), gr.update(value="📉"), "✅ Cambiado a Calidad Completa"
+        return str(p_full), gr.update(value="SD"), "✅ Cambiado a Calidad Completa"
 
 
 def handle_share_catbox(video_path: str):
@@ -452,10 +452,10 @@ def handle_share_catbox(video_path: str):
     try:
         url = upload_to_catbox(Path(video_path))
         if url:
-            return url
-        return "❌ Error: Catbox no devolvió URL."
+            return gr.update(value=url, visible=True)
+        return gr.update(value="❌ Error: Catbox no devolvió URL.", visible=True)
     except Exception as e:
-        return f"❌ Error al compartir: {e}"
+        return gr.update(value=f"❌ Error al compartir: {e}", visible=True)
 
 
 def build_demo():
@@ -472,7 +472,7 @@ def build_demo():
             translate_in = gr.Dropdown(
                 label="Idioma de traducción",
                 choices=["None", "es", "pt", "en", "fr", "de", "it"],
-                value="es",
+                value="None",
             )
             speaker_in = gr.Dropdown(
                 label="Voz / Speaker",
@@ -485,8 +485,13 @@ def build_demo():
 
         with gr.Row():
             with gr.Column(scale=2):
-                video_out = gr.Video(label="Vista previa", height=720)
-                share_url_out = gr.Textbox(label="Enlace de compartición (Catbox)", interactive=False, show_copy_button=True)
+                video_out = gr.Video(
+                    label="Vista previa", 
+                    height=720, 
+                    interactive=False, 
+                    sources=[], 
+                    show_download_button=True
+                )
             with gr.Column(scale=1):
                 video_selector = gr.Dropdown(
                     label="Elegir video",
@@ -495,9 +500,16 @@ def build_demo():
                     interactive=True,
                 )
                 with gr.Row():
-                    toggle_quality_btn = gr.Button("📉", variant="secondary")
                     share_btn = gr.Button("🔗", variant="secondary")
+                    toggle_quality_btn = gr.Button("SD", variant="secondary")
                     download_all_btn = gr.DownloadButton("📥", interactive=False, variant="secondary")
+                
+                share_url_out = gr.Textbox(
+                    label="Enlace de compartición (Catbox)", 
+                    interactive=False, 
+                    show_copy_button=True, 
+                    visible=False
+                )
         
         with gr.Accordion("✏️ Editar Segmentos y Tiempos", open=False):
             gr.Markdown("Haz clic en una fila de la tabla para seleccionarla. Luego puedes regenerar/probar ese audio individualmente o aplicar todos los cambios al final.")
@@ -532,8 +544,8 @@ def build_demo():
             inputs=[video_selector],
             outputs=[video_out],
         ).then(
-            fn=lambda: gr.update(value="📉"), # Reset a icono Full Quality cuando cambia el video
-            outputs=[toggle_quality_btn]
+            fn=lambda: (gr.update(value="SD"), gr.update(visible=False)), # Reset de UI al cambiar video
+            outputs=[toggle_quality_btn, share_url_out]
         ).then(
             fn=load_texts_df,
             inputs=[video_selector],
