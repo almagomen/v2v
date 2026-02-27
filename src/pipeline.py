@@ -37,7 +37,7 @@ def process_video_queue(
                             cached_data = pickle.load(f)
                             # pkl: (translated_result, output_name, url, result, transcription, diarization)
                             if len(cached_data) >= 3 and cached_data[2] == u:
-                                print(f"♻️ Link encontrado en caché local: {folder.name}")
+                                print(f"♻️ Link en caché: {folder.name}")
                                 translated_result, output_name, url, result, transcription, diarization = cached_data
                                 
                                 # Encontrar el archivo de video original (.mp4) dentro de la carpeta

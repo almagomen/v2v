@@ -414,32 +414,36 @@ def regenerate_edited_video(video_path: str, df: pd.DataFrame, translate_lang: s
     return str(output_video), "✅ Cambios aplicados y video final regenerado."
 
 
-def handle_toggle_quality(current_preview_path: str, full_quality_path: str):
+def handle_toggle_quality(current_preview: str | dict, full_quality_path: str):
     """Alterna entre la versión de alta y baja resolución del video."""
     if not full_quality_path: 
-        return current_preview_path, gr.update(), "⚠️ Selecciona un video primero."
+        return current_preview, gr.update(), "⚠️ Selecciona un video primero."
+    
+    # En Gradio 5, el valor del video puede ser un diccionario
+    path_now = current_preview["path"] if isinstance(current_preview, dict) else current_preview
     
     p_full = Path(full_quality_path)
-    # Ruta esperada para la versión SD
-    sd_path = p_full.parent / f"{p_full.stem}_sd.mp4"
+    # Nombre del archivo SD basado en el original
+    sd_filename = f"{p_full.stem}_sd.mp4"
     
     # Comprobar si estamos mostrando actualmente la versión SD
-    is_currently_sd = current_preview_path and Path(current_preview_path).name == sd_path.name
+    # Usamos .name para ignorar rutas temporales de Gradio
+    is_currently_sd = path_now and Path(path_now).name == sd_filename
     
     if not is_currently_sd:
-        # Queremos pasar a SD
+        # Estamos en FULL -> Queremos pasar a SD
+        sd_path = p_full.parent / sd_filename
         if sd_path.exists():
             return str(sd_path), gr.update(value="HD"), "✅ Cargada vista previa SD (Caché)"
         
         from src.render import create_low_res_preview
         try:
-            # Generar indicando la ruta específica con _sd
             out_path = create_low_res_preview(p_full, sd_path)
             return str(out_path), gr.update(value="HD"), "✅ Vista previa SD generada"
         except Exception as e:
-            return current_preview_path, gr.update(), f"❌ Error al generar SD: {e}"
+            return current_preview, gr.update(), f"❌ Error al generar SD: {e}"
     else:
-        # Queremos volver a Full Quality
+        # Estamos en SD -> Queremos volver a FULL
         return str(p_full), gr.update(value="SD"), "✅ Cambiado a Calidad Completa"
 
 
