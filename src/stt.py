@@ -109,8 +109,8 @@ def run_main(
 
     output_name = generate_tiktok_title(url, translate if translate else transcription.language)
     if output_name:
-        # Limpiar nombre para archivo (quitar caracteres inválidos)
-        output_name = "".join(c for c in output_name if c.isalnum() or c in " _-#").strip() or "output"
+        # Limpiar nombre para archivo (quitar caracteres inválidos en Windows/Linux, preservando emojis)
+        output_name = "".join(c for c in output_name if c not in r'\/:*?"<>|').replace('\n', ' ').strip() or "output"
     else:
         output_name = media_path.stem
 
