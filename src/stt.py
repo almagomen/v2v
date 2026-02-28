@@ -104,14 +104,12 @@ def run_main(
                 {"start": s, "end": e, "text": txt}
                 for (s, e), txt in zip(times, translated_texts)
             ]
-        else:
-            print("⚠️ No se pudo traducir, usando texto original")
+        else: print("⚠️ No se pudo traducir, usando texto original")
 
     output_name = generate_tiktok_title(url, translate if translate else transcription.language)
     if output_name:
         # Limpiar nombre para archivo (quitar caracteres inválidos en Windows)
         output_name = "".join(c for c in output_name if c not in r'\/:*?"<>|').replace('\n', ' ').strip() or "output"
-    else:
-        output_name = media_path.stem
+    else: output_name = media_path.stem
 
     return translated_result, output_name, result, transcription, diarization
