@@ -3,7 +3,12 @@ Caché de modelos: carga una vez y reutiliza.
 """
 from typing import Callable, Any
 
-MODELS: dict[str, Any] = {}
+import sys
+
+if not hasattr(sys, '_v2v_models_cache'):
+    sys._v2v_models_cache: dict[str, Any] = {}
+
+MODELS = sys._v2v_models_cache
 
 
 def get_or_load_model(
