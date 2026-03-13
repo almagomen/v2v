@@ -1,0 +1,36 @@
+# FastAPI backend
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# Database
+sqlmodel>=0.0.14
+aiosqlite>=0.19.0
+
+# WebSocket
+websockets>=12.0
+
+# Video/Audio Processing
+torch>=2.0.0
+torchaudio>=2.0.0
+yt-dlp[default]>=2024.1.0
+ffmpeg-python>=0.2.0
+
+# STT & Diarization
+stable-whisper>=0.14.0
+pyannote-audio>=3.0.0
+sentencex>=0.2.0
+
+# Translation
+google-genai>=0.6.0
+
+# TTS
+requests>=2.31.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Frontend (development)
+# (se instalarán por separado en la carpeta frontend)
