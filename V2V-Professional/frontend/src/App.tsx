@@ -3,7 +3,7 @@ import { useProjectStore } from '@/store/useProjectStore';
 import { TimelineEditor } from '@/components/Timeline/TimelineEditor';
 import { VideoPreview } from '@/components/VideoPlayer/VideoPreview';
 import { connectWebSocket } from '@/api/client';
-import { Video, Plus, Loader2, Trash2 } from 'lucide-react';
+import { Video, Plus, Loader2 } from 'lucide-react';
 
 const SPEAKER_OPTIONS = [
   { value: 'mrbeast_lmnt', label: 'MrBeast (LMNT)' },

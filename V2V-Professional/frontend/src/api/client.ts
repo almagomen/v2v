@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Project, ProjectCreate, AudioSegment, VideoClip } from '@/types';
+import { Project, ProjectCreate, AudioSegment } from '@/types';
 
 const BASE_URL = '/api';
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useProjectStore } from '@/store/useProjectStore';
 import ReactPlayer from 'react-player';
 import { Play, Pause, Volume2, VolumeX, Maximize, Minimize } from 'lucide-react';

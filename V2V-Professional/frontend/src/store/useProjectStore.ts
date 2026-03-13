@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Project, AudioSegment, VideoClip, ProgressMessage } from '@/types';
+import { Project, AudioSegment, ProgressMessage } from '@/types';
 import { api } from '@/api/client';
 
 interface ProjectState {

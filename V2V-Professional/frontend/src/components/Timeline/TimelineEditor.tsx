@@ -1,17 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Timeline, TimelineRow, TimelineEffect, TimelineState } from '@xzdarcy/react-timeline-editor';
+import { useCallback, useRef, useState } from 'react';
+import { Timeline, TimelineState } from '@xzdarcy/react-timeline-editor';
 import { useProjectStore } from '@/store/useProjectStore';
-import { AudioSegment, VideoClip } from '@/types';
 import { motion } from 'framer-motion';
-import { Play, Pause, SkipBack, Volume2, ZoomIn, ZoomOut, Download } from 'lucide-react';
-import ReactPlayer from 'react-player';
-
-const SPEAKER_OPTIONS = [
-  { value: 'mrbeast_lmnt', label: 'MrBeast (LMNT)' },
-  { value: 'Dionisio Schuyler', label: 'Dionisio Schuyler' },
-  { value: 'en-US-AndrewMultilingualNeural', label: 'Andrew (Multilingual)' },
-  { value: 'Chatterbox', label: 'Chatterbox' },
-];
+import { Play, Pause, SkipBack, ZoomIn, ZoomOut, Download, Volume2 } from 'lucide-react';
 
 export function TimelineEditor() {
   const { currentProject, updateSegment, regenerateSegment, exportProject } = useProjectStore();
@@ -33,66 +24,45 @@ export function TimelineEditor() {
   const convertToTimelineData = useCallback(() => {
     if (!currentProject) return [];
 
-    const rows: TimelineRow[] = [
-      {
-        id: 'video-track',
-        actions: currentProject.video_clips.map(clip => ({
-          id: clip.id,
-          start: clip.start_timeline,
-          end: clip.end_timeline,
-          effectId: 'video',
-          data: { ...clip },
-        })),
-      },
-      {
-        id: 'audio-track',
-        actions: currentProject.audio_segments.map(seg => ({
-          id: seg.id,
-          start: seg.start_timeline,
-          end: seg.end_timeline,
-          effectId: 'audio',
-          data: { ...seg },
-        })),
-      },
-    ];
+    const videoTrack = {
+      id: 'video-track',
+      actions: currentProject.video_clips.map((clip) => ({
+        id: clip.id,
+        start: clip.start_timeline,
+        end: clip.end_timeline,
+        effectId: 'video',
+      })),
+    };
 
-    return rows;
+    const audioTrack = {
+      id: 'audio-track',
+      actions: currentProject.audio_segments.map((seg) => ({
+        id: seg.id,
+        start: seg.start_timeline,
+        end: seg.end_timeline,
+        effectId: 'audio',
+      })),
+    };
+
+    return [videoTrack, audioTrack];
   }, [currentProject]);
 
-  const effects: Record<string, TimelineEffect> = {
+  const effects = {
     video: {
       id: 'video',
       name: 'Video',
-      source: {
-        enter: ({ action, isPlaying }) => {
-          if (isPlaying) {
-            console.log('Video enter:', action.data);
-          }
-        },
-      },
     },
     audio: {
       id: 'audio',
       name: 'Audio Segment',
-      source: {
-        enter: ({ action, isPlaying }) => {
-          if (isPlaying) {
-            console.log('Audio enter:', action.data.text);
-          }
-        },
-        update: ({ time, action }) => {
-          const localTime = time - action.start;
-          console.log('Audio progress:', localTime);
-        },
-      },
     },
   };
 
-  const handleTimelineChange = useCallback((data: TimelineRow[]) => {
+  const handleTimelineChange = useCallback((data: any[]) => {
     if (!currentProject) return;
 
-    data.forEach(row => {
-      row.actions.forEach(action => {
+    data.forEach((row) => {
+      row.actions.forEach((action: { id: string; start: number; end: number }) => {
         if (row.id === 'audio-track') {
           updateSegment(action.id, {
             start_timeline: action.start,
@@ -103,9 +73,9 @@ export function TimelineEditor() {
     });
   }, [currentProject, updateSegment]);
 
-  const handleDoubleClickAction = useCallback((action: any, row: TimelineRow) => {
+  const handleDoubleClickAction = useCallback((action: any, row: any) => {
     if (row.id === 'audio-track') {
-      const segment = currentProject?.audio_segments.find(s => s.id === action.id);
+      const segment = currentProject?.audio_segments.find((s) => s.id === action.id);
       if (segment) {
         setSelectedSegment(action.id);
         setEditingText(segment.text);
@@ -134,14 +104,6 @@ export function TimelineEditor() {
     }
   }, [isPlaying]);
 
-  const handleSeek = useCallback((time: number) => {
-    if (timelineRef.current) {
-      timelineRef.current.setTime(time);
-      timelineRef.current.reRender();
-      setCurrentTime(time);
-    }
-  }, []);
-
   const handleExport = useCallback(() => {
     if (currentProject) {
       exportProject(currentProject.id);
@@ -156,7 +118,7 @@ export function TimelineEditor() {
     );
   }
 
-  const dirtySegments = currentProject.audio_segments.filter(s => s.is_dirty);
+  const dirtySegments = currentProject.audio_segments.filter((s) => s.is_dirty);
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -180,14 +142,14 @@ export function TimelineEditor() {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setScale(s => Math.max(0.5, s - 0.25))}
+            onClick={() => setScale((s) => Math.max(0.5, s - 0.25))}
             className="p-2 hover:bg-secondary rounded-md"
           >
             <ZoomOut className="w-4 h-4" />
           </button>
           <span className="text-xs">{scale}x</span>
           <button
-            onClick={() => setScale(s => Math.min(4, s + 0.25))}
+            onClick={() => setScale((s) => Math.min(4, s + 0.25))}
             className="p-2 hover:bg-secondary rounded-md"
           >
             <ZoomIn className="w-4 h-4" />
@@ -216,20 +178,25 @@ export function TimelineEditor() {
           rowHeight={60}
           gridSnap={true}
           autoScroll={true}
-          getActionRender={(action, row) => (
-            <div
-              className={`h-full flex items-center px-2 text-xs text-white truncate ${
-                row.id === 'video-track' ? 'bg-blue-500' : 'bg-green-500'
-              }`}
-              style={{ opacity: row.id === 'audio-track' && action.data.is_dirty ? 0.7 : 1 }}
-            >
-              {row.id === 'audio-track' ? (
-                <span className="truncate">{action.data.text || 'Sin texto'}</span>
-              ) : (
-                <span>Video</span>
-              )}
-            </div>
-          )}
+          getActionRender={(action: any, row: any) => {
+            const segment = currentProject?.audio_segments.find((s) => s.id === action.id);
+            const isDirty = segment?.is_dirty ?? false;
+            
+            return (
+              <div
+                className={`h-full flex items-center px-2 text-xs text-white truncate ${
+                  row.id === 'video-track' ? 'bg-blue-500' : 'bg-green-500'
+                }`}
+                style={{ opacity: row.id === 'audio-track' && isDirty ? 0.7 : 1 }}
+              >
+                {row.id === 'audio-track' ? (
+                  <span className="truncate">{segment?.text || 'Sin texto'}</span>
+                ) : (
+                  <span>Video</span>
+                )}
+              </div>
+            );
+          }}
           onDoubleClickAction={handleDoubleClickAction}
         />
       </div>
