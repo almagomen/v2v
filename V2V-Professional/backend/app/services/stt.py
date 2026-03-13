@@ -1,5 +1,6 @@
 import io
 import contextlib
+import os
 from pathlib import Path
 from typing import Optional
 import stable_whisper
@@ -32,9 +33,7 @@ class STTService:
         return cls._diarization_model
 
     @classmethod
-    def transcribe(
-        cls, audio_path: Path, ws_manager, project_id: str
-    ) -> tuple[list[dict], str]:
+    async def transcribe(cls, audio_path: Path, ws_manager, project_id: str):
         """Transcribe el audio y retorna segmentos."""
         await ws_manager.send_progress(
             project_id, 0.6, "Transcribiendo audio...", "processing"
@@ -54,6 +53,10 @@ class STTService:
 
         result = cls._process_audio(segments, diarize_segments)
 
+        await ws_manager.send_log(
+            project_id, f"✅ Transcripción completada: {len(result)} segmentos"
+        )
+
         return result, segments.language
 
     @staticmethod
@@ -61,11 +64,9 @@ class STTService:
         segments, diarize_segments, group_segments=True, max_duration=7, max_gap=1
     ):
         """Procesa y agrupa segmentos."""
+        # Import from original v2v project
         from src.diarization import process_audio
 
         return process_audio(
             segments, diarize_segments, group_segments, max_duration, max_gap
         )
-
-
-import os
