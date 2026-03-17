@@ -58,6 +58,39 @@ Copia `.env.example` a `.env` y rellena `GOOGLE_API_KEY` y `LMNT_API_KEY`.
 python app_gradio.py
 ```
 
+## Editor OpenReel (alternativa a Gradio)
+
+v2v incluye integración con [OpenReel](https://github.com/Augani/openreel-video), un editor de video profesional en el navegador. El flujo v2v (URLs → transcripción → TTS → render) está disponible como panel en OpenReel.
+
+### Arquitectura
+
+- **Backend API** (FastAPI): expone la pipeline v2v vía REST.
+- **Frontend** (OpenReel modificado): panel "Video2Video" en la pestaña del panel de assets.
+
+### Uso con OpenReel en Colab
+
+Consulta [COLAB_V2V_OPENREEL.md](COLAB_V2V_OPENREEL.md) para instrucciones detalladas.
+
+Resumen:
+1. Instala dependencias y construye OpenReel (`cd openreel && pnpm install && pnpm build`).
+2. Lanza el backend: `uvicorn api.main:app --host 0.0.0.0 --port 8000`.
+3. Usa ngrok para exponer el puerto y abre la URL en el navegador.
+4. En OpenReel, pestaña **Video2Video**: pega URLs, procesa y carga en el editor.
+
+### Desarrollo local
+
+```bash
+# Terminal 1: Backend
+pip install fastapi uvicorn python-multipart
+uvicorn api.main:app --reload --port 8000
+
+# Terminal 2: OpenReel (opcional, para dev del frontend)
+cd openreel && pnpm dev
+# Configura VITE_V2V_API_URL=http://localhost:8000 en openreel/apps/web/.env
+```
+
+Si OpenReel está construido, el backend sirve el frontend en la raíz (`/`).
+
 ## Estructura del repo
 
 ```
@@ -66,7 +99,14 @@ v2v/
 ├── requirements.txt
 ├── .env.example
 ├── app_gradio.py       # Interfaz Gradio
-├── colab_launch.ipynb   # Notebook mínimo para Colab
+├── colab_launch.py     # Lanzar backend para Colab
+├── api/                # Backend FastAPI (OpenReel)
+│   ├── main.py
+│   ├── routes/
+│   ├── schemas.py
+│   ├── service.py
+│   └── job_store.py
+├── openreel/           # Editor OpenReel (fork con panel v2v)
 └── src/
     ├── config.py       # Rutas, device, API keys
     ├── models.py       # Caché de modelos
