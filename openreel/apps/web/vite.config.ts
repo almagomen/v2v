@@ -40,6 +40,8 @@ export default defineConfig({
     },
   },
   server: {
+    // Necesario para abrir el dev server detrás del proxy/túnel de Colab.
+    allowedHosts: true,
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
