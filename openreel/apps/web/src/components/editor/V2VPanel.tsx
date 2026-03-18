@@ -59,6 +59,8 @@ export const V2VPanel: React.FC = () => {
         } else if (s.status === "error") {
           setIsProcessing(false);
           setError(s.message || "Error en el procesamiento");
+          const jobLog = await v2vApi.getJobLog(jobId);
+          if (jobLog) setLog(jobLog);
         }
       } catch {
         // ignore
@@ -72,7 +74,10 @@ export const V2VPanel: React.FC = () => {
       .split("\n")
       .map((u) => u.trim())
       .filter(Boolean);
-    if (urlList.length === 0) {
+    const normalized = urlList
+      .map((u) => (/^https?:\/\//i.test(u) ? u : `https://${u}`))
+      .filter((u) => /^https?:\/\/(www\.)?(youtube\.com\/|youtu\.be\/)/i.test(u));
+    if (normalized.length === 0) {
       setError("Introduce al menos una URL de YouTube");
       return;
     }
@@ -82,7 +87,7 @@ export const V2VPanel: React.FC = () => {
     setIsProcessing(true);
     try {
       const res = await v2vApi.processUrls(
-        urlList,
+        normalized,
         translateLang === "None" ? null : translateLang,
         speaker
       );

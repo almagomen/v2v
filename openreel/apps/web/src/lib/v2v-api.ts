@@ -213,6 +213,17 @@ export const v2vApi = {
     return data.url;
   },
 
+  async getJobLog(jobId: string): Promise<string> {
+    const res = await fetch(url(`/api/job/${jobId}/log`));
+    if (!res.ok) return "";
+    try {
+      const data = await readJsonOrThrow<{ log?: string }>(res);
+      return data.log || "";
+    } catch {
+      return "";
+    }
+  },
+
   getZipUrl(jobId: string): string {
     return url(`/api/job/${jobId}/zip`);
   },
