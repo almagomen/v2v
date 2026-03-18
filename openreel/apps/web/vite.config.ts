@@ -48,6 +48,8 @@ export default defineConfig({
     },
   },
   preview: {
+    // Necesario para abrir el preview detrás del proxy/túnel de Colab.
+    allowedHosts: true,
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
