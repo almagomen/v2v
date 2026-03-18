@@ -136,6 +136,13 @@ export const v2vApi = {
     return res.blob();
   },
 
+  async fetchOutputVideoBlob(jobId: string, videoIndex: number): Promise<Blob> {
+    // Endpoint nuevo: evita pasar `filename` (unicode/largo) en la URL.
+    const res = await fetch(url(`/api/job/${jobId}/files/${videoIndex}`));
+    if (!res.ok) throw new Error(`Error al descargar el video (${videoIndex})`);
+    return res.blob();
+  },
+
   async getSpeakers(): Promise<SpeakerOption[]> {
     const res = await fetch(url("/api/speakers"));
     if (!res.ok) return [];

@@ -3,6 +3,7 @@ import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2 } from "luci
 import { ScrollArea, Button } from "@openreel/ui";
 import { v2vApi, type Segment, type VideoResult } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
+import { useV2VStore } from "../../stores/v2v-store";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -19,23 +20,40 @@ const POLL_INTERVAL = 1500;
 export const V2VPanel: React.FC = () => {
   const importMedia = useProjectStore((state) => state.importMedia);
 
-  const [urls, setUrls] = useState("");
-  const [translateLang, setTranslateLang] = useState("None");
-  const [speaker, setSpeaker] = useState("mrbeast_lmnt");
+  const {
+    urls,
+    setUrls,
+    translateLang,
+    setTranslateLang,
+    speaker,
+    setSpeaker,
+    jobId,
+    setJobId,
+    log,
+    setLog,
+    progress,
+    setProgress,
+    error,
+    setError,
+    videos,
+    setVideos,
+    selectedVideoIndex,
+    setSelectedVideoIndex,
+    segments,
+    setSegments,
+    selectedRowIndex,
+    setSelectedRowIndex,
+    isProcessing,
+    setIsProcessing,
+    regenStatus,
+    setRegenStatus,
+    shareUrl,
+    setShareUrl,
+  } = useV2VStore();
+
   const [speakers, setSpeakers] = useState<{ label: string; value: string }[]>(
     []
   );
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [log, setLog] = useState("");
-  const [progress, setProgress] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [videos, setVideos] = useState<VideoResult[]>([]);
-  const [selectedVideoIndex, setSelectedVideoIndex] = useState(0);
-  const [segments, setSegments] = useState<Segment[]>([]);
-  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [regenStatus, setRegenStatus] = useState("");
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
 
   useEffect(() => {
     v2vApi.getSpeakers().then(setSpeakers);
@@ -173,8 +191,11 @@ export const V2VPanel: React.FC = () => {
     setRegenStatus("Cargando en editor...");
     try {
       const filename = v.output_filename || `${v.output_name}.mp4`;
-      const blob = await v2vApi.fetchFileBlob(jobId, selectedVideoIndex, filename);
-      const file = new File([blob], filename, { type: "video/mp4" });
+      const blob = await v2vApi.fetchOutputVideoBlob(jobId, selectedVideoIndex);
+
+      // Etiqueta visual en Media: el nombre del archivo se usa como `MediaItem.name`.
+      const taggedName = `tts_${filename}`;
+      const file = new File([blob], taggedName, { type: "video/mp4" });
       const result = await importMedia(file);
       if (result.success && result.actionId) {
         const { addClipToNewTrack } = useProjectStore.getState();
