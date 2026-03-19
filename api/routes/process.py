@@ -66,3 +66,12 @@ def get_job_log(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job no encontrado")
     return {"job_id": job_id, "log": job.get("log", "")}
+
+
+@router.get("/job/{job_id}/items")
+def get_job_items(job_id: str):
+    """Estados por URL dentro del job."""
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    return {"job_id": job_id, "items": job.get("url_states", [])}

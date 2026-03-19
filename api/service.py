@@ -40,10 +40,36 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
     old_stdout = sys.stdout
     try:
         sys.stdout = JobLogWriter(job_id)
-        update_job(job_id, status="downloading", message="Descargando y transcribiendo...")
+        # Inicializar estados por URL
+        update_job(
+            job_id,
+            status="downloading",
+            message="Descargando y transcribiendo...",
+            url_states=[{"url": u, "status": "pending", "message": ""} for u in urls],
+        )
+
+        def set_url_state(url: str, status: str, message: str = "", **extra):
+            job = get_job(job_id) or {}
+            states = job.get("url_states") or []
+            updated = []
+            found = False
+            for s in states:
+                if s.get("url") == url:
+                    found = True
+                    ns = {**s, "status": status, "message": message, **extra}
+                    updated.append(ns)
+                else:
+                    updated.append(s)
+            if not found:
+                updated.append({"url": url, "status": status, "message": message, **extra})
+            update_job(job_id, url_states=updated)
 
         speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
-        results = process_video_queue(urls, translate_lang=translate_lang)
+        results = process_video_queue(
+            urls,
+            translate_lang=translate_lang,
+            on_stage=lambda u, st, msg: set_url_state(u, st, msg),
+        )
 
         if not results:
             update_job(job_id, status="error", message="No se pudo procesar ningún video.", error="No results")
@@ -65,6 +91,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             vonly = (v2v_paths or {}).get("video_only") if isinstance(v2v_paths, dict) else None
             video_only_path = Path(vonly) if vonly else path.with_name(f"{path.stem}_video{path.suffix}")
 
+            set_url_state(r.get("url", ""), "tts", f"TTS/segmentos: {output_name}", index=idx, output_name=output_name)
             if output_video_path.exists():
                 output_paths.append(output_video_path)
                 segments = [
@@ -81,6 +108,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                     "segments": segments,
                     "url": r.get("url", ""),
                 })
+                set_url_state(r.get("url", ""), "done", f"Listo (cache): {output_name}", index=idx, output_name=output_name)
                 continue
 
             update_job(job_id, status="tts", message=f"Clonando voz: {path.stem} [{idx + 1}/{len(results)}]")
@@ -102,6 +130,9 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             if not no_vocals_path.exists():
                 continue
 
+            # En este punto ya existen Seqs_trg/vocals_XXXX.wav, así que el frontend puede importar audios.
+            set_url_state(r.get("url", ""), "audio_ready", "Audios listos para importar", index=idx, output_name=output_name)
+
             update_job(job_id, status="rendering", message=f"Renderizando video {idx + 1}...")
             output_path = render_video(path, output_name, vocals_es_path, no_vocals_path, output_dir=path.parent)
             output_paths.append(output_path)
@@ -120,6 +151,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 "segments": segments,
                 "url": r.get("url", ""),
             })
+            set_url_state(r.get("url", ""), "done", f"Listo: {output_name}", index=idx, output_name=output_name)
 
         update_job(
             job_id,

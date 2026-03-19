@@ -93,6 +93,14 @@ export interface AudioSegmentItem {
   filename: string;
 }
 
+export interface JobUrlItem {
+  url: string;
+  status: string;
+  message?: string;
+  output_name?: string;
+  index?: number;
+}
+
 export const v2vApi = {
   async processUrls(
     urls: string[],
@@ -236,6 +244,17 @@ export const v2vApi = {
       return data.log || "";
     } catch {
       return "";
+    }
+  },
+
+  async getJobItems(jobId: string): Promise<JobUrlItem[]> {
+    const res = await fetch(url(`/api/job/${jobId}/items`));
+    if (!res.ok) return [];
+    try {
+      const data = await readJsonOrThrow<{ items?: JobUrlItem[] }>(res);
+      return data.items || [];
+    } catch {
+      return [];
     }
   },
 

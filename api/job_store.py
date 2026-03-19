@@ -17,6 +17,7 @@ def create_job() -> str:
             "log": "",
             "output_paths": [],
             "videos": [],
+            "url_states": [],  # [{url, status, message, output_name?, index?}]
             "error": None,
         }
     return job_id

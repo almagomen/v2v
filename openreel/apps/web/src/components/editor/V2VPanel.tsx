@@ -17,6 +17,48 @@ const TRANSLATE_OPTIONS = [
 
 const POLL_INTERVAL = 1500;
 
+const STATUS_LABEL: Record<string, string> = {
+  pending: "En cola",
+  downloading: "Descargando",
+  cached: "Caché",
+  transcribing: "Transcribiendo",
+  tts: "TTS",
+  audio_ready: "Audio listo",
+  ready: "Listo (STT)",
+  done: "Completado",
+  error: "Error",
+};
+
+const STATUS_PROGRESS: Record<string, number> = {
+  pending: 0,
+  downloading: 10,
+  cached: 40,
+  transcribing: 55,
+  tts: 75,
+  audio_ready: 90,
+  ready: 95,
+  done: 100,
+  error: 100,
+};
+
+function statusToBadgeClass(status: string): string {
+  switch (status) {
+    case "done":
+      return "bg-primary/15 text-primary border border-primary/30";
+    case "audio_ready":
+    case "tts":
+    case "transcribing":
+    case "downloading":
+      return "bg-blue-500/10 text-blue-400 border border-blue-500/20";
+    case "cached":
+      return "bg-purple-500/10 text-purple-400 border border-purple-500/20";
+    case "error":
+      return "bg-red-500/10 text-red-400 border border-red-500/20";
+    default:
+      return "bg-background-tertiary text-text-muted border border-border";
+  }
+}
+
 function toAsciiSafeFilename(name: string): string {
   // Mantener extensiones comunes y evitar nombres demasiado largos/Unicode.
   const parts = name.split(".");
@@ -39,6 +81,12 @@ function toSafeToken(s: string): string {
     .replace(/^[_\-.]+|[_\-.]+$/g, "")
     .slice(0, 40);
   return ascii || "speaker";
+}
+
+function sanitizeFolderName(name: string): string {
+  // El folder se infiere por `Carpeta/archivo`, así que evitamos `/`.
+  const cleaned = (name || "Video").replaceAll("/", "_").replaceAll("\\", "_").trim();
+  return cleaned || "Video";
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -84,6 +132,10 @@ export const V2VPanel: React.FC = () => {
     setRegenStatus,
     shareUrl,
     setShareUrl,
+    importedVideoKeys,
+    markVideoImported,
+    urlItems,
+    setUrlItems,
   } = useV2VStore();
 
   const [speakers, setSpeakers] = useState<{ label: string; value: string }[]>(
@@ -100,6 +152,66 @@ export const V2VPanel: React.FC = () => {
       try {
         const s = await v2vApi.getJobStatus(jobId);
         setProgress(s.progress * 100);
+
+        // Log en tiempo real (sin esperar a done/error)
+        const jobLog = await v2vApi.getJobLog(jobId);
+        if (jobLog && jobLog.length > log.length) setLog(jobLog);
+
+        const items = await v2vApi.getJobItems(jobId);
+        if (items.length) setUrlItems(items);
+
+        // Mientras procesa, intentamos leer resultado parcial (videos ya listos)
+        try {
+          const partial = await v2vApi.getJobResult(jobId);
+          if (partial.videos?.length) {
+            setVideos(partial.videos);
+            if (partial.videos[selectedVideoIndex]) setSegments(partial.videos[selectedVideoIndex].segments);
+          }
+        } catch {
+          // ignore (puede fallar si aún no hay videos)
+        }
+
+        // Auto-import incremental: por cada video aparecido en `videos`, importar video+audios a Media
+        const currentVideos = useV2VStore.getState().videos;
+        for (const v of currentVideos) {
+          const key = `${jobId}:${v.index}`;
+          if (useV2VStore.getState().importedVideoKeys.includes(key)) continue;
+
+          // Sólo importamos cuando el backend ya tiene WAVs en Seqs_trg (si no, esperamos al siguiente tick)
+          let audioSegs: AudioSegmentItem[] = [];
+          try {
+            audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
+          } catch {
+            continue;
+          }
+          if (!audioSegs.length) continue;
+
+          const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
+          setRegenStatus(`Importando a Media: ${folder}...`);
+
+          // 1) Video (sin audio, servido por /files/{index})
+          const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
+          const vfile = new File([vblob], `${folder}/video.mp4`, { type: "video/mp4" });
+          const vimport = await importMedia(vfile);
+          if (!vimport.success) {
+            setRegenStatus(vimport.error?.message || `Error importando video: ${folder}`);
+            continue;
+          }
+
+          // 2) Audios por segmento
+          for (let i = 0; i < audioSegs.length; i++) {
+            const seg = audioSegs[i];
+            setRegenStatus(`Importando audio ${folder} (${i + 1}/${audioSegs.length})...`);
+            const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
+            const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
+            const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
+            await importMedia(wavFile);
+          }
+
+          markVideoImported(key);
+          setRegenStatus(`Importado en Media: ${folder}`);
+        }
+
         if (s.status === "done") {
           setIsProcessing(false);
           const result = await v2vApi.getJobResult(jobId);
@@ -112,15 +224,15 @@ export const V2VPanel: React.FC = () => {
         } else if (s.status === "error") {
           setIsProcessing(false);
           setError(s.message || "Error en el procesamiento");
-          const jobLog = await v2vApi.getJobLog(jobId);
-          if (jobLog) setLog(jobLog);
+          const finalLog = await v2vApi.getJobLog(jobId);
+          if (finalLog) setLog(finalLog);
         }
       } catch {
         // ignore
       }
     }, POLL_INTERVAL);
     return () => clearInterval(t);
-  }, [jobId, isProcessing]);
+  }, [jobId, isProcessing, importMedia, log.length, selectedVideoIndex]);
 
   const handleProcess = useCallback(async () => {
     const urlList = urls
@@ -425,10 +537,52 @@ export const V2VPanel: React.FC = () => {
           </div>
         )}
 
-        {log && (
-          <div className="p-2 rounded-lg bg-background-tertiary font-mono text-[10px] max-h-32 overflow-y-auto whitespace-pre-wrap">
-            {log}
+        {urlItems.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-[10px] text-text-muted">Estado por URL</p>
+            <div className="max-h-32 overflow-y-auto border border-border rounded-lg">
+              <table className="w-full text-[10px]">
+                <thead className="bg-background-tertiary sticky top-0">
+                  <tr>
+                    <th className="px-2 py-1 text-left">URL</th>
+                    <th className="px-2 py-1 text-left">Estado</th>
+                    <th className="px-2 py-1 text-left">%</th>
+                    <th className="px-2 py-1 text-left">Detalle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {urlItems.map((it) => (
+                    <tr key={it.url} className="border-t border-border">
+                      <td className="px-2 py-1 max-w-[160px] truncate" title={it.url}>
+                        {it.output_name || it.url}
+                      </td>
+                      <td className="px-2 py-1">
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded ${statusToBadgeClass(it.status)}`}>
+                          {STATUS_LABEL[it.status] || it.status}
+                        </span>
+                        {typeof it.index === "number" &&
+                          importedVideoKeys.includes(`${jobId}:${it.index}`) && (
+                            <span className="ml-1 text-primary">(importado)</span>
+                          )}
+                      </td>
+                      <td className="px-2 py-1 tabular-nums">
+                        {Math.max(0, Math.min(100, STATUS_PROGRESS[it.status] ?? 0))}%
+                      </td>
+                      <td className="px-2 py-1 max-w-[220px] truncate" title={it.message || ""}>
+                        {it.message || ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
+        )}
+
+        {log && (
+          <pre className="p-2 rounded-lg bg-background-tertiary font-mono text-[10px] max-h-32 overflow-y-auto overflow-x-auto whitespace-pre">
+            {log}
+          </pre>
         )}
 
         {videos.length > 0 && (
@@ -449,8 +603,8 @@ export const V2VPanel: React.FC = () => {
             </div>
 
             <div className="flex gap-2">
-              <Button size="sm" variant="secondary" onClick={handleLoadInEditor} className="flex-1">
-                Cargar en editor
+              <Button size="sm" variant="secondary" disabled className="flex-1">
+                Se importa a Media automáticamente
               </Button>
               <Button size="sm" variant="secondary" onClick={handleShare} className="flex-1">
                 <Share2 size={12} className="mr-1" />

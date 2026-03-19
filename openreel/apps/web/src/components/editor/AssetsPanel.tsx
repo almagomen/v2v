@@ -6,6 +6,7 @@ import {
   Image as ImageIcon,
   Film,
   Music,
+  Folder,
   Plus,
   Upload,
   Trash2,
@@ -362,6 +363,7 @@ export const AssetsPanel: React.FC = () => {
   const [activeTab, setActiveTab] = useState<
     "media" | "text" | "graphics" | "ai" | "v2v"
   >("media");
+  const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState("");
@@ -386,6 +388,7 @@ export const AssetsPanel: React.FC = () => {
     importMedia,
     deleteMedia,
     replaceMediaAsset,
+    renameMedia,
     updateSettings,
   } = useProjectStore();
   const mediaItems = project.mediaLibrary.items;
@@ -398,14 +401,65 @@ export const AssetsPanel: React.FC = () => {
     (item) => item.isPlaceholder,
   ).length;
 
+  const getFolderName = (name: string): string | null => {
+    const idx = name.indexOf("/");
+    if (idx <= 0) return null;
+    return name.slice(0, idx);
+  };
+
+  const getDisplayName = (name: string): string => {
+    const idx = name.indexOf("/");
+    return idx >= 0 ? name.slice(idx + 1) : name;
+  };
+
+  const folders = Array.from(
+    new Set(
+      mediaItems
+        .map((m) => getFolderName(m.name))
+        .filter((x): x is string => Boolean(x)),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const folderItems = activeFolder
+    ? mediaItems.filter((m) => getFolderName(m.name) === activeFolder)
+    : [];
+
+  const baseItems = activeFolder
+    ? folderItems
+    : mediaItems.filter((m) => !getFolderName(m.name));
+
   // Filter media items by search query and missing assets toggle
-  const filteredItems = mediaItems.filter((item) => {
+  const filteredItems = baseItems.filter((item) => {
     const matchesSearch = item.name
       .toLowerCase()
       .includes(searchQuery.toLowerCase());
     const matchesFilter = showOnlyMissing ? item.isPlaceholder : true;
     return matchesSearch && matchesFilter;
   });
+
+  const handleRenameFolder = useCallback(async () => {
+    if (!activeFolder) return;
+    const next = window.prompt("Nuevo nombre de carpeta", activeFolder);
+    if (!next || !next.trim() || next.trim() === activeFolder) return;
+    const newName = next.trim();
+    const items = mediaItems.filter((m) => getFolderName(m.name) === activeFolder);
+    for (const it of items) {
+      const rest = getDisplayName(it.name);
+      await renameMedia(it.id, `${newName}/${rest}`);
+    }
+    setActiveFolder(newName);
+  }, [activeFolder, mediaItems, renameMedia]);
+
+  const handleDeleteFolder = useCallback(async () => {
+    if (!activeFolder) return;
+    const ok = window.confirm(`¿Borrar la carpeta "${activeFolder}" y todos sus archivos?`);
+    if (!ok) return;
+    const items = mediaItems.filter((m) => getFolderName(m.name) === activeFolder);
+    for (const it of items) {
+      await deleteMedia(it.id);
+    }
+    setActiveFolder(null);
+  }, [activeFolder, mediaItems, deleteMedia]);
 
   // Handle file import with loading state
   const handleFileImport = useCallback(
@@ -709,7 +763,7 @@ export const AssetsPanel: React.FC = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search media"
+              placeholder={activeFolder ? `Buscar en ${activeFolder}` : "Search media"}
               className="pl-9 text-xs bg-background-tertiary border-border text-text-primary h-9"
             />
           </div>
@@ -777,6 +831,54 @@ export const AssetsPanel: React.FC = () => {
           onDragLeave={handleDragLeave}
         >
           <div className="px-5 pb-5">
+            {/* Folder bar */}
+            {activeFolder ? (
+              <div className="flex items-center gap-2 mb-3">
+                <button
+                  onClick={() => setActiveFolder(null)}
+                  className="text-[11px] text-text-muted hover:text-text-secondary"
+                >
+                  ← Carpetas
+                </button>
+                <div className="flex-1 text-[11px] text-text-primary truncate" title={activeFolder}>
+                  {activeFolder}
+                </div>
+                <button
+                  onClick={handleRenameFolder}
+                  className="text-[10px] px-2 py-1 rounded bg-background-tertiary border border-border hover:border-primary/50"
+                  title="Renombrar carpeta"
+                >
+                  Renombrar
+                </button>
+                <button
+                  onClick={handleDeleteFolder}
+                  className="text-[10px] px-2 py-1 rounded bg-background-tertiary border border-border hover:border-red-500/50 text-red-400"
+                  title="Borrar carpeta"
+                >
+                  Borrar
+                </button>
+              </div>
+            ) : folders.length > 0 ? (
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                {folders.map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setActiveFolder(f)}
+                    className="aspect-video bg-background-tertiary rounded-lg border-2 border-border hover:border-primary/50 transition-all flex flex-col items-center justify-center gap-1.5"
+                    title={f}
+                  >
+                    <Folder size={22} className="text-text-muted" />
+                    <span className="text-[10px] text-text-secondary truncate max-w-[120px]">
+                      {f}
+                    </span>
+                    <span className="text-[9px] text-text-muted">
+                      {mediaItems.filter((m) => getFolderName(m.name) === f).length} items
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
             {filteredItems.length === 0 ? (
               <EmptyState onImport={triggerFileInput} />
             ) : (
@@ -790,7 +892,7 @@ export const AssetsPanel: React.FC = () => {
                 {filteredItems.map((item) => (
                   <MediaThumbnail
                     key={item.id}
-                    item={item}
+                    item={{ ...item, name: getDisplayName(item.name) }}
                     isSelected={isSelected(item.id)}
                     viewMode={mediaViewMode}
                     onSelect={() => handleSelectItem(item.id)}

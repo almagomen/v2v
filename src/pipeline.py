@@ -17,6 +17,7 @@ from src.config import QUEUE_DIR
 def process_video_queue(
     urls: list[str],
     translate_lang: Union[bool, str] = False,
+    on_stage: Optional[callable] = None,
 ) -> list[dict]:
     """
     Procesa una cola de videos: descarga, transcribe y traduce.
@@ -25,6 +26,11 @@ def process_video_queue(
     results = []
     for idx, u in enumerate(urls, 1):
         print(f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
+        if on_stage:
+            try:
+                on_stage(u, "downloading", "Descargando...")
+            except Exception:
+                pass
         try:
             # --- Pre-verificación de Caché por URL ---
             found_in_cache = False
@@ -38,6 +44,11 @@ def process_video_queue(
                             # pkl: (translated_result, output_name, url, result, transcription, diarization)
                             if len(cached_data) >= 3 and cached_data[2] == u:
                                 print(f"♻️ Link en caché: {folder.name}")
+                                if on_stage:
+                                    try:
+                                        on_stage(u, "cached", f"En caché: {folder.name}")
+                                    except Exception:
+                                        pass
                                 translated_result, output_name, url, result, transcription, diarization = cached_data
                                 
                                 # Encontrar el archivo de video original (.mp4) dentro de la carpeta
@@ -94,6 +105,11 @@ def process_video_queue(
             # -----------------------
 
             print("📝 Transcribiendo audio (Whisper + diarización)...")
+            if on_stage:
+                try:
+                    on_stage(u, "transcribing", "Transcribiendo (Whisper + diarización)...")
+                except Exception:
+                    pass
             translated_result, output_name, result, transcription, diarization = run_main(
                 path, u, translate=translate_lang
             )
@@ -108,6 +124,11 @@ def process_video_queue(
             
             print(f"✅ {output_name}  🚩  {len(translated_result)} segmentos")
             print("=" * 60 + "\n")
+            if on_stage:
+                try:
+                    on_stage(u, "ready", f"Listo: {output_name}")
+                except Exception:
+                    pass
             results.append({
                 "path": path,
                 "output_name": output_name,
@@ -122,6 +143,11 @@ def process_video_queue(
             })
         except Exception as e:
             print(f"❌ Error procesando {u}: {e}\n")
+            if on_stage:
+                try:
+                    on_stage(u, "error", str(e))
+                except Exception:
+                    pass
             continue
     return results
 

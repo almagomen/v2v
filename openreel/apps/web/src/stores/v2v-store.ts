@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Segment, VideoResult } from "../lib/v2v-api";
+import type { Segment, VideoResult, JobUrlItem } from "../lib/v2v-api";
 
 export interface V2VState {
   urls: string;
@@ -17,6 +17,8 @@ export interface V2VState {
   regenStatus: string;
   shareUrl: string | null;
   log: string;
+  importedVideoKeys: string[]; // `${jobId}:${videoIndex}` para auto-import incremental
+  urlItems: JobUrlItem[];
 
   setUrls: (urls: string) => void;
   setTranslateLang: (lang: string) => void;
@@ -35,6 +37,8 @@ export interface V2VState {
   setRegenStatus: (status: string) => void;
   setShareUrl: (url: string | null) => void;
   setLog: (log: string) => void;
+  markVideoImported: (key: string) => void;
+  setUrlItems: (items: JobUrlItem[]) => void;
 
   reset: () => void;
 }
@@ -55,6 +59,8 @@ export const useV2VStore = create<V2VState>((set) => ({
   regenStatus: "",
   shareUrl: null,
   log: "",
+  importedVideoKeys: [],
+  urlItems: [],
 
   setUrls: (urls) => set({ urls }),
   setTranslateLang: (translateLang) => set({ translateLang }),
@@ -77,6 +83,13 @@ export const useV2VStore = create<V2VState>((set) => ({
   setRegenStatus: (regenStatus) => set({ regenStatus }),
   setShareUrl: (shareUrl) => set({ shareUrl }),
   setLog: (log) => set({ log }),
+  markVideoImported: (key) =>
+    set((state) =>
+      state.importedVideoKeys.includes(key)
+        ? state
+        : { importedVideoKeys: [...state.importedVideoKeys, key] }
+    ),
+  setUrlItems: (urlItems) => set({ urlItems }),
 
   reset: () =>
     set({
@@ -94,6 +107,8 @@ export const useV2VStore = create<V2VState>((set) => ({
       regenStatus: "",
       shareUrl: null,
       log: "",
+      importedVideoKeys: [],
+      urlItems: [],
     }),
 }));
 
