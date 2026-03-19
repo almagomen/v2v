@@ -85,6 +85,14 @@ export interface SpeakerOption {
   value: string;
 }
 
+export interface AudioSegmentItem {
+  seg: number;
+  start: number;
+  end: number;
+  speaker: string;
+  filename: string;
+}
+
 export const v2vApi = {
   async processUrls(
     urls: string[],
@@ -229,6 +237,34 @@ export const v2vApi = {
     } catch {
       return "";
     }
+  },
+
+  async getAudioSegments(jobId: string, videoIndex: number): Promise<AudioSegmentItem[]> {
+    const res = await fetch(url(`/api/job/${jobId}/audio-segments/${videoIndex}`));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al listar segmentos de audio");
+    }
+    return readJsonOrThrow<AudioSegmentItem[]>(res);
+  },
+
+  async fetchAudioSegmentBlob(jobId: string, videoIndex: number, seg: number): Promise<Blob> {
+    const res = await fetch(url(`/api/job/${jobId}/audio-segments/${videoIndex}/${seg}`));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Error al descargar segmento ${seg}`);
+    }
+    return res.blob();
+  },
+
+  async downloadZipBlob(jobId: string): Promise<Blob> {
+    const res = await fetch(url(`/api/job/${jobId}/zip`));
+    if (!res.ok) {
+      // FastAPI suele devolver JSON con {detail}
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al descargar ZIP");
+    }
+    return res.blob();
   },
 
   getZipUrl(jobId: string): string {

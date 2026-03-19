@@ -24,10 +24,17 @@ def share_to_catbox(job_id: str, video_index: int):
     output_path = Path(videos[video_index]["output_video_path"])
     if not output_path.exists():
         raise HTTPException(status_code=404, detail="Video no encontrado")
-    url = upload_to_catbox(output_path)
+    try:
+        url = upload_to_catbox(output_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al subir a Catbox: {e}")
     if not url:
-        raise HTTPException(status_code=500, detail="Error al subir a Catbox")
-    return {"url": url}
+        # Mantén un detalle útil; el stderr ya se imprime en server logs.
+        raise HTTPException(
+            status_code=500,
+            detail="Error al subir a Catbox (curl falló o no devolvió URL).",
+        )
+    return {"url": url, "filename": output_path.name}
 
 
 @router.get("/job/{job_id}/zip")
@@ -38,9 +45,25 @@ def download_all_zip(job_id: str):
         raise HTTPException(status_code=404, detail="Job no encontrado")
     output_paths = [Path(p) for p in job.get("output_paths", []) if Path(p).exists()]
     if not output_paths:
-        raise HTTPException(status_code=404, detail="No hay videos para descargar")
+        # Fallback: si no se llenó output_paths, derivar desde videos[]
+        videos = job.get("videos", [])
+        derived = []
+        for v in videos:
+            p = v.get("output_video_path") or v.get("video_path")
+            if p:
+                pp = Path(p)
+                if pp.exists():
+                    derived.append(pp)
+        output_paths = derived
 
-    zip_path = TEMP_DIR / "videos_inferidos.zip"
+    if not output_paths:
+        raise HTTPException(
+            status_code=404,
+            detail="No hay videos para descargar (output_paths vacío y videos sin archivos existentes).",
+        )
+
+    # Evitar colisiones entre jobs concurrentes
+    zip_path = TEMP_DIR / f"videos_inferidos_{job_id}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in output_paths:
             zf.write(p, arcname=p.name)

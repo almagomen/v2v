@@ -4,6 +4,8 @@ Renderizado de video final: ffmpeg, preview baja res, upload opcional.
 import json
 import subprocess
 from pathlib import Path
+import re
+import unicodedata
 
 from src.config import TEMP_DIR
 
@@ -77,10 +79,18 @@ def create_low_res_preview(input_path: Path, output_path: Path | None = None) ->
 
 def upload_to_catbox(file_path: Path) -> str:
     """Sube archivo a Catbox (24h). Returns URL o vacío."""
+    # Catbox/litterbox a veces falla con filenames Unicode/emoji en multipart.
+    # Forzamos un filename ASCII corto y estable.
+    base = unicodedata.normalize("NFKD", file_path.stem)
+    base = base.encode("ascii", "ignore").decode("ascii")
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._-") or "video"
+    base = base[:80]
+    safe_name = f"{base}{file_path.suffix or '.mp4'}"
+
     cmd = [
         "curl", "-F", "reqtype=fileupload",
         "-F", "time=24h",
-        "-F", f"fileToUpload=@{file_path}",
+        "-F", f"fileToUpload=@{file_path};filename={safe_name}",
         "https://litterbox.catbox.moe/resources/internals/api.php",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2 } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
-import { v2vApi, type Segment, type VideoResult } from "../../lib/v2v-api";
+import { v2vApi, type Segment, type VideoResult, type AudioSegmentItem } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
 import { useV2VStore } from "../../stores/v2v-store";
 
@@ -16,6 +16,41 @@ const TRANSLATE_OPTIONS = [
 ];
 
 const POLL_INTERVAL = 1500;
+
+function toAsciiSafeFilename(name: string): string {
+  // Mantener extensiones comunes y evitar nombres demasiado largos/Unicode.
+  const parts = name.split(".");
+  const ext = parts.length > 1 ? `.${parts.pop()}` : ".mp4";
+  const base = parts.join(".") || "video";
+  const ascii = base
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^[_\-.]+|[_\-.]+$/g, "")
+    .slice(0, 80) || "video";
+  return `${ascii}${ext}`;
+}
+
+function toSafeToken(s: string): string {
+  const ascii = s
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^[_\-.]+|[_\-.]+$/g, "")
+    .slice(0, 40);
+  return ascii || "speaker";
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 export const V2VPanel: React.FC = () => {
   const importMedia = useProjectStore((state) => state.importMedia);
@@ -194,20 +229,96 @@ export const V2VPanel: React.FC = () => {
       const blob = await v2vApi.fetchOutputVideoBlob(jobId, selectedVideoIndex);
 
       // Etiqueta visual en Media: el nombre del archivo se usa como `MediaItem.name`.
-      const taggedName = `tts_${filename}`;
+      const taggedName = `tts_${toAsciiSafeFilename(filename)}`;
       const file = new File([blob], taggedName, { type: "video/mp4" });
       const result = await importMedia(file);
       if (result.success && result.actionId) {
-        const { addClipToNewTrack } = useProjectStore.getState();
-        await addClipToNewTrack(result.actionId, 0);
-        setRegenStatus("Video cargado en la timeline");
+        const store = useProjectStore.getState();
+        const clipStartTime = 0;
+        await store.addClipToNewTrack(result.actionId, clipStartTime);
+
+        setRegenStatus("Cargando segmentos de audio...");
+        const audioSegments: AudioSegmentItem[] = await v2vApi.getAudioSegments(
+          jobId,
+          selectedVideoIndex
+        );
+
+        if (audioSegments.length === 0) {
+          setRegenStatus("Video cargado, pero no hay WAVs de segmentos en el backend (Seqs_trg vacío).");
+          return;
+        }
+
+        // Crear una pista de audio por speaker: TTS_<speaker>
+        const speakerToTrackId = new Map<string, string>();
+        const getOrCreateSpeakerTrackId = async (speaker: string): Promise<string> => {
+          const key = speaker || "default";
+          const existing = speakerToTrackId.get(key);
+          if (existing) return existing;
+
+          const desiredName = `TTS_${toSafeToken(key)}`;
+          const currentProject = useProjectStore.getState().project;
+          const found = currentProject.timeline.tracks.find(
+            (t) => t.type === "audio" && t.name === desiredName
+          );
+          if (found) {
+            speakerToTrackId.set(key, found.id);
+            return found.id;
+          }
+
+          const before = currentProject;
+          const addTrackRes = await store.addTrack("audio");
+          if (!addTrackRes?.success) throw new Error("No se pudo crear pista de audio");
+
+          const after = useProjectStore.getState().project;
+          const newTracks = after.timeline.tracks.filter(
+            (t) => t.type === "audio" && !before.timeline.tracks.some((old) => old.id === t.id)
+          );
+          const created = newTracks[0];
+          if (!created) throw new Error("No se encontró la pista de audio creada");
+
+          useProjectStore.setState((state) => ({
+            project: {
+              ...state.project,
+              timeline: {
+                ...state.project.timeline,
+                tracks: state.project.timeline.tracks.map((t) =>
+                  t.id === created.id ? { ...t, name: desiredName } : t
+                ),
+              },
+            },
+          }));
+
+          speakerToTrackId.set(key, created.id);
+          return created.id;
+        };
+
+        // Importar cada WAV y pegarlo en su start
+        for (let i = 0; i < audioSegments.length; i++) {
+          const seg = audioSegments[i];
+          const speakerKey = seg.speaker || "default";
+          const trackId = await getOrCreateSpeakerTrackId(speakerKey);
+
+          setRegenStatus(`Importando audio ${i + 1}/${audioSegments.length} (seg ${seg.seg})...`);
+          const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, selectedVideoIndex, seg.seg);
+
+          const wavName = `tts_${toSafeToken(speakerKey)}_${String(seg.seg).padStart(4, "0")}.wav`;
+          const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
+          const wavImport = await importMedia(wavFile);
+          if (!wavImport.success || !wavImport.actionId) {
+            throw new Error(wavImport.error?.message || `No se pudo importar WAV seg ${seg.seg}`);
+          }
+
+          await store.addClip(trackId, wavImport.actionId, clipStartTime + seg.start);
+        }
+
+        setRegenStatus("Video + audios TTS pegados por segmentos (por speaker)");
       } else {
-        setRegenStatus("Error al cargar");
+        setRegenStatus(result.error?.message || "Error al cargar");
       }
     } catch (e) {
       setRegenStatus(e instanceof Error ? e.message : "Error");
     }
-  }, [jobId, selectedVideoIndex, videos, importMedia]);
+  }, [jobId, selectedVideoIndex, videos, importMedia, segments]);
 
   const handleShare = useCallback(async () => {
     if (!jobId) return;
@@ -217,9 +328,21 @@ export const V2VPanel: React.FC = () => {
       setShareUrl(u);
       setRegenStatus("Enlace listo");
     } catch (e) {
-      setRegenStatus(e instanceof Error ? e.message : "Error");
+      setRegenStatus(e instanceof Error ? e.message : "Error al compartir");
     }
   }, [jobId, selectedVideoIndex]);
+
+  const handleDownloadZip = useCallback(async () => {
+    if (!jobId) return;
+    setRegenStatus("Preparando ZIP...");
+    try {
+      const blob = await v2vApi.downloadZipBlob(jobId);
+      downloadBlob(blob, "videos_inferidos.zip");
+      setRegenStatus("ZIP descargado");
+    } catch (e) {
+      setRegenStatus(e instanceof Error ? e.message : "Error al descargar ZIP");
+    }
+  }, [jobId]);
 
   return (
     <ScrollArea className="flex-1 w-full">
@@ -333,12 +456,16 @@ export const V2VPanel: React.FC = () => {
                 <Share2 size={12} className="mr-1" />
                 Compartir
               </Button>
-              <a href={jobId ? v2vApi.getZipUrl(jobId) : "#"} download className="flex-1">
-                <Button size="sm" variant="secondary" className="w-full">
-                  <Download size={12} className="mr-1" />
-                  ZIP
-                </Button>
-              </a>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="flex-1"
+                onClick={handleDownloadZip}
+                disabled={!jobId}
+              >
+                <Download size={12} className="mr-1" />
+                ZIP
+              </Button>
             </div>
 
             {shareUrl && (
@@ -432,7 +559,15 @@ export const V2VPanel: React.FC = () => {
               </Button>
             </div>
 
-            {regenStatus && <p className="text-[10px] text-text-muted">{regenStatus}</p>}
+            {regenStatus && (
+              <p
+                className={`text-[10px] ${
+                  regenStatus.toLowerCase().includes("error") ? "text-red-500" : "text-text-muted"
+                }`}
+              >
+                {regenStatus}
+              </p>
+            )}
           </>
         )}
       </div>

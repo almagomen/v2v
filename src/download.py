@@ -102,6 +102,9 @@ def download_video(
         "outtmpl": str(output_dir / "%(title)s" / "%(title)s.%(ext)s"),
         "format": f"{video} + {audio}",
         "merge_output_format": "mp4",
+        # Mantener los archivos intermedios (bestvideo/bestaudio) para poder
+        # reutilizar el video-only sin un paso extra de ffmpeg (-an).
+        "keepvideo": True,
         "logger": OneLineLogger(),
         "quiet": True,
         'js_runtimes': {'node': {}},
@@ -118,7 +121,26 @@ def download_video(
             print(f"✅ {Path(media).name}")
             print_codecs(info)
             ydl.download([url])
-            return Path(media), info
+            media_path = Path(media)
+
+            # Guardar paths útiles en info para el resto del pipeline:
+            # - merged (media_path)
+            # - video-only descargado por yt-dlp (requested_formats[0])
+            try:
+                info["_v2v_paths"] = info.get("_v2v_paths") or {}
+                info["_v2v_paths"]["merged"] = str(media_path)
+
+                requested = info.get("requested_formats") or []
+                if len(requested) >= 1:
+                    v = requested[0] or {}
+                    # yt-dlp suele dejar `filepath` tras la descarga; si no, intentamos `filename`.
+                    vpath = v.get("filepath") or v.get("filename")
+                    if vpath:
+                        info["_v2v_paths"]["video_only"] = str(Path(vpath))
+            except Exception as e:
+                print(f"⚠️ No se pudieron registrar paths de descarga: {e}")
+
+            return media_path, info
     except Exception as e:
         print(f"❌ Error al descargar video: {e}")
         raise

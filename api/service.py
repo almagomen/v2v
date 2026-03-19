@@ -60,6 +60,11 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             transcription = r["transcription"]
             lang = translate_lang if translate_lang else transcription.language
             output_video_path = path.parent / f"{output_name}.mp4"
+            # Preferimos el bestvideo que yt-dlp ya descargó (sin audio) si está disponible.
+            info = r.get("info") or {}
+            v2v_paths = info.get("_v2v_paths") if isinstance(info, dict) else {}
+            vonly = (v2v_paths or {}).get("video_only") if isinstance(v2v_paths, dict) else None
+            video_only_path = Path(vonly) if vonly else path.with_name(f"{path.stem}_video{path.suffix}")
 
             if output_video_path.exists():
                 output_paths.append(output_video_path)
@@ -72,6 +77,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                     "output_name": output_name,
                     "video_path": str(path),
                     "output_video_path": str(output_video_path),
+                    "video_only_path": str(video_only_path) if video_only_path.exists() else "",
                     "output_filename": output_video_path.name,
                     "segments": segments,
                     "url": r.get("url", ""),
@@ -110,6 +116,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 "output_name": output_name,
                 "video_path": str(path),
                 "output_video_path": str(output_path),
+                "video_only_path": str(video_only_path) if video_only_path.exists() else "",
                 "output_filename": output_path.name,
                 "segments": segments,
                 "url": r.get("url", ""),
