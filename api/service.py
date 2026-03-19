@@ -6,7 +6,6 @@ from pathlib import Path
 
 from api.job_store import create_job, update_job, append_log, get_job
 
-# Speaker options from app_gradio
 SPEAKER_OPTIONS = {
     "mrbeast_lmnt": "d47094be-9814-4323-9000-e735e04d8732",
     "Dionisio Schuyler": "Dionisio Schuyler",

@@ -25,8 +25,8 @@ En Colab: panel izquierdo → **Secrets** y añade `GOOGLE_API_KEY` y `LMNT_API_
 1. Abre [colab_launch.ipynb](colab_launch.ipynb) (o el enlace de arriba tras sustituir `TU_USUARIO` por tu usuario de GitHub).
 2. **Runtime → Change runtime type → T4 GPU**.
 3. Añade en **Secrets**: `GOOGLE_API_KEY`, `LMNT_API_KEY`.
-4. Ejecuta las celdas: clonar repo → `pip install -r requirements.txt` → `demo.launch(share=True)`.
-5. Usa el enlace público que muestra Gradio para abrir la app en el navegador.
+4. Ejecuta las celdas para instalar dependencias y lanzar el backend (`uvicorn`).
+5. Abre la URL pública (ngrok/Colab proxy) del puerto 8000 y entra al editor OpenReel.
 
 Si no usas GitHub, sube esta carpeta a Colab (o a Drive y monta Drive), entra en la carpeta y ejecuta:
 
@@ -34,12 +34,7 @@ Si no usas GitHub, sube esta carpeta a Colab (o a Drive y monta Drive), entra en
 pip install -r requirements.txt
 ```
 
-Luego en una celda:
-
-```python
-from app_gradio import demo
-demo.launch(share=True)
-```
+Luego ejecuta el backend (por ejemplo con `colab_launch.py` o `uvicorn api.main:app`).
 
 ## Instalación local
 
@@ -55,10 +50,10 @@ pip install -r requirements.txt
 Copia `.env.example` a `.env` y rellena `GOOGLE_API_KEY` y `LMNT_API_KEY`.
 
 ```bash
-python app_gradio.py
+uvicorn api.main:app --reload --port 8000
 ```
 
-## Editor OpenReel (alternativa a Gradio)
+## Editor OpenReel
 
 v2v incluye integración con [OpenReel](https://github.com/Augani/openreel-video), un editor de video profesional en el navegador. El flujo v2v (URLs → transcripción → TTS → render) está disponible como panel en OpenReel.
 
@@ -98,7 +93,6 @@ v2v/
 ├── README.md
 ├── requirements.txt
 ├── .env.example
-├── app_gradio.py       # Interfaz Gradio
 ├── colab_launch.py     # Lanzar backend para Colab
 ├── api/                # Backend FastAPI (OpenReel)
 │   ├── main.py

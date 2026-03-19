@@ -22,9 +22,6 @@ google-genai
 # TTS (LMNT API)
 requests
 
-# App
-# gradio>=4.0.0
-
 # Optional for local .env
 python-dotenv
 
