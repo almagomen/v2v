@@ -137,8 +137,75 @@ def download_video(
                     vpath = v.get("filepath") or v.get("filename")
                     if vpath:
                         info["_v2v_paths"]["video_only"] = str(Path(vpath))
+                if len(requested) >= 2:
+                    a = requested[1] or {}
+                    apath = a.get("filepath") or a.get("filename")
+                    if apath:
+                        info["_v2v_paths"]["audio_only"] = str(Path(apath))
             except Exception as e:
                 print(f"⚠️ No se pudieron registrar paths de descarga: {e}")
+
+            # Fallback: si NO tenemos un video-only real (caso progresivo: un solo archivo con audio,
+            # p.ej. -f 18) generamos *_video.mp4 con ffmpeg -an.
+            try:
+                v2v_paths = info.get("_v2v_paths") if isinstance(info, dict) else {}
+                existing_vonly = (
+                    Path(v2v_paths.get("video_only"))
+                    if isinstance(v2v_paths, dict) and v2v_paths.get("video_only")
+                    else None
+                )
+                existing_aonly = (
+                    Path(v2v_paths.get("audio_only"))
+                    if isinstance(v2v_paths, dict) and v2v_paths.get("audio_only")
+                    else None
+                )
+
+                if (not existing_vonly or not existing_vonly.exists()) or (not existing_aonly or not existing_aonly.exists()):
+                    video_only_path = media_path.with_name(
+                        f"{media_path.stem}_video{media_path.suffix}"
+                    )
+                    if not video_only_path.exists():
+                        cmd = [
+                            "ffmpeg",
+                            "-y",
+                            "-v",
+                            "error",
+                            "-i",
+                            str(media_path),
+                            "-c",
+                            "copy",
+                            "-an",
+                            str(video_only_path),
+                        ]
+                        subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+                    # Extraer audio-only también (si no existe).
+                    audio_only_path = media_path.with_name(f"{media_path.stem}_audio.m4a")
+                    if not audio_only_path.exists():
+                        cmd_a = [
+                            "ffmpeg",
+                            "-y",
+                            "-v",
+                            "error",
+                            "-i",
+                            str(media_path),
+                            "-vn",
+                            "-c",
+                            "copy",
+                            str(audio_only_path),
+                        ]
+                        subprocess.run(cmd_a, capture_output=True, text=True, check=False)
+
+                    # Registrar fallbacks como video_only/audio_only si se generaron.
+                    if isinstance(info, dict):
+                        info.setdefault("_v2v_paths", {})
+                        if isinstance(info["_v2v_paths"], dict):
+                            if video_only_path.exists():
+                                info["_v2v_paths"]["video_only"] = str(video_only_path)
+                            if audio_only_path.exists():
+                                info["_v2v_paths"]["audio_only"] = str(audio_only_path)
+            except Exception as e:
+                print(f"⚠️ No se pudo generar/registrar video_only fallback: {e}")
 
             return media_path, info
     except Exception as e:
