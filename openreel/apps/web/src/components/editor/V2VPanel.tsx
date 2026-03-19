@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2 } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
-import { v2vApi, type Segment, type VideoResult, type AudioSegmentItem } from "../../lib/v2v-api";
+import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
 import { useV2VStore } from "../../stores/v2v-store";
 
@@ -29,18 +29,6 @@ const STATUS_LABEL: Record<string, string> = {
   error: "Error",
 };
 
-const STATUS_PROGRESS: Record<string, number> = {
-  pending: 0,
-  downloading: 10,
-  cached: 40,
-  transcribing: 55,
-  tts: 75,
-  audio_ready: 90,
-  ready: 95,
-  done: 100,
-  error: 100,
-};
-
 function statusToBadgeClass(status: string): string {
   switch (status) {
     case "done":
@@ -59,18 +47,10 @@ function statusToBadgeClass(status: string): string {
   }
 }
 
-function toAsciiSafeFilename(name: string): string {
-  // Mantener extensiones comunes y evitar nombres demasiado largos/Unicode.
-  const parts = name.split(".");
-  const ext = parts.length > 1 ? `.${parts.pop()}` : ".mp4";
-  const base = parts.join(".") || "video";
-  const ascii = base
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Za-z0-9._-]+/g, "_")
-    .replace(/^[_\-.]+|[_\-.]+$/g, "")
-    .slice(0, 80) || "video";
-  return `${ascii}${ext}`;
+function deriveMainTag(jobPhase: string, hasImportsInFlight: boolean): string {
+  if (hasImportsInFlight) return "Importando a Media";
+  if (!jobPhase || jobPhase === "idle") return "Procesar";
+  return STATUS_LABEL[jobPhase] || jobPhase;
 }
 
 function toSafeToken(s: string): string {
@@ -114,7 +94,6 @@ export const V2VPanel: React.FC = () => {
     setJobId,
     log,
     setLog,
-    progress,
     setProgress,
     error,
     setError,
@@ -132,10 +111,16 @@ export const V2VPanel: React.FC = () => {
     setRegenStatus,
     shareUrl,
     setShareUrl,
-    importedVideoKeys,
-    markVideoImported,
+    importStatusByKey,
+    setImportStatus,
     urlItems,
     setUrlItems,
+    selectedUrlForLogs,
+    setSelectedUrlForLogs,
+    urlLogs,
+    appendUrlLog,
+    jobPhase,
+    setJobPhase,
   } = useV2VStore();
 
   const [speakers, setSpeakers] = useState<{ label: string; value: string }[]>(
@@ -152,6 +137,7 @@ export const V2VPanel: React.FC = () => {
       try {
         const s = await v2vApi.getJobStatus(jobId);
         setProgress(s.progress * 100);
+        setJobPhase(s.status);
 
         // Log en tiempo real (sin esperar a done/error)
         const jobLog = await v2vApi.getJobLog(jobId);
@@ -159,6 +145,13 @@ export const V2VPanel: React.FC = () => {
 
         const items = await v2vApi.getJobItems(jobId);
         if (items.length) setUrlItems(items);
+        // Reflejar mensajes de estado también en el log por URL (sin spamear duplicados)
+        for (const it of items) {
+          if (!it.url || !it.message) continue;
+          const marker = `[STATE:${it.status}] ${it.message}`;
+          const prev = useV2VStore.getState().urlLogs[it.url] || "";
+          if (!prev.includes(marker)) appendUrlLog(it.url, marker);
+        }
 
         // Mientras procesa, intentamos leer resultado parcial (videos ya listos)
         try {
@@ -175,19 +168,24 @@ export const V2VPanel: React.FC = () => {
         const currentVideos = useV2VStore.getState().videos;
         for (const v of currentVideos) {
           const key = `${jobId}:${v.index}`;
-          if (useV2VStore.getState().importedVideoKeys.includes(key)) continue;
+          if (useV2VStore.getState().importStatusByKey[key]) continue;
+          // Marcamos INMEDIATO como in_progress para evitar duplicación por ticks solapados
+          setImportStatus(key, "in_progress");
 
           // Sólo importamos cuando el backend ya tiene WAVs en Seqs_trg (si no, esperamos al siguiente tick)
           let audioSegs: AudioSegmentItem[] = [];
           try {
             audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
           } catch {
+            setImportStatus(key, "error");
             continue;
           }
           if (!audioSegs.length) continue;
 
           const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
+          const urlForLog = v.url || "";
           setRegenStatus(`Importando a Media: ${folder}...`);
+          if (urlForLog) appendUrlLog(urlForLog, `[IMPORT] Iniciando import a Media: ${folder}`);
 
           // 1) Video (sin audio, servido por /files/{index})
           const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
@@ -195,25 +193,38 @@ export const V2VPanel: React.FC = () => {
           const vimport = await importMedia(vfile);
           if (!vimport.success) {
             setRegenStatus(vimport.error?.message || `Error importando video: ${folder}`);
+            if (urlForLog) appendUrlLog(urlForLog, `[IMPORT][ERROR] ${vimport.error?.message || "Error importando video"}`);
+            setImportStatus(key, "error");
             continue;
           }
+          if (urlForLog) appendUrlLog(urlForLog, `[IMPORT] Video importado: ${folder}/video.mp4`);
 
           // 2) Audios por segmento
           for (let i = 0; i < audioSegs.length; i++) {
             const seg = audioSegs[i];
             setRegenStatus(`Importando audio ${folder} (${i + 1}/${audioSegs.length})...`);
+            if (urlForLog) appendUrlLog(urlForLog, `[IMPORT] Audio seg ${seg.seg} (${i + 1}/${audioSegs.length})...`);
             const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
             const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
             const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-            await importMedia(wavFile);
+            const wres = await importMedia(wavFile);
+            if (!wres.success) {
+              if (urlForLog) appendUrlLog(urlForLog, `[IMPORT][ERROR] WAV seg ${seg.seg}: ${wres.error?.message || "falló"}`);
+              setImportStatus(key, "error");
+              break;
+            }
           }
 
-          markVideoImported(key);
-          setRegenStatus(`Importado en Media: ${folder}`);
+          if (useV2VStore.getState().importStatusByKey[key] !== "error") {
+            setImportStatus(key, "done");
+            setRegenStatus(`Importado en Media: ${folder}`);
+            if (urlForLog) appendUrlLog(urlForLog, `[IMPORT] Completado: ${folder}`);
+          }
         }
 
         if (s.status === "done") {
           setIsProcessing(false);
+          setJobPhase("done");
           const result = await v2vApi.getJobResult(jobId);
           setVideos(result.videos);
           if (result.videos.length > 0) {
@@ -223,6 +234,7 @@ export const V2VPanel: React.FC = () => {
           if (result.log) setLog(result.log);
         } else if (s.status === "error") {
           setIsProcessing(false);
+          setJobPhase("error");
           setError(s.message || "Error en el procesamiento");
           const finalLog = await v2vApi.getJobLog(jobId);
           if (finalLog) setLog(finalLog);
@@ -250,6 +262,7 @@ export const V2VPanel: React.FC = () => {
     setLog("");
     setVideos([]);
     setIsProcessing(true);
+    setJobPhase("downloading");
     try {
       const res = await v2vApi.processUrls(
         normalized,
@@ -332,105 +345,7 @@ export const V2VPanel: React.FC = () => {
     }
   }, [jobId, selectedVideoIndex, segments, translateLang, speaker]);
 
-  const handleLoadInEditor = useCallback(async () => {
-    if (!jobId || !videos[selectedVideoIndex]) return;
-    const v = videos[selectedVideoIndex];
-    setRegenStatus("Cargando en editor...");
-    try {
-      const filename = v.output_filename || `${v.output_name}.mp4`;
-      const blob = await v2vApi.fetchOutputVideoBlob(jobId, selectedVideoIndex);
-
-      // Etiqueta visual en Media: el nombre del archivo se usa como `MediaItem.name`.
-      const taggedName = `tts_${toAsciiSafeFilename(filename)}`;
-      const file = new File([blob], taggedName, { type: "video/mp4" });
-      const result = await importMedia(file);
-      if (result.success && result.actionId) {
-        const store = useProjectStore.getState();
-        const clipStartTime = 0;
-        await store.addClipToNewTrack(result.actionId, clipStartTime);
-
-        setRegenStatus("Cargando segmentos de audio...");
-        const audioSegments: AudioSegmentItem[] = await v2vApi.getAudioSegments(
-          jobId,
-          selectedVideoIndex
-        );
-
-        if (audioSegments.length === 0) {
-          setRegenStatus("Video cargado, pero no hay WAVs de segmentos en el backend (Seqs_trg vacío).");
-          return;
-        }
-
-        // Crear una pista de audio por speaker: TTS_<speaker>
-        const speakerToTrackId = new Map<string, string>();
-        const getOrCreateSpeakerTrackId = async (speaker: string): Promise<string> => {
-          const key = speaker || "default";
-          const existing = speakerToTrackId.get(key);
-          if (existing) return existing;
-
-          const desiredName = `TTS_${toSafeToken(key)}`;
-          const currentProject = useProjectStore.getState().project;
-          const found = currentProject.timeline.tracks.find(
-            (t) => t.type === "audio" && t.name === desiredName
-          );
-          if (found) {
-            speakerToTrackId.set(key, found.id);
-            return found.id;
-          }
-
-          const before = currentProject;
-          const addTrackRes = await store.addTrack("audio");
-          if (!addTrackRes?.success) throw new Error("No se pudo crear pista de audio");
-
-          const after = useProjectStore.getState().project;
-          const newTracks = after.timeline.tracks.filter(
-            (t) => t.type === "audio" && !before.timeline.tracks.some((old) => old.id === t.id)
-          );
-          const created = newTracks[0];
-          if (!created) throw new Error("No se encontró la pista de audio creada");
-
-          useProjectStore.setState((state) => ({
-            project: {
-              ...state.project,
-              timeline: {
-                ...state.project.timeline,
-                tracks: state.project.timeline.tracks.map((t) =>
-                  t.id === created.id ? { ...t, name: desiredName } : t
-                ),
-              },
-            },
-          }));
-
-          speakerToTrackId.set(key, created.id);
-          return created.id;
-        };
-
-        // Importar cada WAV y pegarlo en su start
-        for (let i = 0; i < audioSegments.length; i++) {
-          const seg = audioSegments[i];
-          const speakerKey = seg.speaker || "default";
-          const trackId = await getOrCreateSpeakerTrackId(speakerKey);
-
-          setRegenStatus(`Importando audio ${i + 1}/${audioSegments.length} (seg ${seg.seg})...`);
-          const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, selectedVideoIndex, seg.seg);
-
-          const wavName = `tts_${toSafeToken(speakerKey)}_${String(seg.seg).padStart(4, "0")}.wav`;
-          const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-          const wavImport = await importMedia(wavFile);
-          if (!wavImport.success || !wavImport.actionId) {
-            throw new Error(wavImport.error?.message || `No se pudo importar WAV seg ${seg.seg}`);
-          }
-
-          await store.addClip(trackId, wavImport.actionId, clipStartTime + seg.start);
-        }
-
-        setRegenStatus("Video + audios TTS pegados por segmentos (por speaker)");
-      } else {
-        setRegenStatus(result.error?.message || "Error al cargar");
-      }
-    } catch (e) {
-      setRegenStatus(e instanceof Error ? e.message : "Error");
-    }
-  }, [jobId, selectedVideoIndex, videos, importMedia, segments]);
+  // Cargar en editor eliminado: ahora se importa automáticamente a Media durante el proceso.
 
   const handleShare = useCallback(async () => {
     if (!jobId) return;
@@ -519,15 +434,24 @@ export const V2VPanel: React.FC = () => {
           </div>
         </div>
 
-        <Button onClick={handleProcess} disabled={isProcessing} className="w-full">
-          {isProcessing ? (
-            <>
-              <Loader2 size={14} className="animate-spin mr-2" />
-              Procesando... {Math.round(progress)}%
-            </>
-          ) : (
-            "Procesar"
-          )}
+        <Button
+          onClick={handleProcess}
+          disabled={isProcessing}
+          className="w-full"
+        >
+          {(() => {
+            const hasImportsInFlight = Object.values(importStatusByKey).some(
+              (s) => s === "in_progress"
+            );
+            const tag = deriveMainTag(jobPhase, hasImportsInFlight);
+            const showSpin = isProcessing || hasImportsInFlight;
+            return (
+              <>
+                {showSpin && <Loader2 size={14} className="animate-spin mr-2" />}
+                {tag}
+              </>
+            );
+          })()}
         </Button>
 
         {error && (
@@ -544,32 +468,33 @@ export const V2VPanel: React.FC = () => {
               <table className="w-full text-[10px]">
                 <thead className="bg-background-tertiary sticky top-0">
                   <tr>
-                    <th className="px-2 py-1 text-left">URL</th>
-                    <th className="px-2 py-1 text-left">Estado</th>
-                    <th className="px-2 py-1 text-left">%</th>
-                    <th className="px-2 py-1 text-left">Detalle</th>
+                    <th className="px-2 py-1 text-left">#</th>
+                    <th className="px-2 py-1 text-left">Título</th>
+                    <th className="px-2 py-1 text-left">Logs</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {urlItems.map((it) => (
+                  {urlItems.map((it, i) => (
                     <tr key={it.url} className="border-t border-border">
-                      <td className="px-2 py-1 max-w-[160px] truncate" title={it.url}>
-                        {it.output_name || it.url}
-                      </td>
-                      <td className="px-2 py-1">
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded ${statusToBadgeClass(it.status)}`}>
+                      <td className="px-2 py-1 tabular-nums">{i + 1}</td>
+                      <td className="px-2 py-1 max-w-[220px] truncate" title={it.url}>
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded mr-1 ${statusToBadgeClass(it.status)}`}>
                           {STATUS_LABEL[it.status] || it.status}
                         </span>
+                        {it.output_name || it.url}
                         {typeof it.index === "number" &&
-                          importedVideoKeys.includes(`${jobId}:${it.index}`) && (
+                          importStatusByKey[`${jobId}:${it.index}`] === "done" && (
                             <span className="ml-1 text-primary">(importado)</span>
                           )}
                       </td>
-                      <td className="px-2 py-1 tabular-nums">
-                        {Math.max(0, Math.min(100, STATUS_PROGRESS[it.status] ?? 0))}%
-                      </td>
-                      <td className="px-2 py-1 max-w-[220px] truncate" title={it.message || ""}>
-                        {it.message || ""}
+                      <td className="px-2 py-1">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setSelectedUrlForLogs(it.url)}
+                        >
+                          Ver
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -579,10 +504,27 @@ export const V2VPanel: React.FC = () => {
           </div>
         )}
 
-        {log && (
-          <pre className="p-2 rounded-lg bg-background-tertiary font-mono text-[10px] max-h-32 overflow-y-auto overflow-x-auto whitespace-pre">
-            {log}
-          </pre>
+        {(log || selectedUrlForLogs) && (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] text-text-muted">
+                {selectedUrlForLogs ? "Logs por URL" : "Logs"}
+              </p>
+              <div className="flex gap-2">
+                {selectedUrlForLogs && (
+                  <button
+                    className="text-[10px] text-text-muted hover:text-text-secondary"
+                    onClick={() => setSelectedUrlForLogs(null)}
+                  >
+                    Ver log general
+                  </button>
+                )}
+              </div>
+            </div>
+            <pre className="p-2 rounded-lg bg-background-tertiary font-mono text-[10px] max-h-32 overflow-y-auto overflow-x-auto whitespace-pre">
+              {selectedUrlForLogs ? (urlLogs[selectedUrlForLogs] || "") : log}
+            </pre>
+          </div>
         )}
 
         {videos.length > 0 && (

@@ -17,8 +17,11 @@ export interface V2VState {
   regenStatus: string;
   shareUrl: string | null;
   log: string;
-  importedVideoKeys: string[]; // `${jobId}:${videoIndex}` para auto-import incremental
+  importStatusByKey: Record<string, "in_progress" | "done" | "error">; // `${jobId}:${videoIndex}`
   urlItems: JobUrlItem[];
+  selectedUrlForLogs: string | null;
+  urlLogs: Record<string, string>;
+  jobPhase: string;
 
   setUrls: (urls: string) => void;
   setTranslateLang: (lang: string) => void;
@@ -37,8 +40,11 @@ export interface V2VState {
   setRegenStatus: (status: string) => void;
   setShareUrl: (url: string | null) => void;
   setLog: (log: string) => void;
-  markVideoImported: (key: string) => void;
+  setImportStatus: (key: string, status: "in_progress" | "done" | "error") => void;
   setUrlItems: (items: JobUrlItem[]) => void;
+  setSelectedUrlForLogs: (url: string | null) => void;
+  appendUrlLog: (url: string, line: string) => void;
+  setJobPhase: (phase: string) => void;
 
   reset: () => void;
 }
@@ -59,8 +65,11 @@ export const useV2VStore = create<V2VState>((set) => ({
   regenStatus: "",
   shareUrl: null,
   log: "",
-  importedVideoKeys: [],
+  importStatusByKey: {},
   urlItems: [],
+  selectedUrlForLogs: null,
+  urlLogs: {},
+  jobPhase: "idle",
 
   setUrls: (urls) => set({ urls }),
   setTranslateLang: (translateLang) => set({ translateLang }),
@@ -83,13 +92,19 @@ export const useV2VStore = create<V2VState>((set) => ({
   setRegenStatus: (regenStatus) => set({ regenStatus }),
   setShareUrl: (shareUrl) => set({ shareUrl }),
   setLog: (log) => set({ log }),
-  markVideoImported: (key) =>
-    set((state) =>
-      state.importedVideoKeys.includes(key)
-        ? state
-        : { importedVideoKeys: [...state.importedVideoKeys, key] }
-    ),
+  setImportStatus: (key, status) =>
+    set((state) => ({
+      importStatusByKey: { ...state.importStatusByKey, [key]: status },
+    })),
   setUrlItems: (urlItems) => set({ urlItems }),
+  setSelectedUrlForLogs: (selectedUrlForLogs) => set({ selectedUrlForLogs }),
+  appendUrlLog: (url, line) =>
+    set((state) => {
+      const prev = state.urlLogs[url] || "";
+      const next = prev ? `${prev}\n${line}` : line;
+      return { urlLogs: { ...state.urlLogs, [url]: next } };
+    }),
+  setJobPhase: (jobPhase) => set({ jobPhase }),
 
   reset: () =>
     set({
@@ -107,8 +122,11 @@ export const useV2VStore = create<V2VState>((set) => ({
       regenStatus: "",
       shareUrl: null,
       log: "",
-      importedVideoKeys: [],
+      importStatusByKey: {},
       urlItems: [],
+      selectedUrlForLogs: null,
+      urlLogs: {},
+      jobPhase: "idle",
     }),
 }));
 
