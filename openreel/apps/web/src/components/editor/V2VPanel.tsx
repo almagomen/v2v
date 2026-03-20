@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2 } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
@@ -90,7 +90,8 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 export const V2VPanel: React.FC = () => {
-  const importMedia = useProjectStore((state) => state.importMedia);
+  // Lock para evitar ejecuciones concurrentes del bloque de auto-import/creación de proyectos.
+  const importingRef = useRef(false);
 
   const {
     urls,
@@ -164,13 +165,22 @@ export const V2VPanel: React.FC = () => {
           // ignore (puede fallar si aún no hay videos)
         }
 
-        // Auto-import incremental: por cada video aparecido en `videos`, importar video+audios a Media
-        const currentVideos = useV2VStore.getState().videos;
+        // Auto-import incremental: por cada video aparecido en `videos`, importar video+audios a Media.
+        // Usamos importingRef como lock para evitar que ticks concurrentes procesen imports en paralelo.
+        if (!importingRef.current) {
+          const currentVideos = useV2VStore.getState().videos;
+          const pendingVideos = currentVideos.filter(
+            (v) => !useV2VStore.getState().importStatusByKey[importKeyFor(v.url, v.index)],
+          );
+          if (pendingVideos.length > 0) {
+            importingRef.current = true;
+          try {
         const baseProjectSettings = useProjectStore.getState().project.settings;
-        for (const v of currentVideos) {
+        for (const v of pendingVideos) {
           const key = importKeyFor(v.url, v.index);
+          // Re-check por si otro tick lo marcó mientras esperábamos
           if (useV2VStore.getState().importStatusByKey[key]) continue;
-          // Marcamos INMEDIATO como in_progress para evitar duplicación por ticks solapados
+          // Marcamos INMEDIATO como in_progress para evitar duplicación
           setImportStatus(key, "in_progress");
 
           // Sólo importamos cuando el backend ya tiene WAVs en Seqs_trg (si no, esperamos al siguiente tick)
@@ -181,7 +191,15 @@ export const V2VPanel: React.FC = () => {
             setImportStatus(key, "error");
             continue;
           }
-          if (!audioSegs.length) continue;
+          if (!audioSegs.length) {
+            // Audios aún no listos; re-poner como pendiente y esperar al siguiente tick
+            useV2VStore.setState((st) => {
+              const next = { ...st.importStatusByKey };
+              delete next[key];
+              return { importStatusByKey: next };
+            });
+            continue;
+          }
 
           const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
           const urlForLog = v.url || "";
@@ -214,7 +232,8 @@ export const V2VPanel: React.FC = () => {
             if (urlForLog) appendUrlLog(urlForLog, `✅ Video importado`);
           } else {
             const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
-            const vimport = await importMedia(vfile);
+            // Usamos getState().importMedia para garantizar que importa al proyecto activo actual.
+            const vimport = await useProjectStore.getState().importMedia(vfile);
             if (!vimport.success) {
               setRegenStatus(
                 vimport.error?.message || `Error importando video: ${folder}`,
@@ -242,7 +261,8 @@ export const V2VPanel: React.FC = () => {
             }
 
             const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-            const wres = await importMedia(wavFile);
+            // Usamos getState().importMedia para garantizar que importa al proyecto activo actual.
+            const wres = await useProjectStore.getState().importMedia(wavFile);
             if (!wres.success) {
               if (urlForLog)
                 appendUrlLog(
@@ -346,10 +366,14 @@ export const V2VPanel: React.FC = () => {
             setRegenStatus(`Importado y pegado al timeline: ${folder}`);
             if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
             // Referencia para el botón "Añadir a la timeline" desde la carpeta.
-            useV2VStore.getState().setFolderRef(folder, { jobId, videoIndex: v.index });
-          }
+            } // end if importStatus !== "error"
+          } // end for
+        } finally {
+          importingRef.current = false;
         }
-
+        } // cierra if pendingVideos
+        } // cierra if !importingRef.current
+        
         if (s.status === "done") {
           setIsProcessing(false);
           setJobPhase("done");
@@ -372,7 +396,7 @@ export const V2VPanel: React.FC = () => {
       }
     }, POLL_INTERVAL);
     return () => clearInterval(t);
-  }, [jobId, isProcessing, importMedia, log.length, selectedVideoIndex]);
+  }, [jobId, isProcessing, log.length, selectedVideoIndex]);
 
   const handleProcess = useCallback(async () => {
     const urlList = urls
@@ -616,9 +640,9 @@ export const V2VPanel: React.FC = () => {
             const tagText =
               hasImportsInFlight
                 ? "Importando a Media"
-                : activeStatus
+                : activeStatus && activeStatus !== "idle"
                   ? STATUS_LABEL[activeStatus] || activeStatus
-                  : "Procesar";
+                  : "Empezar";
 
             const activePos = activeUrlState
               ? urlItems.findIndex(
