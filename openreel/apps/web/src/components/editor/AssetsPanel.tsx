@@ -37,11 +37,21 @@ import { useUIStore } from "../../stores/ui-store";
 import { useV2VStore } from "../../stores/v2v-store";
 import type { MediaItem } from "@openreel/core";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
-import { autoSaveManager } from "../../services/auto-save";
+import { autoSaveManager, type AutoSaveMetadata } from "../../services/auto-save";
 import { AspectRatioMatchDialog } from "./dialogs/AspectRatioMatchDialog";
 import { AIGenTab } from "./AIGenTab";
 import { V2VPanel } from "./V2VPanel";
-import { IconButton, Input, ScrollArea } from "@openreel/ui";
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  IconButton,
+  Input,
+  ScrollArea,
+} from "@openreel/ui";
 
 const formatDuration = (seconds: number): string => {
   const mins = Math.floor(seconds / 60);
@@ -398,6 +408,11 @@ export const AssetsPanel: React.FC = () => {
   const [backgroundCategory, setBackgroundCategory] = useState<
     "all" | "solid" | "gradient" | "pattern" | "mesh"
   >("all");
+  const [showCopyProjectModal, setShowCopyProjectModal] = useState(false);
+  const [copyTargets, setCopyTargets] = useState<
+    Array<{ id: string; name: string; subtitle: string; isCurrent: boolean }>
+  >([]);
+  const [copyingTargetId, setCopyingTargetId] = useState<string | null>(null);
 
   // Project store
   const {
@@ -659,15 +674,13 @@ export const AssetsPanel: React.FC = () => {
     }
 
     setIsImporting(true);
-    setImportProgress("Importando assets y pegando clips en la timeline...");
+    setImportProgress("Copiando carpeta al proyecto seleccionado...");
 
     try {
       const segments: AudioSegmentItem[] = await v2vApi.getAudioSegments(
         ref.jobId,
         ref.videoIndex,
       );
-
-      const { addTrack, addClip } = useProjectStore.getState();
 
       const videoMediaName = `${activeFolder}/video.mp4`;
 
@@ -707,108 +720,7 @@ export const AssetsPanel: React.FC = () => {
         }
       }
 
-      const state1 = refreshState();
-      const projectNow = state1.project;
-
-      const videoMedia = projectNow.mediaLibrary.items.find(
-        (m) => m.name === videoMediaName,
-      );
-
-      // Video track: reutilizamos si existe, sino lo creamos.
-      let videoTrack =
-        projectNow.timeline.tracks.find((t) => t.type === "video") || null;
-      if (!videoTrack) {
-        const beforeVideoTrackIds = new Set(projectNow.timeline.tracks.map((t) => t.id));
-        const r = await addTrack("video");
-        if (!r.success) return;
-        const after = refreshState().project;
-        videoTrack = after.timeline.tracks.find(
-          (t) => t.type === "video" && !beforeVideoTrackIds.has(t.id),
-        ) || null;
-      }
-
-      if (videoTrack && videoMedia) {
-        const track = refreshState().project.timeline.tracks.find((t) => t.id === videoTrack?.id);
-        const hasClip =
-          track?.clips?.some(
-            (c) => c.mediaId === videoMedia.id && Math.abs(c.startTime - 0) < 0.001,
-          ) ?? false;
-        if (!hasClip) {
-          await addClip(videoTrack.id, videoMedia.id, 0);
-        }
-      }
-
-      // Agrupamos segmentos por speaker (token).
-      const bySpeaker: Record<string, AudioSegmentItem[]> = {};
-      for (const s of segments) {
-        const token = toSafeToken(s.speaker || "speaker");
-        (bySpeaker[token] ||= []).push(s);
-      }
-
-      for (const speakerToken of Object.keys(bySpeaker)) {
-        const desiredTrackName = `TTS_${speakerToken}`;
-
-        // Reutiliza track si ya existe (mismo nombre).
-        let audioTrack =
-          refreshState().project.timeline.tracks.find(
-            (t) => t.type === "audio" && t.name === desiredTrackName,
-          ) || null;
-
-        if (!audioTrack) {
-          const beforeAudioTrackIds = new Set(
-            refreshState().project.timeline.tracks.map((t) => t.id),
-          );
-          const r = await addTrack("audio");
-          if (!r.success) continue;
-          const after = refreshState().project;
-          audioTrack =
-            after.timeline.tracks.find(
-              (t) => t.type === "audio" && !beforeAudioTrackIds.has(t.id),
-            ) || null;
-          if (!audioTrack) continue;
-
-          // Nombre del track para reconocer el speaker.
-          useProjectStore.setState((state) => ({
-            project: {
-              ...state.project,
-              timeline: {
-                ...state.project.timeline,
-                tracks: state.project.timeline.tracks.map((t) =>
-                  t.id === audioTrack?.id ? { ...t, name: desiredTrackName } : t,
-                ),
-              },
-            },
-          }));
-        }
-
-        const orderedSegs = bySpeaker[speakerToken]
-          .slice()
-          .sort((a, b) => a.seg - b.seg);
-
-        for (const seg of orderedSegs) {
-          const wavName = `${activeFolder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
-            seg.seg,
-          ).padStart(4, "0")}.wav`;
-          const wavMedia = refreshState().project.mediaLibrary.items.find(
-            (m) => m.name === wavName,
-          );
-          if (!wavMedia || !audioTrack) continue;
-
-          const trackNow = refreshState().project.timeline.tracks.find(
-            (t) => t.id === audioTrack.id,
-          );
-          const hasClip =
-            trackNow?.clips?.some(
-              (c) =>
-                c.mediaId === wavMedia.id &&
-                Math.abs(c.startTime - seg.start) < 0.001,
-            ) ?? false;
-
-          if (!hasClip) {
-            await addClip(audioTrack.id, wavMedia.id, seg.start);
-          }
-        }
-      }
+      // Solo copiar a Media del proyecto destino (sin pegar a timeline).
     } finally {
       setIsImporting(false);
       setImportProgress("");
@@ -826,7 +738,6 @@ export const AssetsPanel: React.FC = () => {
     }
 
     try {
-      // Opciones de proyectos disponibles (autosaves recuperables).
       await autoSaveManager.initialize();
       const saves = await autoSaveManager.checkForRecovery();
 
@@ -841,39 +752,54 @@ export const AssetsPanel: React.FC = () => {
 
       const ordered = unique.sort((a, b) => b.timestamp - a.timestamp);
       const currentProjectId = useProjectStore.getState().project.id;
+      const targets: Array<{ id: string; name: string; subtitle: string; isCurrent: boolean }> = [];
 
-      const options = ordered
-        .map((p, i) => {
-          const marker = p.projectId === currentProjectId ? " (actual)" : "";
-          return `${i + 1}) ${p.projectName}${marker}`;
-        })
-        .join("\n");
+      targets.push({
+        id: "__current__",
+        name: useProjectStore.getState().project.name,
+        subtitle: "Proyecto actual",
+        isCurrent: true,
+      });
 
-      if (!options) {
+      for (const p of ordered) {
+        if (p.projectId === currentProjectId) continue;
+        targets.push({
+          id: p.id,
+          name: p.projectName,
+          subtitle: "Proyecto reciente",
+          isCurrent: false,
+        });
+      }
+
+      if (targets.length === 0) {
         window.alert("No hay proyectos disponibles para copiar.");
         return;
       }
 
-      const answer = window.prompt(
-        `Selecciona el proyecto destino:\n${options}\n\nNúmero:`,
-        "1",
-      );
-      if (!answer) return;
-      const chosen = parseInt(answer, 10);
-      if (Number.isNaN(chosen) || chosen < 1 || chosen > ordered.length) return;
-
-      const targetSave = ordered[chosen - 1];
-      const isCurrent = targetSave.projectId === currentProjectId;
-      if (!isCurrent) {
-        await useProjectStore.getState().recoverFromAutoSave(targetSave.id);
-      }
-
-      // Copiamos el contenido de la carpeta a la timeline del proyecto actual.
-      await handleAddFolderTtsToTimeline();
+      setCopyTargets(targets);
+      setShowCopyProjectModal(true);
     } catch (e) {
       window.alert(e instanceof Error ? e.message : "Error al copiar a proyecto");
     }
-  }, [activeFolder, handleAddFolderTtsToTimeline]);
+  }, [activeFolder]);
+
+  const handleConfirmCopyToTarget = useCallback(
+    async (targetId: string) => {
+      setCopyingTargetId(targetId);
+      try {
+        if (targetId !== "__current__") {
+          await useProjectStore.getState().recoverFromAutoSave(targetId);
+        }
+        await handleAddFolderTtsToTimeline();
+        setShowCopyProjectModal(false);
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : "Error al copiar a proyecto");
+      } finally {
+        setCopyingTargetId(null);
+      }
+    },
+    [handleAddFolderTtsToTimeline],
+  );
 
   const triggerFileInput = useCallback(() => {
     fileInputRef.current?.click();
@@ -1541,6 +1467,44 @@ export const AssetsPanel: React.FC = () => {
           onCancel={handleCancelAspectRatioMatch}
         />
       )}
+
+      <Dialog open={showCopyProjectModal} onOpenChange={setShowCopyProjectModal}>
+        <DialogContent className="max-w-md p-0 gap-0 bg-background-secondary border-border overflow-hidden">
+          <DialogHeader className="p-4 border-b border-border space-y-1">
+            <DialogTitle className="text-base font-semibold text-text-primary">
+              Copiar carpeta a proyecto
+            </DialogTitle>
+            <DialogDescription className="text-xs text-text-muted">
+              Selecciona un proyecto destino. Solo se copiaran assets a Media (sin timeline).
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="p-3 space-y-2 max-h-[320px] overflow-y-auto">
+            {copyTargets.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => handleConfirmCopyToTarget(t.id)}
+                disabled={Boolean(copyingTargetId)}
+                className="w-full text-left p-3 rounded-lg border border-border bg-background-tertiary hover:border-primary/50 transition-colors disabled:opacity-60"
+              >
+                <div className="text-sm font-medium text-text-primary">{t.name}</div>
+                <div className="text-[11px] text-text-muted">{t.subtitle}</div>
+              </button>
+            ))}
+          </div>
+
+          <div className="p-3 border-t border-border flex justify-end">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setShowCopyProjectModal(false)}
+              disabled={Boolean(copyingTargetId)}
+            >
+              Cerrar
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

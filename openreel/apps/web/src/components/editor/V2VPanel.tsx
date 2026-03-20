@@ -67,6 +67,17 @@ function sanitizeFolderName(name: string): string {
   return cleaned || "Video";
 }
 
+function shortProjectToken(name: string): string {
+  const s = (name || "video")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9._ -]+/g, " ")
+    .trim();
+  const firstWords = s.split(/\s+/).filter(Boolean).slice(0, 2).join(" ");
+  const compact = firstWords.replace(/\s+/g, "_").slice(0, 16);
+  return compact || "video";
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -174,8 +185,12 @@ export const V2VPanel: React.FC = () => {
 
           const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
           const urlForLog = v.url || "";
-          const randomName = Math.random().toString(36).slice(2, 7);
-          const projectTitle = `${v.index + 1}. TTS ${randomName}`;
+          const currentItems = useV2VStore.getState().urlItems;
+          const pos = currentItems.findIndex(
+            (it) => it.url === v.url && it.index === v.index,
+          );
+          const seq = pos >= 0 ? pos + 1 : v.index + 1;
+          const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
 
           // Un proyecto nuevo por cada video.
           useProjectStore.getState().createNewProject(projectTitle, {
@@ -324,6 +339,9 @@ export const V2VPanel: React.FC = () => {
                 await addClip(audioTrack.id, wavMedia.id, seg.start);
               }
             }
+
+            // Fuerza guardado para que cada URL quede como proyecto recuperable.
+            await useProjectStore.getState().forceSave();
 
             setRegenStatus(`Importado y pegado al timeline: ${folder}`);
             if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
