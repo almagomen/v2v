@@ -47,12 +47,6 @@ function statusToBadgeClass(status: string): string {
   }
 }
 
-function deriveMainTag(jobPhase: string, hasImportsInFlight: boolean): string {
-  if (hasImportsInFlight) return "Importando a Media";
-  if (!jobPhase || jobPhase === "idle") return "Procesar";
-  return STATUS_LABEL[jobPhase] || jobPhase;
-}
-
 function toSafeToken(s: string): string {
   const ascii = s
     .normalize("NFKD")
@@ -178,17 +172,34 @@ export const V2VPanel: React.FC = () => {
           setRegenStatus(`Importando a Media: ${folder}...`);
           if (urlForLog) appendUrlLog(urlForLog, `🚀 Importando a Media...`);
 
+          // Evita duplicados: si ya existe el archivo con el mismo nombre en Media, no lo re-importamos.
+          const existingNames = new Set(
+            useProjectStore.getState().project.mediaLibrary.items.map((m) => m.name),
+          );
+
           // 1) Video (sin audio, servido por /files/{index})
           const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
-          const vfile = new File([vblob], `${folder}/video.mp4`, { type: "video/mp4" });
-          const vimport = await importMedia(vfile);
-          if (!vimport.success) {
-            setRegenStatus(vimport.error?.message || `Error importando video: ${folder}`);
-            if (urlForLog) appendUrlLog(urlForLog, `❌ ${vimport.error?.message || "Error importando video"}`);
-            setImportStatus(key, "error");
-            continue;
+          const videoMediaName = `${folder}/video.mp4`;
+          if (existingNames.has(videoMediaName)) {
+            if (urlForLog) appendUrlLog(urlForLog, `✅ Video importado`);
+          } else {
+            const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
+            const vimport = await importMedia(vfile);
+            if (!vimport.success) {
+              setRegenStatus(
+                vimport.error?.message || `Error importando video: ${folder}`,
+              );
+              if (urlForLog)
+                appendUrlLog(
+                  urlForLog,
+                  `❌ ${vimport.error?.message || "Error importando video"}`,
+                );
+              setImportStatus(key, "error");
+              continue;
+            }
+            existingNames.add(videoMediaName);
+            if (urlForLog) appendUrlLog(urlForLog, `✅ Video importado`);
           }
-          if (urlForLog) appendUrlLog(urlForLog, `✅ Video importado`);
 
           // 2) Audios por segmento
           for (let i = 0; i < audioSegs.length; i++) {
@@ -196,6 +207,10 @@ export const V2VPanel: React.FC = () => {
             setRegenStatus(`Importando audio ${folder} (${i + 1}/${audioSegs.length})...`);
             const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
             const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
+            if (existingNames.has(wavName)) {
+              continue;
+            }
+
             const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
             const wres = await importMedia(wavFile);
             if (!wres.success) {
@@ -207,6 +222,7 @@ export const V2VPanel: React.FC = () => {
               setImportStatus(key, "error");
               break;
             }
+            existingNames.add(wavName);
           }
 
           if (useV2VStore.getState().importStatusByKey[key] !== "error") {
@@ -433,14 +449,43 @@ export const V2VPanel: React.FC = () => {
 
         <Button
           onClick={handleProcess}
-          disabled={isProcessing}
+          disabled={isProcessing || Object.values(importStatusByKey).some((s) => s === "in_progress")}
           className="w-full"
         >
           {(() => {
             const hasImportsInFlight = Object.values(importStatusByKey).some(
-              (s) => s === "in_progress"
+              (s) => s === "in_progress",
             );
-            const tag = deriveMainTag(jobPhase, hasImportsInFlight);
+
+            const order: Record<string, number> = {
+              downloading: 1,
+              cached: 2,
+              transcribing: 3,
+              tts: 4,
+              audio_ready: 5,
+              ready: 6,
+              done: 100,
+              error: 101,
+              pending: 1000,
+            };
+
+            // Si hay varias URLs, mostramos el "estado más activo" (menor prioridad)
+            // entre las que no estén done/error/pending.
+            const activeCandidates = urlItems
+              .filter((it) => it.status && it.status !== "done" && it.status !== "error" && it.status !== "pending");
+
+            const activeUrlState =
+              activeCandidates.length > 0
+                ? activeCandidates.sort((a, b) => (order[a.status] ?? 999) - (order[b.status] ?? 999))[0]
+                : null;
+
+            const activeStatus = activeUrlState?.status || jobPhase;
+            const tag = hasImportsInFlight
+              ? "Importando a Media"
+              : activeStatus
+                ? STATUS_LABEL[activeStatus] || activeStatus
+                : "Procesar";
+
             const showSpin = isProcessing || hasImportsInFlight;
             return (
               <>
