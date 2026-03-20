@@ -8,6 +8,7 @@ import {
   Music,
   Folder,
   Plus,
+  Pencil,
   Upload,
   Trash2,
   Square,
@@ -15,6 +16,7 @@ import {
   Triangle,
   Star,
   ArrowRight,
+  ArrowLeft,
   Hexagon,
   FileCode,
   AlertTriangle,
@@ -32,7 +34,9 @@ import {
 import type { ShapeType } from "@openreel/core";
 import { useProjectStore } from "../../stores/project-store";
 import { useUIStore } from "../../stores/ui-store";
+import { useV2VStore } from "../../stores/v2v-store";
 import type { MediaItem } from "@openreel/core";
+import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
 import { AspectRatioMatchDialog } from "./dialogs/AspectRatioMatchDialog";
 import { AIGenTab } from "./AIGenTab";
 import { V2VPanel } from "./V2VPanel";
@@ -45,6 +49,16 @@ const formatDuration = (seconds: number): string => {
     .toString()
     .padStart(2, "0")}`;
 };
+
+function toSafeToken(s: string): string {
+  const ascii = s
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^[_\\-.]+|[_\\-.]+$/g, "")
+    .slice(0, 40);
+  return ascii || "speaker";
+}
 
 /**
  * Media Item Thumbnail Component
@@ -447,6 +461,8 @@ export const AssetsPanel: React.FC = () => {
       const rest = getDisplayName(it.name);
       await renameMedia(it.id, `${newName}/${rest}`);
     }
+    // Re-map de referencia para el botón "Añadir a la timeline".
+    useV2VStore.getState().renameFolderRef(activeFolder, newName);
     setActiveFolder(newName);
   }, [activeFolder, mediaItems, renameMedia]);
 
@@ -458,6 +474,7 @@ export const AssetsPanel: React.FC = () => {
     for (const it of items) {
       await deleteMedia(it.id);
     }
+    useV2VStore.getState().removeFolderRef(activeFolder);
     setActiveFolder(null);
   }, [activeFolder, mediaItems, deleteMedia]);
 
@@ -627,6 +644,90 @@ export const AssetsPanel: React.FC = () => {
     },
     [addMediaToTimeline],
   );
+
+  const handleAddFolderTtsToTimeline = useCallback(async () => {
+    if (!activeFolder) return;
+    const ref = useV2VStore.getState().folderRefs[activeFolder];
+    if (!ref) {
+      window.alert(
+        `No encuentro referencia de V2V para la carpeta "${activeFolder}".\nVuelve a procesar el video desde Video2Video.`,
+      );
+      return;
+    }
+
+    setIsImporting(true);
+    setImportProgress("Creando clips en la timeline...");
+
+    try {
+      const segments: AudioSegmentItem[] = await v2vApi.getAudioSegments(ref.jobId, ref.videoIndex);
+
+      const { project: currentProject, addTrack, addClip, addClipToNewTrack } =
+        useProjectStore.getState();
+      const mediaItemsLocal = currentProject.mediaLibrary.items;
+
+      const videoMediaName = `${activeFolder}/video.mp4`;
+      const videoMedia = mediaItemsLocal.find((m) => m.name === videoMediaName);
+      if (!videoMedia) {
+        window.alert(`No existe en Media el archivo: "${videoMediaName}".`);
+        return;
+      }
+
+      // Video en pista de video (inicio 0).
+      await addClipToNewTrack(videoMedia.id, 0);
+
+      // Agrupamos segmentos por speaker (token para evitar caracteres raros).
+      const bySpeaker: Record<string, AudioSegmentItem[]> = {};
+      for (const s of segments) {
+        const token = toSafeToken(s.speaker || "speaker");
+        (bySpeaker[token] ||= []).push(s);
+      }
+
+      for (const speakerToken of Object.keys(bySpeaker)) {
+        // Creamos 1 pista de audio por speaker (si el usuario pulsa varias veces, se duplicará el set de tracks).
+        const beforeIds = new Set(
+          useProjectStore.getState().project.timeline.tracks.map((t) => t.id),
+        );
+        const trackResult = await addTrack("audio");
+        if (!trackResult.success) continue;
+
+        const afterTracks = useProjectStore.getState().project.timeline.tracks;
+        const newTrack = afterTracks.find(
+          (t) => t.type === "audio" && !beforeIds.has(t.id),
+        );
+        if (!newTrack) continue;
+
+        // Nombre del track para reconocer el speaker.
+        useProjectStore.setState((state) => ({
+          project: {
+            ...state.project,
+            timeline: {
+              ...state.project.timeline,
+              tracks: state.project.timeline.tracks.map((t) =>
+                t.id === newTrack.id ? { ...t, name: `TTS_${speakerToken}` } : t,
+              ),
+            },
+          },
+        }));
+
+        const orderedSegs = bySpeaker[speakerToken].slice().sort((a, b) => a.seg - b.seg);
+        for (const seg of orderedSegs) {
+          const wavName = `${activeFolder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
+            seg.seg,
+          ).padStart(4, "0")}.wav`;
+          const wavMedia = useProjectStore.getState().project.mediaLibrary.items.find(
+            (m) => m.name === wavName,
+          );
+          if (!wavMedia) continue;
+
+          // Pegamos respetando start/end usando el start del segmento.
+          await addClip(newTrack.id, wavMedia.id, seg.start);
+        }
+      }
+    } finally {
+      setIsImporting(false);
+      setImportProgress("");
+    }
+  }, [activeFolder]);
 
   const triggerFileInput = useCallback(() => {
     fileInputRef.current?.click();
@@ -836,27 +937,36 @@ export const AssetsPanel: React.FC = () => {
               <div className="flex items-center gap-2 mb-3">
                 <button
                   onClick={() => setActiveFolder(null)}
-                  className="text-[11px] text-text-muted hover:text-text-secondary"
+                  className="p-1 rounded hover:bg-background-tertiary text-text-muted"
                 >
-                  ← Carpetas
+                  <ArrowLeft size={14} />
                 </button>
                 <div className="flex-1 text-[11px] text-text-primary truncate" title={activeFolder}>
                   {activeFolder}
                 </div>
-                <button
-                  onClick={handleRenameFolder}
-                  className="text-[10px] px-2 py-1 rounded bg-background-tertiary border border-border hover:border-primary/50"
-                  title="Renombrar carpeta"
-                >
-                  Renombrar
-                </button>
-                <button
-                  onClick={handleDeleteFolder}
-                  className="text-[10px] px-2 py-1 rounded bg-background-tertiary border border-border hover:border-red-500/50 text-red-400"
-                  title="Borrar carpeta"
-                >
-                  Borrar
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={handleRenameFolder}
+                    className="p-1 rounded bg-background-tertiary border border-border hover:border-primary/50 text-text-muted"
+                    title="Renombrar"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    onClick={handleDeleteFolder}
+                    className="p-1 rounded bg-background-tertiary border border-border hover:border-red-500/50 text-red-400"
+                    title="Borrar"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                  <button
+                    onClick={() => handleAddFolderTtsToTimeline()}
+                    className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary"
+                    title="Añadir TTS a la timeline"
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
               </div>
             ) : folders.length > 0 ? (
               <div className="grid grid-cols-2 gap-3 mb-4">

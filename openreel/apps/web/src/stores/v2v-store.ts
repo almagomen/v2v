@@ -19,6 +19,7 @@ export interface V2VState {
   log: string;
   importStatusByKey: Record<string, "in_progress" | "done" | "error">; // `${jobId}:${videoIndex}`
   urlItems: JobUrlItem[];
+  folderRefs: Record<string, { jobId: string; videoIndex: number }>;
   selectedUrlForLogs: string | null;
   urlLogs: Record<string, string>;
   jobPhase: string;
@@ -46,6 +47,10 @@ export interface V2VState {
   appendUrlLog: (url: string, line: string) => void;
   setJobPhase: (phase: string) => void;
 
+  setFolderRef: (folder: string, ref: { jobId: string; videoIndex: number }) => void;
+  removeFolderRef: (folder: string) => void;
+  renameFolderRef: (oldFolder: string, newFolder: string) => void;
+
   reset: () => void;
 }
 
@@ -67,6 +72,7 @@ export const useV2VStore = create<V2VState>((set) => ({
   log: "",
   importStatusByKey: {},
   urlItems: [],
+  folderRefs: {},
   selectedUrlForLogs: null,
   urlLogs: {},
   jobPhase: "idle",
@@ -105,6 +111,24 @@ export const useV2VStore = create<V2VState>((set) => ({
       return { urlLogs: { ...state.urlLogs, [url]: next } };
     }),
   setJobPhase: (jobPhase) => set({ jobPhase }),
+  setFolderRef: (folder: string, ref: { jobId: string; videoIndex: number }) =>
+    set((state) => ({
+      folderRefs: { ...state.folderRefs, [folder]: ref },
+    })),
+  removeFolderRef: (folder: string) =>
+    set((state) => {
+      const next = { ...state.folderRefs };
+      delete next[folder];
+      return { folderRefs: next };
+    }),
+  renameFolderRef: (oldFolder: string, newFolder: string) =>
+    set((state) => {
+      if (!state.folderRefs[oldFolder]) return state;
+      const next = { ...state.folderRefs };
+      next[newFolder] = next[oldFolder];
+      delete next[oldFolder];
+      return { folderRefs: next };
+    }),
 
   reset: () =>
     set({
@@ -124,6 +148,7 @@ export const useV2VStore = create<V2VState>((set) => ({
       log: "",
       importStatusByKey: {},
       urlItems: [],
+      folderRefs: {},
       selectedUrlForLogs: null,
       urlLogs: {},
       jobPhase: "idle",

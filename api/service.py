@@ -91,7 +91,8 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             vonly = (v2v_paths or {}).get("video_only") if isinstance(v2v_paths, dict) else None
             video_only_path = Path(vonly) if vonly else path.with_name(f"{path.stem}_video{path.suffix}")
 
-            set_url_state(r.get("url", ""), "tts", f"TTS/segmentos: {output_name}", index=idx, output_name=output_name)
+            # Marca inicio de TTS para la UI (los segmentos se verán en el log general).
+            set_url_state(r.get("url", ""), "tts", "⚡ TTS:", index=idx, output_name=output_name)
             if output_video_path.exists():
                 output_paths.append(output_video_path)
                 segments = [

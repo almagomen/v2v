@@ -115,8 +115,6 @@ export const V2VPanel: React.FC = () => {
     setImportStatus,
     urlItems,
     setUrlItems,
-    selectedUrlForLogs,
-    setSelectedUrlForLogs,
     urlLogs,
     appendUrlLog,
     jobPhase,
@@ -148,7 +146,7 @@ export const V2VPanel: React.FC = () => {
         // Reflejar mensajes de estado también en el log por URL (sin spamear duplicados)
         for (const it of items) {
           if (!it.url || !it.message) continue;
-          const marker = `[STATE:${it.status}] ${it.message}`;
+          const marker = `[STATE:${it.status}]${it.message}`;
           const prev = useV2VStore.getState().urlLogs[it.url] || "";
           if (!prev.includes(marker)) appendUrlLog(it.url, marker);
         }
@@ -185,7 +183,7 @@ export const V2VPanel: React.FC = () => {
           const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
           const urlForLog = v.url || "";
           setRegenStatus(`Importando a Media: ${folder}...`);
-          if (urlForLog) appendUrlLog(urlForLog, `[IMPORT] Iniciando import a Media: ${folder}`);
+          if (urlForLog) appendUrlLog(urlForLog, `[STATE:import]🚀 Importando a Media...`);
 
           // 1) Video (sin audio, servido por /files/{index})
           const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
@@ -193,23 +191,23 @@ export const V2VPanel: React.FC = () => {
           const vimport = await importMedia(vfile);
           if (!vimport.success) {
             setRegenStatus(vimport.error?.message || `Error importando video: ${folder}`);
-            if (urlForLog) appendUrlLog(urlForLog, `[IMPORT][ERROR] ${vimport.error?.message || "Error importando video"}`);
+            if (urlForLog) appendUrlLog(urlForLog, `[STATE:import][ERROR] ${vimport.error?.message || "Error importando video"}`);
             setImportStatus(key, "error");
             continue;
           }
-          if (urlForLog) appendUrlLog(urlForLog, `[IMPORT] Video importado: ${folder}/video.mp4`);
+          if (urlForLog) appendUrlLog(urlForLog, `[STATE:video]✅ Video importado`);
 
           // 2) Audios por segmento
           for (let i = 0; i < audioSegs.length; i++) {
             const seg = audioSegs[i];
             setRegenStatus(`Importando audio ${folder} (${i + 1}/${audioSegs.length})...`);
-            if (urlForLog) appendUrlLog(urlForLog, `[IMPORT] Audio seg ${seg.seg} (${i + 1}/${audioSegs.length})...`);
+            if (urlForLog) appendUrlLog(urlForLog, `Importando audio seg ${seg.seg} (${i + 1}/${audioSegs.length})...`);
             const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
             const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
             const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
             const wres = await importMedia(wavFile);
             if (!wres.success) {
-              if (urlForLog) appendUrlLog(urlForLog, `[IMPORT][ERROR] WAV seg ${seg.seg}: ${wres.error?.message || "falló"}`);
+              if (urlForLog) appendUrlLog(urlForLog, `[STATE:audio][ERROR] WAV seg ${seg.seg}: ${wres.error?.message || "falló"}`);
               setImportStatus(key, "error");
               break;
             }
@@ -218,7 +216,9 @@ export const V2VPanel: React.FC = () => {
           if (useV2VStore.getState().importStatusByKey[key] !== "error") {
             setImportStatus(key, "done");
             setRegenStatus(`Importado en Media: ${folder}`);
-            if (urlForLog) appendUrlLog(urlForLog, `[IMPORT] Completado: ${folder}`);
+            if (urlForLog) appendUrlLog(urlForLog, `[STATE:audio]✅ Audios importados`);
+            // Referencia para el botón "Añadir a la timeline" desde la carpeta.
+            useV2VStore.getState().setFolderRef(folder, { jobId, videoIndex: v.index });
           }
         }
 
@@ -470,7 +470,7 @@ export const V2VPanel: React.FC = () => {
                   <tr>
                     <th className="px-2 py-1 text-left">#</th>
                     <th className="px-2 py-1 text-left">Título</th>
-                    <th className="px-2 py-1 text-left">Logs</th>
+                    <th className="px-2 py-1 text-left">tag/state</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -478,9 +478,6 @@ export const V2VPanel: React.FC = () => {
                     <tr key={it.url} className="border-t border-border">
                       <td className="px-2 py-1 tabular-nums">{i + 1}</td>
                       <td className="px-2 py-1 max-w-[220px] truncate" title={it.url}>
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded mr-1 ${statusToBadgeClass(it.status)}`}>
-                          {STATUS_LABEL[it.status] || it.status}
-                        </span>
                         {it.output_name || it.url}
                         {typeof it.index === "number" &&
                           importStatusByKey[`${jobId}:${it.index}`] === "done" && (
@@ -488,13 +485,11 @@ export const V2VPanel: React.FC = () => {
                           )}
                       </td>
                       <td className="px-2 py-1">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => setSelectedUrlForLogs(it.url)}
+                        <span
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded ${statusToBadgeClass(it.status)}`}
                         >
-                          Ver
-                        </Button>
+                          {STATUS_LABEL[it.status] || it.status}
+                        </span>
                       </td>
                     </tr>
                   ))}
@@ -504,25 +499,51 @@ export const V2VPanel: React.FC = () => {
           </div>
         )}
 
-        {(log || selectedUrlForLogs) && (
+        {log && (
           <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] text-text-muted">
-                {selectedUrlForLogs ? "Logs por URL" : "Logs"}
-              </p>
-              <div className="flex gap-2">
-                {selectedUrlForLogs && (
-                  <button
-                    className="text-[10px] text-text-muted hover:text-text-secondary"
-                    onClick={() => setSelectedUrlForLogs(null)}
-                  >
-                    Ver log general
-                  </button>
-                )}
-              </div>
-            </div>
+            <p className="text-[10px] text-text-muted">Logs</p>
             <pre className="p-2 rounded-lg bg-background-tertiary font-mono text-[10px] max-h-32 overflow-y-auto overflow-x-auto whitespace-pre">
-              {selectedUrlForLogs ? (urlLogs[selectedUrlForLogs] || "") : log}
+              {(() => {
+                let out = log || "";
+
+                // Inyectamos tags [STATE:...] directamente en el log general
+                // para que se vea "un solo panel" con el patrón deseado.
+                for (const it of urlItems) {
+                  if (!it.url) continue;
+                  out = out.replaceAll(
+                    `⚙️ Procesando: ${it.url}`,
+                    `[STATE:downloading]⚙️ Procesando: ${it.url}`,
+                  );
+                }
+                out = out.replaceAll(
+                  "📝 Transcribiendo (Whisper + diarización)...",
+                  "[STATE:transcribing]📝 Transcribiendo (Whisper + diarización)...",
+                );
+
+                // Antes de la primera tanda de segmentos TTS.
+                out = out.replace(
+                  /^(\s*)0\. Fast:/gm,
+                  "$1[STATE:tts]⚡ TTS:\n$10. Fast:",
+                );
+
+                // Import-only: mostramos solo los pasos de "Media import"
+                // que se registran en `urlLogs`.
+                const importLines: string[] = [];
+                for (const it of urlItems) {
+                  const raw = urlLogs[it.url] || "";
+                  for (const line of raw.split("\n")) {
+                    if (
+                      line.startsWith("[STATE:import]") ||
+                      line.startsWith("[STATE:video]") ||
+                      line.startsWith("[STATE:audio]")
+                    ) {
+                      importLines.push(line);
+                    }
+                  }
+                }
+
+                return `${out}${importLines.length ? `\n${importLines.join("\n")}` : ""}`;
+              })()}
             </pre>
           </div>
         )}

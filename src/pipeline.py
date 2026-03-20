@@ -28,7 +28,7 @@ def process_video_queue(
         print(f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
         if on_stage:
             try:
-                on_stage(u, "downloading", "Descargando...")
+                on_stage(u, "downloading", f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
             except Exception:
                 pass
         try:
@@ -104,10 +104,10 @@ def process_video_queue(
                 continue
             # -----------------------
 
-            print("📝 Transcribiendo audio (Whisper + diarización)...")
+            print("📝 Transcribiendo (Whisper + diarización)...")
             if on_stage:
                 try:
-                    on_stage(u, "transcribing", "Transcribiendo (Whisper + diarización)...")
+                    on_stage(u, "transcribing", "📝 Transcribiendo (Whisper + diarización)...")
                 except Exception:
                     pass
             translated_result, output_name, result, transcription, diarization = run_main(
