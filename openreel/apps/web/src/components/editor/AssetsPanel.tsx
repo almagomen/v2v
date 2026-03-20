@@ -55,7 +55,9 @@ function toSafeToken(s: string): string {
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^A-Za-z0-9._-]+/g, "_")
-    .replace(/^[_\\-.]+|[_\\-.]+$/g, "")
+    // Recorta prefijos/sufijos raros en tokens de speaker.
+    // Nota: el '-' dentro del character class va escapado para evitar errores de rango.
+    .replace(/^[\_\.\-\\]+|[\_\.\-\\]+$/g, "")
     .slice(0, 40);
   return ascii || "speaker";
 }
