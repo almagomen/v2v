@@ -143,13 +143,6 @@ export const V2VPanel: React.FC = () => {
 
         const items = await v2vApi.getJobItems(jobId);
         if (items.length) setUrlItems(items);
-        // Reflejar mensajes de estado también en el log por URL (sin spamear duplicados)
-        for (const it of items) {
-          if (!it.url || !it.message) continue;
-          const marker = `[STATE:${it.status}]${it.message}`;
-          const prev = useV2VStore.getState().urlLogs[it.url] || "";
-          if (!prev.includes(marker)) appendUrlLog(it.url, marker);
-        }
 
         // Mientras procesa, intentamos leer resultado parcial (videos ya listos)
         try {
@@ -183,7 +176,7 @@ export const V2VPanel: React.FC = () => {
           const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
           const urlForLog = v.url || "";
           setRegenStatus(`Importando a Media: ${folder}...`);
-          if (urlForLog) appendUrlLog(urlForLog, `[STATE:import]🚀 Importando a Media...`);
+          if (urlForLog) appendUrlLog(urlForLog, `🚀 Importando a Media...`);
 
           // 1) Video (sin audio, servido por /files/{index})
           const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
@@ -191,23 +184,26 @@ export const V2VPanel: React.FC = () => {
           const vimport = await importMedia(vfile);
           if (!vimport.success) {
             setRegenStatus(vimport.error?.message || `Error importando video: ${folder}`);
-            if (urlForLog) appendUrlLog(urlForLog, `[STATE:import][ERROR] ${vimport.error?.message || "Error importando video"}`);
+            if (urlForLog) appendUrlLog(urlForLog, `❌ ${vimport.error?.message || "Error importando video"}`);
             setImportStatus(key, "error");
             continue;
           }
-          if (urlForLog) appendUrlLog(urlForLog, `[STATE:video]✅ Video importado`);
+          if (urlForLog) appendUrlLog(urlForLog, `✅ Video importado`);
 
           // 2) Audios por segmento
           for (let i = 0; i < audioSegs.length; i++) {
             const seg = audioSegs[i];
             setRegenStatus(`Importando audio ${folder} (${i + 1}/${audioSegs.length})...`);
-            if (urlForLog) appendUrlLog(urlForLog, `Importando audio seg ${seg.seg} (${i + 1}/${audioSegs.length})...`);
             const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
             const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
             const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
             const wres = await importMedia(wavFile);
             if (!wres.success) {
-              if (urlForLog) appendUrlLog(urlForLog, `[STATE:audio][ERROR] WAV seg ${seg.seg}: ${wres.error?.message || "falló"}`);
+              if (urlForLog)
+                appendUrlLog(
+                  urlForLog,
+                  `❌ WAV seg ${seg.seg}: ${wres.error?.message || "falló"}`,
+                );
               setImportStatus(key, "error");
               break;
             }
@@ -216,7 +212,7 @@ export const V2VPanel: React.FC = () => {
           if (useV2VStore.getState().importStatusByKey[key] !== "error") {
             setImportStatus(key, "done");
             setRegenStatus(`Importado en Media: ${folder}`);
-            if (urlForLog) appendUrlLog(urlForLog, `[STATE:audio]✅ Audios importados`);
+            if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
             // Referencia para el botón "Añadir a la timeline" desde la carpeta.
             useV2VStore.getState().setFolderRef(folder, { jobId, videoIndex: v.index });
           }
@@ -258,6 +254,7 @@ export const V2VPanel: React.FC = () => {
       setError("Introduce al menos una URL de YouTube");
       return;
     }
+    useV2VStore.getState().clearJobRunState();
     setError(null);
     setLog("");
     setVideos([]);
@@ -506,43 +503,17 @@ export const V2VPanel: React.FC = () => {
               {(() => {
                 let out = log || "";
 
-                // Inyectamos tags [STATE:...] directamente en el log general
-                // para que se vea "un solo panel" con el patrón deseado.
-                for (const it of urlItems) {
-                  if (!it.url) continue;
-                  out = out.replaceAll(
-                    `⚙️ Procesando: ${it.url}`,
-                    `[STATE:downloading]⚙️ Procesando: ${it.url}`,
-                  );
-                }
-                out = out.replaceAll(
-                  "📝 Transcribiendo (Whisper + diarización)...",
-                  "[STATE:transcribing]📝 Transcribiendo (Whisper + diarización)...",
-                );
-
                 // Antes de la primera tanda de segmentos TTS.
-                out = out.replace(
-                  /^(\s*)0\. Fast:/gm,
-                  "$1[STATE:tts]⚡ TTS:\n$10. Fast:",
-                );
+                // (Sin tokens [STATE:...] en pantalla)
+                out = out.replace(/^(\s*)0\. Fast:/gm, "$1⚡ TTS:\n$10. Fast:");
 
-                // Import-only: mostramos solo los pasos de "Media import"
-                // que se registran en `urlLogs`.
-                const importLines: string[] = [];
-                for (const it of urlItems) {
-                  const raw = urlLogs[it.url] || "";
-                  for (const line of raw.split("\n")) {
-                    if (
-                      line.startsWith("[STATE:import]") ||
-                      line.startsWith("[STATE:video]") ||
-                      line.startsWith("[STATE:audio]")
-                    ) {
-                      importLines.push(line);
-                    }
-                  }
-                }
+                // Import-only: mostramos lo que se registra en `urlLogs` (sin [STATE:...]).
+                const importText = urlItems
+                  .map((it) => (it.url ? urlLogs[it.url] || "" : ""))
+                  .filter(Boolean)
+                  .join("\n");
 
-                return `${out}${importLines.length ? `\n${importLines.join("\n")}` : ""}`;
+                return `${out}${importText ? `\n${importText}` : ""}`;
               })()}
             </pre>
           </div>

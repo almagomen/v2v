@@ -51,6 +51,8 @@ export interface V2VState {
   removeFolderRef: (folder: string) => void;
   renameFolderRef: (oldFolder: string, newFolder: string) => void;
 
+  clearJobRunState: () => void;
+
   reset: () => void;
 }
 
@@ -129,6 +131,27 @@ export const useV2VStore = create<V2VState>((set) => ({
       delete next[oldFolder];
       return { folderRefs: next };
     }),
+
+  clearJobRunState: () =>
+    set((state) => ({
+      jobId: null,
+      progress: 0,
+      error: null,
+      videos: [],
+      selectedVideoIndex: 0,
+      segments: [],
+      selectedRowIndex: null,
+      isProcessing: false,
+      regenStatus: "",
+      shareUrl: null,
+      log: "",
+      importStatusByKey: {},
+      urlItems: [],
+      selectedUrlForLogs: null,
+      urlLogs: {},
+      jobPhase: "idle",
+      folderRefs: {},
+    })),
 
   reset: () =>
     set({
