@@ -57,6 +57,10 @@ function toSafeToken(s: string): string {
   return ascii || "speaker";
 }
 
+function importKeyFor(url: string, index: number): string {
+  return `${encodeURIComponent(url)}|${index}`;
+}
+
 function sanitizeFolderName(name: string): string {
   // El folder se infiere por `Carpeta/archivo`, así que evitamos `/`.
   const cleaned = (name || "Video").replaceAll("/", "_").replaceAll("\\", "_").trim();
@@ -151,8 +155,9 @@ export const V2VPanel: React.FC = () => {
 
         // Auto-import incremental: por cada video aparecido en `videos`, importar video+audios a Media
         const currentVideos = useV2VStore.getState().videos;
+        const baseProjectSettings = useProjectStore.getState().project.settings;
         for (const v of currentVideos) {
-          const key = `${jobId}:${v.index}`;
+          const key = importKeyFor(v.url, v.index);
           if (useV2VStore.getState().importStatusByKey[key]) continue;
           // Marcamos INMEDIATO como in_progress para evitar duplicación por ticks solapados
           setImportStatus(key, "in_progress");
@@ -169,7 +174,17 @@ export const V2VPanel: React.FC = () => {
 
           const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
           const urlForLog = v.url || "";
-          setRegenStatus(`Importando a Media: ${folder}...`);
+          const randomName = Math.random().toString(36).slice(2, 7);
+          const projectTitle = `${v.index + 1}. TTS ${randomName}`;
+
+          // Un proyecto nuevo por cada video.
+          useProjectStore.getState().createNewProject(projectTitle, {
+            width: baseProjectSettings.width,
+            height: baseProjectSettings.height,
+            frameRate: baseProjectSettings.frameRate,
+          });
+
+          setRegenStatus(`Importando a Media (${projectTitle}): ${folder}...`);
           if (urlForLog) appendUrlLog(urlForLog, `🚀 Importando a Media...`);
 
           // Evita duplicados: si ya existe el archivo con el mismo nombre en Media, no lo re-importamos.
@@ -227,7 +242,90 @@ export const V2VPanel: React.FC = () => {
 
           if (useV2VStore.getState().importStatusByKey[key] !== "error") {
             setImportStatus(key, "done");
-            setRegenStatus(`Importado en Media: ${folder}`);
+            // Auto-import al timeline en el proyecto recién creado.
+            // (Video en pista de video + audios agrupados por speaker en pistas de audio.)
+            const { addTrack, addClip } = useProjectStore.getState();
+            const currentProject = useProjectStore.getState().project;
+
+            const videoMediaName = `${folder}/video.mp4`;
+            const videoMedia = currentProject.mediaLibrary.items.find(
+              (m) => m.name === videoMediaName,
+            );
+
+            // Video track
+            const beforeVideoTrackIds = new Set(
+              currentProject.timeline.tracks.map((t) => t.id),
+            );
+            const videoAddRes = await addTrack("video");
+            if (!videoAddRes.success) {
+              setRegenStatus(`Importado en Media, pero falló crear video track: ${folder}`);
+              useV2VStore.getState().setFolderRef(folder, {
+                jobId,
+                videoIndex: v.index,
+              });
+              continue;
+            }
+
+            const afterVideoProject = useProjectStore.getState().project;
+            const videoTrack = afterVideoProject.timeline.tracks.find(
+              (t) => t.type === "video" && !beforeVideoTrackIds.has(t.id),
+            );
+
+            if (videoTrack && videoMedia) {
+              await addClip(videoTrack.id, videoMedia.id, 0);
+            }
+
+            // Audio tracks (1 por speaker)
+            const bySpeaker: Record<string, AudioSegmentItem[]> = {};
+            for (const seg of audioSegs) {
+              const token = toSafeToken(seg.speaker || "speaker");
+              (bySpeaker[token] ||= []).push(seg);
+            }
+            for (const speakerToken of Object.keys(bySpeaker)) {
+              const beforeAudioTrackIds = new Set(
+                useProjectStore.getState().project.timeline.tracks.map((t) => t.id),
+              );
+              const audioAddRes = await addTrack("audio");
+              if (!audioAddRes.success) continue;
+
+              const afterAudioProject = useProjectStore.getState().project;
+              const audioTrack = afterAudioProject.timeline.tracks.find(
+                (t) =>
+                  t.type === "audio" && !beforeAudioTrackIds.has(t.id),
+              );
+              if (!audioTrack) continue;
+
+              // Renombramos el track para que sea fácil identificar el speaker.
+              useProjectStore.setState((state) => ({
+                project: {
+                  ...state.project,
+                  timeline: {
+                    ...state.project.timeline,
+                    tracks: state.project.timeline.tracks.map((t) =>
+                      t.id === audioTrack.id ? { ...t, name: `TTS_${speakerToken}` } : t,
+                    ),
+                  },
+                },
+              }));
+
+              const orderedSegs = bySpeaker[speakerToken]
+                .slice()
+                .sort((a, b) => a.seg - b.seg);
+
+              for (const seg of orderedSegs) {
+                const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
+                  seg.seg,
+                ).padStart(4, "0")}.wav`;
+                const wavMedia = useProjectStore.getState().project.mediaLibrary.items.find(
+                  (m) => m.name === wavName,
+                );
+                if (!wavMedia) continue;
+
+                await addClip(audioTrack.id, wavMedia.id, seg.start);
+              }
+            }
+
+            setRegenStatus(`Importado y pegado al timeline: ${folder}`);
             if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
             // Referencia para el botón "Añadir a la timeline" desde la carpeta.
             useV2VStore.getState().setFolderRef(folder, { jobId, videoIndex: v.index });
@@ -270,7 +368,12 @@ export const V2VPanel: React.FC = () => {
       setError("Introduce al menos una URL de YouTube");
       return;
     }
-    useV2VStore.getState().clearJobRunState();
+    const signature = normalized.map((u) => encodeURIComponent(u)).join("|");
+    const prevSignature = useV2VStore.getState().lastUrlsSignature;
+    const keepImports = Boolean(prevSignature && prevSignature === signature);
+
+    useV2VStore.getState().clearJobRunState({ keepImports });
+    useV2VStore.setState({ lastUrlsSignature: signature });
     setError(null);
     setLog("");
     setVideos([]);
@@ -474,17 +577,39 @@ export const V2VPanel: React.FC = () => {
             const activeCandidates = urlItems
               .filter((it) => it.status && it.status !== "done" && it.status !== "error" && it.status !== "pending");
 
+            const importingCandidates = hasImportsInFlight
+              ? urlItems.filter(
+                  (it) =>
+                    typeof it.index === "number" &&
+                    importStatusByKey[importKeyFor(it.url, it.index)] === "in_progress",
+                )
+              : [];
+
             const activeUrlState =
-              activeCandidates.length > 0
-                ? activeCandidates.sort((a, b) => (order[a.status] ?? 999) - (order[b.status] ?? 999))[0]
-                : null;
+              importingCandidates.length > 0
+                ? importingCandidates[0]
+                : activeCandidates.length > 0
+                  ? activeCandidates.sort(
+                      (a, b) => (order[a.status] ?? 999) - (order[b.status] ?? 999),
+                    )[0]
+                  : null;
 
             const activeStatus = activeUrlState?.status || jobPhase;
-            const tag = hasImportsInFlight
-              ? "Importando a Media"
-              : activeStatus
-                ? STATUS_LABEL[activeStatus] || activeStatus
-                : "Procesar";
+            const tagText =
+              hasImportsInFlight
+                ? "Importando a Media"
+                : activeStatus
+                  ? STATUS_LABEL[activeStatus] || activeStatus
+                  : "Procesar";
+
+            const activePos = activeUrlState
+              ? urlItems.findIndex(
+                  (it) => it.url === activeUrlState.url && it.index === activeUrlState.index,
+                )
+              : -1;
+            const x = urlItems.length || 1;
+            const prefix = activePos >= 0 ? `[${activePos + 1}/${x}] ` : "";
+            const tag = `${prefix}${tagText}`;
 
             const showSpin = isProcessing || hasImportsInFlight;
             return (
@@ -522,7 +647,7 @@ export const V2VPanel: React.FC = () => {
                       <td className="px-2 py-1 max-w-[220px] truncate" title={it.url}>
                         {it.output_name || it.url}
                         {typeof it.index === "number" &&
-                          importStatusByKey[`${jobId}:${it.index}`] === "done" && (
+                          importStatusByKey[importKeyFor(it.url, it.index)] === "done" && (
                             <span className="ml-1 text-primary">(importado)</span>
                           )}
                       </td>

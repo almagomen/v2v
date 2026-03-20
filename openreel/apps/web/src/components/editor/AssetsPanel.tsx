@@ -37,6 +37,7 @@ import { useUIStore } from "../../stores/ui-store";
 import { useV2VStore } from "../../stores/v2v-store";
 import type { MediaItem } from "@openreel/core";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
+import { autoSaveManager } from "../../services/auto-save";
 import { AspectRatioMatchDialog } from "./dialogs/AspectRatioMatchDialog";
 import { AIGenTab } from "./AIGenTab";
 import { V2VPanel } from "./V2VPanel";
@@ -658,26 +659,86 @@ export const AssetsPanel: React.FC = () => {
     }
 
     setIsImporting(true);
-    setImportProgress("Creando clips en la timeline...");
+    setImportProgress("Importando assets y pegando clips en la timeline...");
 
     try {
-      const segments: AudioSegmentItem[] = await v2vApi.getAudioSegments(ref.jobId, ref.videoIndex);
+      const segments: AudioSegmentItem[] = await v2vApi.getAudioSegments(
+        ref.jobId,
+        ref.videoIndex,
+      );
 
-      const { project: currentProject, addTrack, addClip, addClipToNewTrack } =
-        useProjectStore.getState();
-      const mediaItemsLocal = currentProject.mediaLibrary.items;
+      const { addTrack, addClip } = useProjectStore.getState();
 
       const videoMediaName = `${activeFolder}/video.mp4`;
-      const videoMedia = mediaItemsLocal.find((m) => m.name === videoMediaName);
-      if (!videoMedia) {
-        window.alert(`No existe en Media el archivo: "${videoMediaName}".`);
-        return;
+
+      // Importa video si falta en la Media library del proyecto actual.
+      const refreshState = () => useProjectStore.getState();
+      const state0 = refreshState();
+      let mediaNames = new Set(state0.project.mediaLibrary.items.map((m) => m.name));
+      if (!mediaNames.has(videoMediaName)) {
+        const vblob = await v2vApi.fetchOutputVideoBlob(ref.jobId, ref.videoIndex);
+        const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
+        const vres = await importMedia(vfile);
+        if (!vres.success) {
+          window.alert(vres.error?.message || "Error importando video");
+          return;
+        }
       }
 
-      // Video en pista de video (inicio 0).
-      await addClipToNewTrack(videoMedia.id, 0);
+      // Importa todos los WAV si faltan.
+      for (const seg of segments) {
+        const wavName = `${activeFolder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
+          seg.seg,
+        ).padStart(4, "0")}.wav`;
 
-      // Agrupamos segmentos por speaker (token para evitar caracteres raros).
+        mediaNames = new Set(refreshState().project.mediaLibrary.items.map((m) => m.name));
+        if (mediaNames.has(wavName)) continue;
+
+        const wavBlob = await v2vApi.fetchAudioSegmentBlob(
+          ref.jobId,
+          ref.videoIndex,
+          seg.seg,
+        );
+        const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
+        const wres = await importMedia(wavFile);
+        if (!wres.success) {
+          window.alert(wres.error?.message || `Error importando WAV seg ${seg.seg}`);
+          return;
+        }
+      }
+
+      const state1 = refreshState();
+      const projectNow = state1.project;
+
+      const videoMedia = projectNow.mediaLibrary.items.find(
+        (m) => m.name === videoMediaName,
+      );
+
+      // Video track: reutilizamos si existe, sino lo creamos.
+      let videoTrack =
+        projectNow.timeline.tracks.find((t) => t.type === "video") || null;
+      if (!videoTrack) {
+        const beforeVideoTrackIds = new Set(projectNow.timeline.tracks.map((t) => t.id));
+        const r = await addTrack("video");
+        if (!r.success) return;
+        const after = refreshState().project;
+        videoTrack = after.timeline.tracks.find(
+          (t) => t.type === "video" && !beforeVideoTrackIds.has(t.id),
+        ) || null;
+      }
+
+      if (videoTrack && videoMedia) {
+        const track = refreshState().project.timeline.tracks.find((t) => t.id === videoTrack?.id);
+        const hasClip =
+          track?.clips?.some(
+            (c) => c.mediaId === videoMedia.id && Math.abs(c.startTime - 0) < 0.001,
+          ) ?? false;
+        if (!hasClip) {
+          await addClip(videoTrack.id, videoMedia.id, 0);
+        }
+      }
+
+      // Agrupamos segmentos por speaker (token).
       const bySpeaker: Record<string, AudioSegmentItem[]> = {};
       for (const s of segments) {
         const token = toSafeToken(s.speaker || "speaker");
@@ -685,51 +746,134 @@ export const AssetsPanel: React.FC = () => {
       }
 
       for (const speakerToken of Object.keys(bySpeaker)) {
-        // Creamos 1 pista de audio por speaker (si el usuario pulsa varias veces, se duplicará el set de tracks).
-        const beforeIds = new Set(
-          useProjectStore.getState().project.timeline.tracks.map((t) => t.id),
-        );
-        const trackResult = await addTrack("audio");
-        if (!trackResult.success) continue;
+        const desiredTrackName = `TTS_${speakerToken}`;
 
-        const afterTracks = useProjectStore.getState().project.timeline.tracks;
-        const newTrack = afterTracks.find(
-          (t) => t.type === "audio" && !beforeIds.has(t.id),
-        );
-        if (!newTrack) continue;
+        // Reutiliza track si ya existe (mismo nombre).
+        let audioTrack =
+          refreshState().project.timeline.tracks.find(
+            (t) => t.type === "audio" && t.name === desiredTrackName,
+          ) || null;
 
-        // Nombre del track para reconocer el speaker.
-        useProjectStore.setState((state) => ({
-          project: {
-            ...state.project,
-            timeline: {
-              ...state.project.timeline,
-              tracks: state.project.timeline.tracks.map((t) =>
-                t.id === newTrack.id ? { ...t, name: `TTS_${speakerToken}` } : t,
-              ),
+        if (!audioTrack) {
+          const beforeAudioTrackIds = new Set(
+            refreshState().project.timeline.tracks.map((t) => t.id),
+          );
+          const r = await addTrack("audio");
+          if (!r.success) continue;
+          const after = refreshState().project;
+          audioTrack =
+            after.timeline.tracks.find(
+              (t) => t.type === "audio" && !beforeAudioTrackIds.has(t.id),
+            ) || null;
+          if (!audioTrack) continue;
+
+          // Nombre del track para reconocer el speaker.
+          useProjectStore.setState((state) => ({
+            project: {
+              ...state.project,
+              timeline: {
+                ...state.project.timeline,
+                tracks: state.project.timeline.tracks.map((t) =>
+                  t.id === audioTrack?.id ? { ...t, name: desiredTrackName } : t,
+                ),
+              },
             },
-          },
-        }));
+          }));
+        }
 
-        const orderedSegs = bySpeaker[speakerToken].slice().sort((a, b) => a.seg - b.seg);
+        const orderedSegs = bySpeaker[speakerToken]
+          .slice()
+          .sort((a, b) => a.seg - b.seg);
+
         for (const seg of orderedSegs) {
           const wavName = `${activeFolder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
             seg.seg,
           ).padStart(4, "0")}.wav`;
-          const wavMedia = useProjectStore.getState().project.mediaLibrary.items.find(
+          const wavMedia = refreshState().project.mediaLibrary.items.find(
             (m) => m.name === wavName,
           );
-          if (!wavMedia) continue;
+          if (!wavMedia || !audioTrack) continue;
 
-          // Pegamos respetando start/end usando el start del segmento.
-          await addClip(newTrack.id, wavMedia.id, seg.start);
+          const trackNow = refreshState().project.timeline.tracks.find(
+            (t) => t.id === audioTrack.id,
+          );
+          const hasClip =
+            trackNow?.clips?.some(
+              (c) =>
+                c.mediaId === wavMedia.id &&
+                Math.abs(c.startTime - seg.start) < 0.001,
+            ) ?? false;
+
+          if (!hasClip) {
+            await addClip(audioTrack.id, wavMedia.id, seg.start);
+          }
         }
       }
     } finally {
       setIsImporting(false);
       setImportProgress("");
     }
-  }, [activeFolder]);
+  }, [activeFolder, importMedia]);
+
+  const handleCopyFolderTtsToAnotherProject = useCallback(async () => {
+    if (!activeFolder) return;
+    const ref = useV2VStore.getState().folderRefs[activeFolder];
+    if (!ref) {
+      window.alert(
+        `No encuentro referencia de V2V para la carpeta "${activeFolder}".\nVuelve a procesar el video desde Video2Video.`,
+      );
+      return;
+    }
+
+    try {
+      // Opciones de proyectos disponibles (autosaves recuperables).
+      await autoSaveManager.initialize();
+      const saves = await autoSaveManager.checkForRecovery();
+
+      // Deduplicamos por projectId y nos quedamos con el más reciente.
+      const unique = saves.reduce((acc, save) => {
+        const existing = acc.find((x) => x.projectId === save.projectId);
+        if (!existing || save.timestamp > existing.timestamp) {
+          return [...acc.filter((x) => x.projectId !== save.projectId), save];
+        }
+        return acc;
+      }, [] as typeof saves);
+
+      const ordered = unique.sort((a, b) => b.timestamp - a.timestamp);
+      const currentProjectId = useProjectStore.getState().project.id;
+
+      const options = ordered
+        .map((p, i) => {
+          const marker = p.projectId === currentProjectId ? " (actual)" : "";
+          return `${i + 1}) ${p.projectName}${marker}`;
+        })
+        .join("\n");
+
+      if (!options) {
+        window.alert("No hay proyectos disponibles para copiar.");
+        return;
+      }
+
+      const answer = window.prompt(
+        `Selecciona el proyecto destino:\n${options}\n\nNúmero:`,
+        "1",
+      );
+      if (!answer) return;
+      const chosen = parseInt(answer, 10);
+      if (Number.isNaN(chosen) || chosen < 1 || chosen > ordered.length) return;
+
+      const targetSave = ordered[chosen - 1];
+      const isCurrent = targetSave.projectId === currentProjectId;
+      if (!isCurrent) {
+        await useProjectStore.getState().recoverFromAutoSave(targetSave.id);
+      }
+
+      // Copiamos el contenido de la carpeta a la timeline del proyecto actual.
+      await handleAddFolderTtsToTimeline();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Error al copiar a proyecto");
+    }
+  }, [activeFolder, handleAddFolderTtsToTimeline]);
 
   const triggerFileInput = useCallback(() => {
     fileInputRef.current?.click();
@@ -962,9 +1106,9 @@ export const AssetsPanel: React.FC = () => {
                     <Trash2 size={14} />
                   </button>
                   <button
-                    onClick={() => handleAddFolderTtsToTimeline()}
+                    onClick={() => handleCopyFolderTtsToAnotherProject()}
                     className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary"
-                    title="Añadir TTS a la timeline"
+                    title="Copiar TTS a otro proyecto"
                   >
                     <Plus size={14} />
                   </button>

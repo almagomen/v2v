@@ -23,6 +23,7 @@ export interface V2VState {
   selectedUrlForLogs: string | null;
   urlLogs: Record<string, string>;
   jobPhase: string;
+  lastUrlsSignature: string | null;
 
   setUrls: (urls: string) => void;
   setTranslateLang: (lang: string) => void;
@@ -51,7 +52,9 @@ export interface V2VState {
   removeFolderRef: (folder: string) => void;
   renameFolderRef: (oldFolder: string, newFolder: string) => void;
 
-  clearJobRunState: () => void;
+  clearJobRunState: (opts?: { keepImports?: boolean }) => void;
+
+  setLastUrlsSignature: (sig: string | null) => void;
 
   reset: () => void;
 }
@@ -78,6 +81,7 @@ export const useV2VStore = create<V2VState>((set) => ({
   selectedUrlForLogs: null,
   urlLogs: {},
   jobPhase: "idle",
+  lastUrlsSignature: null,
 
   setUrls: (urls) => set({ urls }),
   setTranslateLang: (translateLang) => set({ translateLang }),
@@ -132,26 +136,31 @@ export const useV2VStore = create<V2VState>((set) => ({
       return { folderRefs: next };
     }),
 
-  clearJobRunState: () =>
-    set((state) => ({
-      jobId: null,
-      progress: 0,
-      error: null,
-      videos: [],
-      selectedVideoIndex: 0,
-      segments: [],
-      selectedRowIndex: null,
-      isProcessing: false,
-      regenStatus: "",
-      shareUrl: null,
-      log: "",
-      importStatusByKey: {},
-      urlItems: [],
-      selectedUrlForLogs: null,
-      urlLogs: {},
-      jobPhase: "idle",
-      folderRefs: {},
-    })),
+  clearJobRunState: (opts) =>
+    set((state) => {
+      const keepImports = opts?.keepImports ?? false;
+      return {
+        jobId: null,
+        progress: 0,
+        error: null,
+        videos: [],
+        selectedVideoIndex: 0,
+        segments: [],
+        selectedRowIndex: null,
+        isProcessing: false,
+        regenStatus: "",
+        shareUrl: null,
+        log: "",
+        importStatusByKey: keepImports ? state.importStatusByKey : {},
+        urlItems: [],
+        selectedUrlForLogs: null,
+        urlLogs: {},
+        jobPhase: "idle",
+        folderRefs: keepImports ? state.folderRefs : {},
+      };
+    }),
+
+  setLastUrlsSignature: (lastUrlsSignature) => set({ lastUrlsSignature }),
 
   reset: () =>
     set({
