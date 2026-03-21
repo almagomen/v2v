@@ -3,7 +3,6 @@ import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2 } from "luci
 import { ScrollArea, Button } from "@openreel/ui";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
-import { autoSaveManager } from "../../services/auto-save";
 import { useV2VStore } from "../../stores/v2v-store";
 
 const TRANSLATE_OPTIONS = [
@@ -211,55 +210,14 @@ export const V2VPanel: React.FC = () => {
           const seq = pos >= 0 ? pos + 1 : v.index + 1;
           const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
 
-          let isNewProject = false;
-          let isFolderMissing = false;
+          // Un proyecto nuevo por cada video.
+          useProjectStore.getState().createNewProject(projectTitle, {
+            width: baseProjectSettings.width,
+            height: baseProjectSettings.height,
+            frameRate: baseProjectSettings.frameRate,
+          });
 
-          await autoSaveManager.initialize();
-          const saves = await autoSaveManager.checkForRecovery();
-          const uniqueSaves = saves.reduce((acc, save) => {
-            const existing = acc.find((s) => s.projectId === save.projectId);
-            if (!existing || save.timestamp > existing.timestamp) {
-              return [...acc.filter((s) => s.projectId !== save.projectId), save];
-            }
-            return acc;
-          }, [] as typeof saves);
-
-          const existingSave = uniqueSaves
-            .filter((s) => s.projectName === projectTitle)
-            .sort((a, b) => b.timestamp - a.timestamp)[0];
-
-          if (existingSave) {
-            const recovered = await useProjectStore.getState().recoverFromAutoSave(existingSave.id);
-            if (recovered) {
-              const currentProject = useProjectStore.getState().project;
-              const hasFolder = currentProject.mediaLibrary.items.some((m) =>
-                m.name.startsWith(`${folder}/`)
-              );
-
-              if (hasFolder) {
-                setRegenStatus(`Proyecto y carpeta intactos: ${folder}`);
-                setImportStatus(key, "done");
-                continue;
-              } else {
-                isFolderMissing = true;
-                setRegenStatus(`Recuperando carpeta en proyecto existente: ${folder}...`);
-              }
-            } else {
-              isNewProject = true;
-            }
-          } else {
-            isNewProject = true;
-          }
-
-          if (isNewProject) {
-            useProjectStore.getState().createNewProject(projectTitle, {
-              width: baseProjectSettings.width,
-              height: baseProjectSettings.height,
-              frameRate: baseProjectSettings.frameRate,
-            });
-            setRegenStatus(`Importando a nuevo proyecto (${projectTitle}): ${folder}...`);
-          }
-
+          setRegenStatus(`Importando a Media (${projectTitle}): ${folder}...`);
           if (urlForLog) appendUrlLog(urlForLog, `🚀 Importando a Media...`);
 
           // Evita duplicados: si ya existe el archivo con el mismo nombre en Media, no lo re-importamos.
@@ -319,10 +277,9 @@ export const V2VPanel: React.FC = () => {
 
           if (useV2VStore.getState().importStatusByKey[key] !== "error") {
             setImportStatus(key, "done");
-            if (isNewProject) {
-              // Auto-import al timeline en el proyecto recién creado.
-              // (Video en pista de video + audios agrupados por speaker en pistas de audio.)
-              const { addTrack, addClip } = useProjectStore.getState();
+            // Auto-import al timeline en el proyecto recién creado.
+            // (Video en pista de video + audios agrupados por speaker en pistas de audio.)
+            const { addTrack, addClip } = useProjectStore.getState();
             const currentProject = useProjectStore.getState().project;
 
             const videoMediaName = `${folder}/video.mp4`;
@@ -403,16 +360,11 @@ export const V2VPanel: React.FC = () => {
               }
             }
 
-              // Fuerza guardado para que cada URL quede como proyecto recuperable.
-              await useProjectStore.getState().forceSave();
+            // Fuerza guardado para que cada URL quede como proyecto recuperable.
+            await useProjectStore.getState().forceSave();
 
-              setRegenStatus(`Importado y pegado al timeline: ${folder}`);
-              if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
-            } else if (isFolderMissing) {
-              await useProjectStore.getState().forceSave();
-              setRegenStatus(`Medios recuperados en la carpeta ${folder} (sin alterar timeline).`);
-              if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
-            }
+            setRegenStatus(`Importado y pegado al timeline: ${folder}`);
+            if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
             // Referencia para el botón "Añadir a la timeline" desde la carpeta.
             } // end if importStatus !== "error"
           } // end for
@@ -459,7 +411,10 @@ export const V2VPanel: React.FC = () => {
       return;
     }
     const signature = normalized.map((u) => encodeURIComponent(u)).join("|");
-    useV2VStore.getState().clearJobRunState({ keepImports: false });
+    const prevSignature = useV2VStore.getState().lastUrlsSignature;
+    const keepImports = Boolean(prevSignature && prevSignature === signature);
+
+    useV2VStore.getState().clearJobRunState({ keepImports });
     useV2VStore.setState({ lastUrlsSignature: signature });
     setError(null);
     setLog("");
