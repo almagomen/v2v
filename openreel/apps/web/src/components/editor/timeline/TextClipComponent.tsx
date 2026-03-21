@@ -29,6 +29,8 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
   const [isTrimming, setIsTrimming] = useState<"left" | "right" | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState(0);
+  const [dragTime, setDragTime] = useState<number | null>(null);
+  const pendingDropRef = useRef<{ time: number }>({ time: 0 });
   const { snapSettings } = useUIStore();
   const { playheadPosition } = useTimelineStore();
   const trimStartRef = useRef<{
@@ -41,7 +43,8 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
     duration: textClip.duration,
   });
 
-  const left = textClip.startTime * pixelsPerSecond;
+  const currentStartTime = dragTime !== null ? dragTime : textClip.startTime;
+  const left = currentStartTime * pixelsPerSecond;
   const width = textClip.duration * pixelsPerSecond;
 
   const handleClick = (e: React.MouseEvent) => {
@@ -62,6 +65,7 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
     const clickX = e.clientX - rect.left;
     const clipStartX = textClip.startTime * pixelsPerSecond;
     setDragOffset(clickX - clipStartX);
+    setDragTime(null);
     setIsDragging(true);
 
     onSelect(textClip.id, e.shiftKey || e.metaKey);
@@ -87,11 +91,17 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
         pixelsPerSecond,
         textClip.duration,
       );
-      onMoveClip(textClip.id, snapResult.time);
+      pendingDropRef.current = { time: snapResult.time };
+      setDragTime(snapResult.time);
     };
 
     const handleMouseUp = () => {
       setIsDragging(false);
+      const { time } = pendingDropRef.current;
+      if (time !== textClip.startTime) {
+        onMoveClip(textClip.id, time);
+      }
+      setDragTime(null);
     };
 
     window.addEventListener("mousemove", handleMouseMove);

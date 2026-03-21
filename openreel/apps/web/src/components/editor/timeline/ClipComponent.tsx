@@ -55,6 +55,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
   const [isPendingDrag, setIsPendingDrag] = useState(false);
   const [dragOffset, setDragOffset] = useState(0);
   const [dragYOffset, setDragYOffset] = useState(0);
+  const [dragTime, setDragTime] = useState<number | null>(null);
   const [isInvalidDrop, setIsInvalidDrop] = useState(false);
   const [isTrimming, setIsTrimming] = useState(false);
   const [trimEdge, setTrimEdge] = useState<"left" | "right" | null>(null);
@@ -81,7 +82,8 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
   });
   const clipRef = useRef<HTMLDivElement>(null);
 
-  const left = clip.startTime * pixelsPerSecond;
+  const currentStartTime = dragTime !== null ? dragTime : clip.startTime;
+  const left = currentStartTime * pixelsPerSecond;
   const width = clip.duration * pixelsPerSecond;
 
   const isVideo = track.type === "video";
@@ -117,6 +119,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     mousePositionRef.current = { x: e.clientX, y: e.clientY };
     dragPendingRef.current = { active: true, startX: e.clientX, startY: e.clientY };
     setDragYOffset(0);
+    setDragTime(null);
     setIsInvalidDrop(false);
     setIsPendingDrag(true);
   };
@@ -247,7 +250,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       setIsInvalidDrop(isOverDifferentTrackType);
 
       pendingDropRef.current = { time: snapResult.time, targetTrackId };
-      onMoveClip(clip.id, snapResult.time, undefined);
+      setDragTime(snapResult.time);
       onSnapIndicator(snapResult.snapped && snapResult.snapPoint ? snapResult.snapPoint.time : null);
     };
 
@@ -257,12 +260,13 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       }
 
       const { time, targetTrackId } = pendingDropRef.current;
-      if (targetTrackId) {
+      if (time !== clip.startTime || targetTrackId) {
         onMoveClip(clip.id, time, targetTrackId);
       }
 
       setIsDragging(false);
       setDragYOffset(0);
+      setDragTime(null);
       setIsInvalidDrop(false);
       onSnapIndicator(null);
     };

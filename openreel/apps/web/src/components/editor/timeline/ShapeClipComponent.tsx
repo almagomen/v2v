@@ -30,6 +30,8 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
   const clipRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState(0);
+  const [dragTime, setDragTime] = useState<number | null>(null);
+  const pendingDropRef = useRef<{ time: number }>({ time: 0 });
   const [isTrimming, setIsTrimming] = useState<"left" | "right" | null>(null);
   const { snapSettings } = useUIStore();
   const { playheadPosition } = useTimelineStore();
@@ -43,7 +45,8 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
     duration: shapeClip.duration,
   });
 
-  const left = shapeClip.startTime * pixelsPerSecond;
+  const currentStartTime = dragTime !== null ? dragTime : shapeClip.startTime;
+  const left = currentStartTime * pixelsPerSecond;
   const width = shapeClip.duration * pixelsPerSecond;
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -56,6 +59,7 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
 
     const offsetX = e.clientX - rect.left;
     setDragOffset(offsetX);
+    setDragTime(null);
     setIsDragging(true);
   };
 
@@ -101,11 +105,17 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
         pixelsPerSecond,
         shapeClip.duration,
       );
-      onMoveClip(shapeClip.id, snapResult.time);
+      pendingDropRef.current = { time: snapResult.time };
+      setDragTime(snapResult.time);
     };
 
     const handleMouseUp = () => {
       setIsDragging(false);
+      const { time } = pendingDropRef.current;
+      if (time !== shapeClip.startTime) {
+        onMoveClip(shapeClip.id, time);
+      }
+      setDragTime(null);
     };
 
     window.addEventListener("mousemove", handleMouseMove);
