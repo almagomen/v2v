@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2 } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
-import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
+import { v2vApi, type AudioSegmentItem, type JobStatusResponse } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
 import { useV2VStore } from "../../stores/v2v-store";
+import { autoSaveManager } from "../../services/auto-save";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -60,6 +61,7 @@ function toSafeToken(s: string): string {
 function importKeyFor(url: string, index: number): string {
   return `${encodeURIComponent(url)}|${index}`;
 }
+
 
 function sanitizeFolderName(name: string): string {
   // El folder se infiere por `Carpeta/archivo`, así que evitamos `/`.
@@ -143,7 +145,7 @@ export const V2VPanel: React.FC = () => {
     if (!jobId || !isProcessing) return;
     const t = setInterval(async () => {
       try {
-        const s = await v2vApi.getJobStatus(jobId);
+        const s: JobStatusResponse = await v2vApi.getJobStatus(jobId);
         setProgress(s.progress * 100);
         setJobPhase(s.status);
 
@@ -210,12 +212,41 @@ export const V2VPanel: React.FC = () => {
           const seq = pos >= 0 ? pos + 1 : v.index + 1;
           const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
 
-          // Un proyecto nuevo por cada video.
-          useProjectStore.getState().createNewProject(projectTitle, {
-            width: baseProjectSettings.width,
-            height: baseProjectSettings.height,
-            frameRate: baseProjectSettings.frameRate,
-          });
+          // 1. Buscar si existe un proyecto con ese nombre en los autoguardados
+          const saves = await autoSaveManager.checkForRecovery();
+          const existingProjectSave = saves.find((s: any) => s.projectName === projectTitle);
+          let skipTimelineExport = false;
+
+          if (existingProjectSave) {
+            // Si el proyecto actual no es el que buscamos, lo cargamos
+            if (useProjectStore.getState().project.name !== projectTitle) {
+              await useProjectStore.getState().recoverFromAutoSave(existingProjectSave.id);
+            }
+            
+            // Verificar si la carpeta ya existe en el Media Library del proyecto cargado/actual
+            const folderPrefix = `${folder}/`;
+            const folderExists = useProjectStore.getState().project.mediaLibrary.items.some(
+              m => m.name.startsWith(folderPrefix)
+            );
+
+            if (folderExists) {
+              // Escenario A: Proyecto y carpeta existen. Marcamos como hecho y saltamos.
+              setImportStatus(key, "done");
+              if (urlForLog) appendUrlLog(urlForLog, `✅ Ya existe en proyecto: ${projectTitle}`);
+              continue;
+            } else {
+              // Escenario C: Proyecto existe pero la carpeta no (fue renombrada o borrada)
+              // Importaremos a Media pero NO al timeline.
+              skipTimelineExport = true;
+            }
+          } else {
+            // Escenario B: El proyecto no existe con ese nombre. Creamos uno nuevo.
+            useProjectStore.getState().createNewProject(projectTitle, {
+              width: baseProjectSettings.width,
+              height: baseProjectSettings.height,
+              frameRate: baseProjectSettings.frameRate,
+            });
+          }
 
           setRegenStatus(`Importando a Media (${projectTitle}): ${folder}...`);
           if (urlForLog) appendUrlLog(urlForLog, `🚀 Importando a Media...`);
@@ -277,7 +308,16 @@ export const V2VPanel: React.FC = () => {
 
           if (useV2VStore.getState().importStatusByKey[key] !== "error") {
             setImportStatus(key, "done");
-            // Auto-import al timeline en el proyecto recién creado.
+
+            if (skipTimelineExport) {
+              setRegenStatus(`Importado a Media: ${folder} (Escenario C)`);
+              if (urlForLog) appendUrlLog(urlForLog, `✅ Carpeta importada a Media`);
+              // Forzamos guardado para persistir la nueva carpeta en el proyecto existente
+              await useProjectStore.getState().forceSave();
+              continue;
+            }
+
+            // Auto-import al timeline en el proyecto recién creado o recuperado (si no se saltó por C).
             // (Video en pista de video + audios agrupados por speaker en pistas de audio.)
             const { addTrack, addClip } = useProjectStore.getState();
             const currentProject = useProjectStore.getState().project;
