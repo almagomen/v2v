@@ -544,7 +544,7 @@ export const V2VPanel: React.FC = () => {
             URLs de YouTube (una por línea)
           </label>
           <textarea
-            className="w-full h-24 px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+            className="w-full h-24 px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary whitespace-pre overflow-x-auto"
             placeholder="https://www.youtube.com/watch?v=..."
             value={urls}
             onChange={(e) => setUrls(e.target.value)}

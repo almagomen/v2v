@@ -21,6 +21,7 @@ import {
   Diamond,
   Sparkles,
   Play,
+  Save,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/project-store";
 import { useUIStore } from "../../stores/ui-store";
@@ -76,7 +77,7 @@ interface ExportState {
 }
 
 export const Toolbar: React.FC = () => {
-  const { project } = useProjectStore();
+  const { project, forceSave } = useProjectStore();
   const {
     openModal,
     selectedItems,
@@ -674,10 +675,24 @@ export const Toolbar: React.FC = () => {
               </span>
             </button>
           </TooltipTrigger>
-          <TooltipContent>Back to Home</TooltipContent>
+        <TooltipContent>Back to Home</TooltipContent>
         </Tooltip>
         <div className="h-6 w-px bg-border hidden md:block" />
         <ProjectSwitcher />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={async () => {
+                await forceSave();
+                toast.success("Proyecto guardado", "El estado actual se ha guardado correctamente.");
+              }}
+              className="p-2 ml-1 rounded-lg hover:bg-background-elevated text-text-secondary hover:text-text-primary transition-colors focus:outline-none"
+            >
+              <Save size={16} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Guardar proyecto actual</TooltipContent>
+        </Tooltip>
       </div>
 
       <div className="flex-1 max-w-2xl mx-12 relative group">
