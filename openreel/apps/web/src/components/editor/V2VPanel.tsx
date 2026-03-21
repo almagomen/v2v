@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2 } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2, FolderDown } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
+import { toast } from "../../stores/notification-store";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
 import { useV2VStore } from "../../stores/v2v-store";
@@ -735,36 +736,69 @@ export const V2VPanel: React.FC = () => {
           <>
             <div>
               <label className="text-[10px] text-text-muted block mb-1">Video procesado</label>
-              <select
-                className="w-full px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg"
-                value={selectedVideoIndex}
-                onChange={(e) => handleVideoSelect(parseInt(e.target.value, 10))}
-              >
-                {videos.map((v, i) => (
-                  <option key={i} value={i}>
-                    {v.output_name}
-                  </option>
-                ))}
-              </select>
+              <div className="flex gap-2">
+                <select
+                  className="flex-1 px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg"
+                  value={selectedVideoIndex}
+                  onChange={(e) => handleVideoSelect(parseInt(e.target.value, 10))}
+                >
+                  {videos.map((v, i) => (
+                    <option key={i} value={i}>
+                      {v.output_name}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="icon"
+                  variant="secondary"
+                  title="Re-importar carpeta a Media"
+                  onClick={async () => {
+                    if (!jobId || selectedVideoIndex < 0 || !videos[selectedVideoIndex]) return;
+                    const v = videos[selectedVideoIndex];
+                    const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
+                    
+                    setIsProcessing(true);
+                    try {
+                      const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
+                      const videoMediaName = `${folder}/video.mp4`;
+                      const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
+                      await useProjectStore.getState().importMedia(vfile);
+                      
+                      const audioSegs = v.segments.filter((s) => s.text?.trim().length > 0);
+                      for (const seg of audioSegs) {
+                        const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
+                        const speakerToken = toSafeToken(seg.speaker || "speaker");
+                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                        const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
+                        await useProjectStore.getState().importMedia(wavFile);
+                      }
+                      toast.success("Re-importado con éxito", `Los archivos de "${folder}" se añadieron a Media.`);
+                    } catch (e) {
+                      toast.error("Error importando Media", String(e));
+                    } finally {
+                      setIsProcessing(false);
+                    }
+                  }}
+                  disabled={!jobId || isProcessing}
+                >
+                  {isProcessing ? <Loader2 size={14} className="animate-spin" /> : <FolderDown size={14} />}
+                </Button>
+                <Button size="icon" variant="secondary" onClick={handleShare} title="Compartir" disabled={!jobId || isProcessing}>
+                  <Share2 size={14} />
+                </Button>
+              </div>
             </div>
 
             <div className="flex gap-2">
-              <Button size="sm" variant="secondary" disabled className="flex-1">
-                Se importa a Media automáticamente
-              </Button>
-              <Button size="sm" variant="secondary" onClick={handleShare} className="flex-1">
-                <Share2 size={12} className="mr-1" />
-                Compartir
-              </Button>
               <Button
                 size="sm"
                 variant="secondary"
                 className="flex-1"
                 onClick={handleDownloadZip}
-                disabled={!jobId}
+                disabled={!jobId || isProcessing}
               >
                 <Download size={12} className="mr-1" />
-                ZIP
+                Descargar ZIP
               </Button>
             </div>
 
