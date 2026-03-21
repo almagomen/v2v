@@ -37,7 +37,7 @@ import { useUIStore } from "../../stores/ui-store";
 import { useV2VStore } from "../../stores/v2v-store";
 import type { MediaItem } from "@openreel/core";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
-import { autoSaveManager } from "../../services/auto-save";
+import { autoSaveManager, type AutoSaveMetadata } from "../../services/auto-save";
 import { AspectRatioMatchDialog } from "./dialogs/AspectRatioMatchDialog";
 import { AIGenTab } from "./AIGenTab";
 import { V2VPanel } from "./V2VPanel";
@@ -720,64 +720,8 @@ export const AssetsPanel: React.FC = () => {
         }
       }
 
-      // 3) Pegar al Timeline
-      setImportProgress("Pegando clips al timeline...");
-      const finalState = refreshState();
-      const mediaItemsFinal = finalState.project.mediaLibrary.items;
-
-      const vMedia = mediaItemsFinal.find((m) => m.name === videoMediaName);
-      if (vMedia) {
-        const res = await finalState.addTrack("video");
-        if (res.success) {
-          const updatedProject = refreshState().project;
-          const newTrack =
-            updatedProject.timeline.tracks[updatedProject.timeline.tracks.length - 1];
-          await finalState.addClip(newTrack.id, vMedia.id, 0);
-        }
-      }
-
-      const bySpeaker: Record<string, AudioSegmentItem[]> = {};
-      for (const s of segments) {
-        const token = toSafeToken(s.speaker || "speaker");
-        if (!bySpeaker[token]) bySpeaker[token] = [];
-        bySpeaker[token].push(s);
-      }
-
-      for (const speaker of Object.keys(bySpeaker)) {
-        const res = await finalState.addTrack("audio");
-        if (res.success) {
-          const updatedProject = refreshState().project;
-          const newTrack =
-            updatedProject.timeline.tracks[updatedProject.timeline.tracks.length - 1];
-
-          // Renombrar track
-          useProjectStore.setState((s) => ({
-            project: {
-              ...s.project,
-              timeline: {
-                ...s.project.timeline,
-                tracks: s.project.timeline.tracks.map((t) =>
-                  t.id === newTrack.id ? { ...t, name: `TTS_${speaker}` } : t,
-                ),
-              },
-            },
-          }));
-
-          for (const s of bySpeaker[speaker]) {
-            const wavName = `${activeFolder}/tts_${toSafeToken(
-              s.speaker || "speaker",
-            )}_${String(s.seg).padStart(4, "0")}.wav`;
-            const aMedia = mediaItemsFinal.find((m) => m.name === wavName);
-            if (aMedia) {
-              await finalState.addClip(newTrack.id, aMedia.id, s.start);
-            }
-          }
-        }
-      }
-
-      await useProjectStore.getState().forceSave();
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : "Error al procesar carpeta");
+      // Solo copiar a Media del proyecto destino (sin pegar a timeline).
+    } finally {
       setIsImporting(false);
       setImportProgress("");
     }
@@ -1089,17 +1033,10 @@ export const AssetsPanel: React.FC = () => {
                   </button>
                   <button
                     onClick={() => handleCopyFolderTtsToAnotherProject()}
-                    className="p-1 rounded bg-background-tertiary border border-border hover:border-primary/50 text-text-muted transition-colors"
+                    className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary"
                     title="Copiar TTS a otro proyecto"
                   >
                     <Plus size={14} />
-                  </button>
-                  <button
-                    onClick={handleAddFolderTtsToTimeline}
-                    className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary transition-colors"
-                    title="Pegar en el timeline actual"
-                  >
-                    <ArrowRight size={14} />
                   </button>
                 </div>
               </div>

@@ -4,7 +4,6 @@ import { ScrollArea, Button } from "@openreel/ui";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
 import { useV2VStore } from "../../stores/v2v-store";
-import { autoSaveManager } from "../../services/auto-save";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -211,50 +210,12 @@ export const V2VPanel: React.FC = () => {
           const seq = pos >= 0 ? pos + 1 : v.index + 1;
           const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
 
-          const store = useProjectStore.getState();
-          const saves = await autoSaveManager.checkForRecovery();
-          const existingSave = saves.find((s) => s.projectName === projectTitle);
-          let isNewProject = false;
-
-          // Cambiamos de proyecto activo solo si no estamos viendo éste ya
-          if (store.project.name !== projectTitle) {
-            await store.forceSave(); // Guardar avance del actual
-
-            if (existingSave) {
-              const recovered = await autoSaveManager.recover(existingSave.id);
-              if (recovered) {
-                store.loadProject(recovered);
-              } else {
-                store.createNewProject(projectTitle, {
-                  width: baseProjectSettings.width,
-                  height: baseProjectSettings.height,
-                  frameRate: baseProjectSettings.frameRate,
-                });
-                isNewProject = true;
-              }
-            } else {
-              store.createNewProject(projectTitle, {
-                width: baseProjectSettings.width,
-                height: baseProjectSettings.height,
-                frameRate: baseProjectSettings.frameRate,
-              });
-              isNewProject = true;
-            }
-          } else {
-            // Ya es el activo. Si media library está vacío, asumimos que es nuevo (recién creado en el for loop anterior).
-            isNewProject = !existingSave && store.project.mediaLibrary.items.length === 0;
-          }
-
-          const activeProject = useProjectStore.getState().project;
-          const folderExists = activeProject.mediaLibrary.items.some((m) => m.name.startsWith(folder + "/"));
-
-          // Si el proyecto ya existía y la carpeta sigue ahí entera, omitimos
-          if (!isNewProject && folderExists) {
-            setRegenStatus(`Carpeta ${folder} ya existe, omitiendo.`);
-            if (urlForLog) appendUrlLog(urlForLog, `⏩ Ya existe en ${projectTitle}`);
-            setImportStatus(key, "done");
-            continue;
-          }
+          // Un proyecto nuevo por cada video.
+          useProjectStore.getState().createNewProject(projectTitle, {
+            width: baseProjectSettings.width,
+            height: baseProjectSettings.height,
+            frameRate: baseProjectSettings.frameRate,
+          });
 
           setRegenStatus(`Importando a Media (${projectTitle}): ${folder}...`);
           if (urlForLog) appendUrlLog(urlForLog, `🚀 Importando a Media...`);
@@ -316,15 +277,7 @@ export const V2VPanel: React.FC = () => {
 
           if (useV2VStore.getState().importStatusByKey[key] !== "error") {
             setImportStatus(key, "done");
-
-            await useProjectStore.getState().forceSave();
-
-            if (!isNewProject) {
-              setRegenStatus(`Completado (Solo en Media): ${folder}`);
-              if (urlForLog) appendUrlLog(urlForLog, `✅ Importado solo a Media`);
-              useV2VStore.getState().removeFolderRef(folder);
-            } else {
-              // Auto-import al timeline en el proyecto recién creado.
+            // Auto-import al timeline en el proyecto recién creado.
             // (Video en pista de video + audios agrupados por speaker en pistas de audio.)
             const { addTrack, addClip } = useProjectStore.getState();
             const currentProject = useProjectStore.getState().project;
@@ -407,13 +360,13 @@ export const V2VPanel: React.FC = () => {
               }
             }
 
-            setRegenStatus(`Importado y pegado al timeline: ${folder}`);
-            if (urlForLog) appendUrlLog(urlForLog, `✅ Importación completa al timeline`);
-            useV2VStore.getState().removeFolderRef(folder);
-            
+            // Fuerza guardado para que cada URL quede como proyecto recuperable.
             await useProjectStore.getState().forceSave();
-            } // end else (isNewProject)
-          } // end if importStatus !== "error"
+
+            setRegenStatus(`Importado y pegado al timeline: ${folder}`);
+            if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
+            // Referencia para el botón "Añadir a la timeline" desde la carpeta.
+            } // end if importStatus !== "error"
           } // end for
         } finally {
           importingRef.current = false;
