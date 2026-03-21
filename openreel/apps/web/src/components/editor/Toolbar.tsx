@@ -41,6 +41,7 @@ import { ExportDialog } from "./ExportDialog";
 import { ScreenRecorder } from "./ScreenRecorder";
 import { HistoryPanel } from "./inspector/HistoryPanel";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+import { autoSaveManager } from "../../services/auto-save";
 import { toast } from "../../stores/notification-store";
 import { useAnalytics, AnalyticsEvents } from "../../hooks/useAnalytics";
 import { startTour, ONBOARDING_KEY, startMoGraphTour, MOGRAPH_TOUR_KEY } from "./tour";
@@ -93,8 +94,20 @@ export const Toolbar: React.FC = () => {
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
   const [isRecorderOpen, setIsRecorderOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const { importMedia } = useProjectStore();
   const { track } = useAnalytics();
+
+  useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const handleSave = () => {
+      setIsSaving(true);
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => setIsSaving(false), 1500);
+    };
+    autoSaveManager.on("saved", handleSave);
+    return () => autoSaveManager.off("saved", handleSave);
+  }, []);
 
   const handleStartTour = useCallback(() => {
     localStorage.removeItem(ONBOARDING_KEY);
@@ -683,12 +696,14 @@ export const Toolbar: React.FC = () => {
           <TooltipTrigger asChild>
             <button
               onClick={async () => {
+                setIsSaving(true);
                 await forceSave();
                 toast.success("Proyecto guardado", "El estado actual se ha guardado correctamente.");
+                setTimeout(() => setIsSaving(false), 1500);
               }}
               className="p-2 ml-1 rounded-lg hover:bg-background-elevated text-text-secondary hover:text-text-primary transition-colors focus:outline-none"
             >
-              <Save size={16} />
+              {isSaving ? <Loader2 size={16} className="animate-spin text-primary" /> : <Save size={16} />}
             </button>
           </TooltipTrigger>
           <TooltipContent>Guardar proyecto actual</TooltipContent>
