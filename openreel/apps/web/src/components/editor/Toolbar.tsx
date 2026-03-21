@@ -698,7 +698,6 @@ export const Toolbar: React.FC = () => {
               onClick={async () => {
                 setIsSaving(true);
                 await forceSave();
-                toast.success("Proyecto guardado", "El estado actual se ha guardado correctamente.");
                 setTimeout(() => setIsSaving(false), 1500);
               }}
               className="p-2 ml-1 rounded-lg hover:bg-background-elevated text-text-secondary hover:text-text-primary transition-colors focus:outline-none"
