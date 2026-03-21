@@ -738,7 +738,7 @@ export const V2VPanel: React.FC = () => {
               <label className="text-[10px] text-text-muted block mb-1">Video procesado</label>
               <div className="flex gap-2">
                 <select
-                  className="flex-1 px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg"
+                  className="flex-1 min-w-0 truncate px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg"
                   value={selectedVideoIndex}
                   onChange={(e) => handleVideoSelect(parseInt(e.target.value, 10))}
                 >
