@@ -451,10 +451,7 @@ export const V2VPanel: React.FC = () => {
       return;
     }
     const signature = normalized.map((u) => encodeURIComponent(u)).join("|");
-    const prevSignature = useV2VStore.getState().lastUrlsSignature;
-    const keepImports = Boolean(prevSignature && prevSignature === signature);
-
-    useV2VStore.getState().clearJobRunState({ keepImports });
+    useV2VStore.getState().clearJobRunState({ keepImports: false });
     useV2VStore.setState({ lastUrlsSignature: signature });
     setError(null);
     setLog("");
