@@ -216,7 +216,15 @@ export const V2VPanel: React.FC = () => {
 
           await autoSaveManager.initialize();
           const saves = await autoSaveManager.checkForRecovery();
-          const existingSave = saves
+          const uniqueSaves = saves.reduce((acc, save) => {
+            const existing = acc.find((s) => s.projectId === save.projectId);
+            if (!existing || save.timestamp > existing.timestamp) {
+              return [...acc.filter((s) => s.projectId !== save.projectId), save];
+            }
+            return acc;
+          }, [] as typeof saves);
+
+          const existingSave = uniqueSaves
             .filter((s) => s.projectName === projectTitle)
             .sort((a, b) => b.timestamp - a.timestamp)[0];
 
