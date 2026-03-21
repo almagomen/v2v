@@ -5,6 +5,7 @@ import { toast } from "../../stores/notification-store";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
 import { useV2VStore } from "../../stores/v2v-store";
+import { autoSaveManager } from "../../services/auto-save";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -757,12 +758,58 @@ export const V2VPanel: React.FC = () => {
                     const v = videos[selectedVideoIndex];
                     const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
                     
+                    const currentItems = useV2VStore.getState().urlItems;
+                    const pos = currentItems.findIndex(
+                      (it) => it.url === v.url && it.index === v.index,
+                    );
+                    const seq = pos >= 0 ? pos + 1 : v.index + 1;
+                    const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
+                    
                     setIsProcessing(true);
                     try {
+                      const projectStore = useProjectStore.getState();
+                      let targetProjectLoaded = false;
+                      
+                      if (projectStore.project.name === projectTitle) {
+                        targetProjectLoaded = true;
+                      } else {
+                        await autoSaveManager.initialize();
+                        const saves = await autoSaveManager.checkForRecovery();
+                        const uniqueProjects = saves.reduce((acc, save) => {
+                          const existing = acc.find((s) => s.projectId === save.projectId);
+                          if (!existing || save.timestamp > existing.timestamp) {
+                            return [...acc.filter((s) => s.projectId !== save.projectId), save];
+                          }
+                          return acc;
+                        }, [] as typeof saves);
+                        
+                        const targetSave = uniqueProjects.find((s) => s.projectName === projectTitle);
+                        if (targetSave) {
+                          await projectStore.recoverFromAutoSave(targetSave.id);
+                          targetProjectLoaded = true;
+                        } else {
+                          const baseProjectSettings = projectStore.project.settings;
+                          projectStore.createNewProject(projectTitle, {
+                            width: baseProjectSettings.width,
+                            height: baseProjectSettings.height,
+                            frameRate: baseProjectSettings.frameRate,
+                          });
+                          targetProjectLoaded = true;
+                        }
+                      }
+                      
+                      if (!targetProjectLoaded) {
+                        toast.error("Error", "No se pudo cargar el proyecto destino.");
+                        return;
+                      }
+
+                      // Estado fresco tras posible cambio de proyecto
+                      const freshStore = useProjectStore.getState();
+                      
                       const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
                       const videoMediaName = `${folder}/video.mp4`;
                       const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
-                      await useProjectStore.getState().importMedia(vfile);
+                      await freshStore.importMedia(vfile);
                       
                       const audioSegs = v.segments.filter((s) => s.text?.trim().length > 0);
                       for (const seg of audioSegs) {
@@ -770,9 +817,12 @@ export const V2VPanel: React.FC = () => {
                         const speakerToken = toSafeToken(seg.speaker || "speaker");
                         const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
                         const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-                        await useProjectStore.getState().importMedia(wavFile);
+                        await freshStore.importMedia(wavFile);
                       }
-                      toast.success("Re-importado con éxito", `Los archivos de "${folder}" se añadieron a Media.`);
+                      
+                      await freshStore.forceSave();
+                      
+                      toast.success("Re-importado con éxito", `Los archivos de "${folder}" se añadieron al proyecto "${projectTitle}".`);
                     } catch (e) {
                       toast.error("Error importando Media", String(e));
                     } finally {
