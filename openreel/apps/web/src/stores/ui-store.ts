@@ -7,8 +7,7 @@ export type PanelId =
   | "effects"
   | "audioMixer"
   | "colorGrading"
-  | "subtitles"
-  | "v2v";
+  | "subtitles";
 
 export type SelectionType =
   | "clip"
@@ -183,7 +182,6 @@ const DEFAULT_PANELS: Record<PanelId, PanelState> = {
   audioMixer: { visible: false, width: 300 },
   colorGrading: { visible: false, width: 400 },
   subtitles: { visible: false, width: 300 },
-  v2v: { visible: false, width: 350 },
 };
 
 export const useUIStore = create<UIState>()(

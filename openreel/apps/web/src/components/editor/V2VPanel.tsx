@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Loader2, AlertCircle, RefreshCw, Download, Share2, FolderDown } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2, FolderDown } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
@@ -107,7 +107,6 @@ export const V2VPanel: React.FC = () => {
     log,
     setLog,
     setProgress,
-    progress,
     error,
     setError,
     videos,
@@ -124,6 +123,7 @@ export const V2VPanel: React.FC = () => {
     setRegenStatus,
     shareUrl,
     setShareUrl,
+    importStatusByKey,
     setImportStatus,
     urlItems,
     setUrlItems,
@@ -140,8 +140,6 @@ export const V2VPanel: React.FC = () => {
   useEffect(() => {
     v2vApi.getSpeakers().then(setSpeakers);
   }, []);
-
-
 
   useEffect(() => {
     if (!jobId || !isProcessing) return;
@@ -214,23 +212,13 @@ export const V2VPanel: React.FC = () => {
           const seq = pos >= 0 ? pos + 1 : v.index + 1;
           const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
 
-          // Buscamos si el proyecto ya existe en IndexedDB
-          await autoSaveManager.initialize();
-          const saves = await autoSaveManager.checkForRecovery();
-          const targetSave = saves.find(s => s.projectName === projectTitle);
-          let targetId = targetSave?.projectId || targetSave?.id;
+          // Un proyecto nuevo por cada video.
+          useProjectStore.getState().createNewProject(projectTitle, {
+            width: baseProjectSettings.width,
+            height: baseProjectSettings.height,
+            frameRate: baseProjectSettings.frameRate,
+          });
 
-          if (!targetId) {
-            // Un proyecto nuevo por cada video (SILENCIOSO)
-            targetId = await useProjectStore.getState().createProjectSilent(projectTitle, {
-              width: baseProjectSettings.width,
-              height: baseProjectSettings.height,
-              frameRate: baseProjectSettings.frameRate,
-            });
-          }
-
-          const isTargetActive = useProjectStore.getState().project.id === targetId || useProjectStore.getState().project.name === projectTitle;
-          
           setRegenStatus(`Importando a Media (${projectTitle}): ${folder}...`);
           if (urlForLog) appendUrlLog(urlForLog, `🚀 Importando a Media...`);
 
@@ -246,19 +234,16 @@ export const V2VPanel: React.FC = () => {
             if (urlForLog) appendUrlLog(urlForLog, `✅ Video importado`);
           } else {
             const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
-            
-            const vimport = isTargetActive 
-              ? await useProjectStore.getState().importMedia(vfile)
-              : await useProjectStore.getState().importMediaToProjectSilent(targetId!, vfile);
-
+            // Usamos getState().importMedia para garantizar que importa al proyecto activo actual.
+            const vimport = await useProjectStore.getState().importMedia(vfile);
             if (!vimport.success) {
               setRegenStatus(
-                (vimport.error as any)?.message || `Error importando video: ${folder}`
+                vimport.error?.message || `Error importando video: ${folder}`,
               );
               if (urlForLog)
                 appendUrlLog(
                   urlForLog,
-                  `❌ ${(vimport.error as any)?.message || "Error importando video"}`,
+                  `❌ ${vimport.error?.message || "Error importando video"}`,
                 );
               setImportStatus(key, "error");
               continue;
@@ -278,16 +263,13 @@ export const V2VPanel: React.FC = () => {
             }
 
             const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-            
-            const wres = isTargetActive
-              ? await useProjectStore.getState().importMedia(wavFile)
-              : await useProjectStore.getState().importMediaToProjectSilent(targetId!, wavFile);
-
+            // Usamos getState().importMedia para garantizar que importa al proyecto activo actual.
+            const wres = await useProjectStore.getState().importMedia(wavFile);
             if (!wres.success) {
               if (urlForLog)
                 appendUrlLog(
                   urlForLog,
-                  `❌ WAV seg ${seg.seg}: ${(wres.error as any)?.message || "falló"}`,
+                  `❌ WAV seg ${seg.seg}: ${wres.error?.message || "falló"}`,
                 );
               setImportStatus(key, "error");
               break;
@@ -295,10 +277,10 @@ export const V2VPanel: React.FC = () => {
             existingNames.add(wavName);
           }
 
-          if (useV2VStore.getState().importStatusByKey[key] !== "error" && isTargetActive) {
+          if (useV2VStore.getState().importStatusByKey[key] !== "error") {
             setImportStatus(key, "done");
-            // Auto-import al timeline SOLO SI ES EL PROYECTO SELECCIONADO.
-            // (Si no es el activo, no tocamos el timeline para no interrumpir al usuario)
+            // Auto-import al timeline en el proyecto recién creado.
+            // (Video en pista de video + audios agrupados por speaker en pistas de audio.)
             const { addTrack, addClip } = useProjectStore.getState();
             const currentProject = useProjectStore.getState().project;
 
@@ -550,312 +532,444 @@ export const V2VPanel: React.FC = () => {
   }, [jobId]);
 
   return (
-    <div className="h-full flex flex-col bg-background-secondary min-w-[300px]">
-      <ScrollArea className="flex-1">
-        <div className={`p-4 space-y-6 transition-opacity duration-300 ${isProcessing ? "opacity-60 pointer-events-none select-none" : ""}`}>
-          <div>
-            <label className="text-[10px] text-text-muted block mb-1">
-              URLs de YouTube (una por línea)
-            </label>
-            <textarea
-              className="w-full h-24 px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary whitespace-pre overflow-x-auto"
-              placeholder="https://www.youtube.com/watch?v=..."
-              value={urls}
-              onChange={(e) => setUrls(e.target.value)}
+    <ScrollArea className="flex-1 w-full">
+      <div className="p-4 space-y-4 min-w-0">
+        <div className="flex items-center gap-2">
+          <Youtube size={20} className="text-red-500" />
+          <h2 className="text-sm font-semibold text-text-primary">
+            Video2Video – Traducción y doblaje
+          </h2>
+        </div>
+
+        <div>
+          <label className="text-[10px] text-text-muted block mb-1">
+            URLs de YouTube (una por línea)
+          </label>
+          <textarea
+            className="w-full h-24 px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary whitespace-pre overflow-x-auto"
+            placeholder="https://www.youtube.com/watch?v=..."
+            value={urls}
+            onChange={(e) => setUrls(e.target.value)}
+            disabled={isProcessing}
+          />
+        </div>
+
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label className="text-[10px] text-text-muted block mb-1">Idioma</label>
+            <select
+              className="w-full px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
+              value={translateLang}
+              onChange={(e) => setTranslateLang(e.target.value)}
               disabled={isProcessing}
-            />
+            >
+              {TRANSLATE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
           </div>
-
-          <div className="flex gap-2">
-            <div className="flex-1">
-              <label className="text-[10px] text-text-muted block mb-1">Idioma</label>
-              <select
-                className="w-full px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
-                value={translateLang}
-                onChange={(e) => setTranslateLang(e.target.value)}
-                disabled={isProcessing}
-              >
-                {TRANSLATE_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
+          <div className="flex-1">
+            <label className="text-[10px] text-text-muted block mb-1">Voz</label>
+            <select
+              className="w-full px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
+              value={speaker}
+              onChange={(e) => setSpeaker(e.target.value)}
+              disabled={isProcessing}
+            >
+              {speakers.length > 0 ? (
+                speakers.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
                   </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex-1">
-              <label className="text-[10px] text-text-muted block mb-1">Voz</label>
-              <select
-                className="w-full px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
-                value={speaker}
-                onChange={(e) => setSpeaker(e.target.value)}
-                disabled={isProcessing}
-              >
-                {speakers.length > 0 ? (
-                  speakers.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))
-                ) : (
-                  <>
-                    <option value="mrbeast_lmnt">mrbeast_lmnt</option>
-                    <option value="openai_shimmer">openai_shimmer</option>
-                    <option value="dionisio_schuyler">Dionisio Schuyler</option>
-                  </>
-                )}
-              </select>
+                ))
+              ) : (
+                <>
+                  <option value="mrbeast_lmnt">mrbeast_lmnt</option>
+                  <option value="Dionisio Schuyler">Dionisio Schuyler</option>
+                </>
+              )}
+            </select>
+          </div>
+        </div>
+
+        <Button
+          onClick={handleProcess}
+          disabled={isProcessing || Object.values(importStatusByKey).some((s) => s === "in_progress")}
+          className="w-full"
+        >
+          {(() => {
+            const hasImportsInFlight = Object.values(importStatusByKey).some(
+              (s) => s === "in_progress",
+            );
+
+            const order: Record<string, number> = {
+              downloading: 1,
+              cached: 2,
+              transcribing: 3,
+              tts: 4,
+              audio_ready: 5,
+              ready: 6,
+              done: 100,
+              error: 101,
+              pending: 1000,
+            };
+
+            // Si hay varias URLs, mostramos el "estado más activo" (menor prioridad)
+            // entre las que no estén done/error/pending.
+            const activeCandidates = urlItems
+              .filter((it) => it.status && it.status !== "done" && it.status !== "error" && it.status !== "pending");
+
+            const importingCandidates = hasImportsInFlight
+              ? urlItems.filter(
+                  (it) =>
+                    typeof it.index === "number" &&
+                    importStatusByKey[importKeyFor(it.url, it.index)] === "in_progress",
+                )
+              : [];
+
+            const activeUrlState =
+              importingCandidates.length > 0
+                ? importingCandidates[0]
+                : activeCandidates.length > 0
+                  ? activeCandidates.sort(
+                      (a, b) => (order[a.status] ?? 999) - (order[b.status] ?? 999),
+                    )[0]
+                  : null;
+
+            const activeStatus = activeUrlState?.status || jobPhase;
+            const tagText =
+              hasImportsInFlight
+                ? "Importando a Media"
+                : activeStatus && activeStatus !== "idle"
+                  ? STATUS_LABEL[activeStatus] || activeStatus
+                  : "Empezar";
+
+            const activePos = activeUrlState
+              ? urlItems.findIndex(
+                  (it) => it.url === activeUrlState.url && it.index === activeUrlState.index,
+                )
+              : -1;
+            const x = urlItems.length || 1;
+            const prefix = activePos >= 0 ? `[${activePos + 1}/${x}] ` : "";
+            const tag = `${prefix}${tagText}`;
+
+            const showSpin = isProcessing || hasImportsInFlight;
+            return (
+              <>
+                {showSpin && <Loader2 size={14} className="animate-spin mr-2" />}
+                {tag}
+              </>
+            );
+          })()}
+        </Button>
+
+        {error && (
+          <div className="flex items-center gap-2 p-2 rounded-lg bg-red-500/10 text-red-500 text-xs">
+            <AlertCircle size={14} />
+            {error}
+          </div>
+        )}
+
+        {urlItems.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-[10px] text-text-muted">Estado por URL</p>
+            <div className="max-h-32 overflow-y-auto border border-border rounded-lg">
+              <table className="w-full text-[10px]">
+                <thead className="bg-background-tertiary sticky top-0">
+                  <tr>
+                    <th className="px-2 py-1 text-left">#</th>
+                    <th className="px-2 py-1 text-left">Título</th>
+                    <th className="px-2 py-1 text-left">tag/state</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {urlItems.map((it, i) => (
+                    <tr key={it.url} className="border-t border-border">
+                      <td className="px-2 py-1 tabular-nums">{i + 1}</td>
+                      <td className="px-2 py-1 max-w-[220px] truncate" title={it.url}>
+                        {it.output_name || it.url}
+                        {typeof it.index === "number" &&
+                          importStatusByKey[importKeyFor(it.url, it.index)] === "done" && (
+                            <span className="ml-1 text-primary">(importado)</span>
+                          )}
+                      </td>
+                      <td className="px-2 py-1">
+                        <span
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded ${statusToBadgeClass(it.status)}`}
+                        >
+                          {STATUS_LABEL[it.status] || it.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
+        )}
 
-          <Button
-            className="w-full"
-            onClick={handleProcess}
-            disabled={!urls.trim() || isProcessing}
-          >
-            {isProcessing ? (
-              <>
-                <Loader2 size={16} className="mr-2 animate-spin" />
-                {jobPhase === "pending"
-                  ? "Enviando..."
-                  : `Procesando (${jobPhase}): ${Math.round(progress)}%`}
-              </>
-            ) : (
-              "Iniciar Proceso V2V"
-            )}
-          </Button>
+        {log && (
+          <div className="space-y-1">
+            <p className="text-[10px] text-text-muted">Logs</p>
+            <pre className="p-2 rounded-lg bg-background-tertiary font-mono text-[10px] max-h-32 overflow-y-auto overflow-x-auto whitespace-pre">
+              {(() => {
+                let out = log || "";
 
-          {isProcessing && (
-            <div className="space-y-1">
-              <div className="h-1 bg-background-tertiary rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-primary transition-all duration-300"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-              <p className="text-[9px] text-text-muted text-right">
-                {Math.round(progress)}% completado
-              </p>
-            </div>
-          )}
+                // Antes de la primera tanda de segmentos TTS.
+                // (Sin tokens [STATE:...] en pantalla)
+                out = out.replace(/^(\s*)0\. Fast:/gm, "$1⚡ TTS:\n$10. Fast:");
 
-          {error && (
-            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-start gap-2 text-red-400">
-              <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
-              <p className="text-xs">{error}</p>
-            </div>
-          )}
+                // Import-only: mostramos lo que se registra en `urlLogs` (sin [STATE:...]).
+                const importText = urlItems
+                  .map((it) => (it.url ? urlLogs[it.url] || "" : ""))
+                  .filter(Boolean)
+                  .join("\n");
 
-          {videos.length > 0 && (
-            <div className="space-y-4 border-t border-border pt-4">
-              <div className="space-y-1">
-                <label className="text-[10px] text-text-muted block">Video Procesado</label>
-                <div className="flex gap-2">
-                  <select
-                    className="flex-1 min-w-0 truncate px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg"
-                    value={selectedVideoIndex}
-                    onChange={(e) => handleVideoSelect(parseInt(e.target.value, 10))}
-                  >
-                    {videos.map((v, i) => (
-                      <option key={i} value={i}>
-                        {v.output_name}
-                      </option>
-                    ))}
-                  </select>
-                  <Button
-                    size="icon"
-                    variant="secondary"
-                    className="h-8 w-8"
-                    title="Re-importar a Media"
-                    onClick={async () => {
-                      const v = videos[selectedVideoIndex];
-                      if (!v || !jobId) return;
-                      setIsProcessing(true);
-                      setRegenStatus("Re-importando archivos...");
-                      try {
-                        const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
-                        const projectStore = useProjectStore.getState();
-                        const currentItems = useV2VStore.getState().urlItems;
-                        const pos = currentItems.findIndex(it => it.url === v.url && it.index === v.index);
-                        const seq = pos >= 0 ? pos + 1 : v.index + 1;
-                        const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
-                        
+                return `${out}${importText ? `\n${importText}` : ""}`;
+              })()}
+            </pre>
+          </div>
+        )}
+
+        {videos.length > 0 && (
+          <>
+            <div>
+              <label className="text-[10px] text-text-muted block mb-1">Video procesado</label>
+              <div className="flex gap-2">
+                <select
+                  className="flex-1 min-w-0 truncate px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg"
+                  value={selectedVideoIndex}
+                  onChange={(e) => handleVideoSelect(parseInt(e.target.value, 10))}
+                >
+                  {videos.map((v, i) => (
+                    <option key={i} value={i}>
+                      {v.output_name}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="icon"
+                  variant="secondary"
+                  title="Re-importar carpeta a Media"
+                  onClick={async () => {
+                    if (!jobId || selectedVideoIndex < 0 || !videos[selectedVideoIndex]) return;
+                    const v = videos[selectedVideoIndex];
+                    const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
+                    
+                    const currentItems = useV2VStore.getState().urlItems;
+                    const pos = currentItems.findIndex(
+                      (it) => it.url === v.url && it.index === v.index,
+                    );
+                    const seq = pos >= 0 ? pos + 1 : v.index + 1;
+                    const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
+                    
+                    setIsProcessing(true);
+                    try {
+                      let projectStore = useProjectStore.getState();
+                      let targetProjectLoaded = false;
+                      
+                      if (projectStore.project.name === projectTitle) {
+                        targetProjectLoaded = true;
+                      } else {
                         await autoSaveManager.initialize();
                         const saves = await autoSaveManager.checkForRecovery();
-                        const targetSave = saves.find(s => s.projectName === projectTitle);
-                        let targetId = targetSave?.projectId || targetSave?.id;
-
-                        if (!targetId) {
-                          targetId = await projectStore.createProjectSilent(projectTitle, projectStore.project.settings);
-                        }
-
-                        const isTargetActive = projectStore.project.id === targetId || projectStore.project.name === projectTitle;
+                        const uniqueProjects = saves.reduce((acc, save) => {
+                          const existing = acc.find((s) => s.projectId === save.projectId);
+                          if (!existing || save.timestamp > existing.timestamp) {
+                            return [...acc.filter((s) => s.projectId !== save.projectId), save];
+                          }
+                          return acc;
+                        }, [] as typeof saves);
                         
-                        // Video
-                        const videoMediaName = `${folder}/video.mp4`;
+                        const targetSave = uniqueProjects.find((s) => s.projectName === projectTitle);
+                        if (targetSave) {
+                          await projectStore.recoverFromAutoSave(targetSave.id);
+                          targetProjectLoaded = true;
+                        } else {
+                          const baseProjectSettings = projectStore.project.settings;
+                          projectStore.createNewProject(projectTitle, {
+                            width: baseProjectSettings.width,
+                            height: baseProjectSettings.height,
+                            frameRate: baseProjectSettings.frameRate,
+                          });
+                          targetProjectLoaded = true;
+                        }
+                      }
+                      
+                      if (!targetProjectLoaded) {
+                        toast.error("Error", "No se pudo cargar el proyecto destino.");
+                        return;
+                      }
+
+                      // Obtenemos el store fresco tras el posible cambio de proyecto
+                      let freshStore = useProjectStore.getState();
+                      
+                      // 1) Video
+                      const videoMediaName = `${folder}/video.mp4`;
+                      const videoExists = freshStore.project.mediaLibrary.items.some(m => m.name === videoMediaName);
+                      
+                      if (!videoExists) {
                         const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
                         const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
+                        await freshStore.importMedia(vfile);
+                        // Refresh store reference after import
+                        freshStore = useProjectStore.getState();
+                      }
+                      
+                      // 2) Audios por segmento
+                      const audioSegs = v.segments.filter((s) => s.text?.trim().length > 0);
+                      for (const seg of audioSegs) {
+                        const speakerToken = toSafeToken(seg.speaker || "speaker");
+                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
                         
-                        if (isTargetActive) await projectStore.importMedia(vfile);
-                        else await projectStore.importMediaToProjectSilent(targetId, vfile);
-
-                        // Audios
-                        const audioSegs = v.segments.filter((s) => s.text?.trim().length > 0);
-                        for (const seg of audioSegs) {
-                          const speakerToken = toSafeToken(seg.speaker || "speaker");
-                          const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                        // Solo importamos si no existe ya
+                        if (!freshStore.project.mediaLibrary.items.some(m => m.name === wavName)) {
                           const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
                           const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-                          
-                          if (isTargetActive) await projectStore.importMedia(wavFile);
-                          else await projectStore.importMediaToProjectSilent(targetId, wavFile);
+                          await freshStore.importMedia(wavFile);
+                          // Refresh store reference after each import to see new items
+                          freshStore = useProjectStore.getState();
                         }
-                        
-                        toast.success("Importado", `Archivos en proyecto "${projectTitle}"`);
-                      } catch (e) {
-                        toast.error("Error", String(e));
-                      } finally {
-                        setIsProcessing(false);
-                        setRegenStatus("");
                       }
-                    }}
-                    disabled={isProcessing}
-                  >
-                    {isProcessing ? <Loader2 size={14} className="animate-spin" /> : <FolderDown size={14} />}
-                  </Button>
-                  <Button size="icon" variant="secondary" className="h-8 w-8" onClick={handleShare} title="Compartir" disabled={isProcessing}>
-                    <Share2 size={14} />
-                  </Button>
-                </div>
+                      
+                      await freshStore.forceSave();
+                      
+                      toast.success("Re-importación completa", `Archivos en proyecto "${projectTitle}".`);
+                    } catch (e) {
+                      toast.error("Error al re-importar", String(e));
+                    } finally {
+                      setIsProcessing(false);
+                    }
+                  }}
+                  disabled={!jobId || isProcessing}
+                >
+                  {isProcessing ? <Loader2 size={14} className="animate-spin" /> : <FolderDown size={14} />}
+                </Button>
+                <Button size="icon" variant="secondary" onClick={handleShare} title="Compartir" disabled={!jobId || isProcessing}>
+                  <Share2 size={14} />
+                </Button>
               </div>
+            </div>
 
+            <div className="flex gap-2">
               <Button
                 size="sm"
                 variant="secondary"
-                className="w-full"
+                className="flex-1"
                 onClick={handleDownloadZip}
-                disabled={isProcessing}
+                disabled={!jobId || isProcessing}
               >
-                <Download size={14} className="mr-2" />
+                <Download size={12} className="mr-1" />
                 Descargar ZIP
               </Button>
+            </div>
 
-              {shareUrl && (
-                <div className="p-3 bg-background-tertiary rounded-lg border border-border">
-                  <p className="text-[10px] text-text-muted mb-1">Enlace para compartir:</p>
-                  <a href={shareUrl} target="_blank" rel="noreferrer" className="text-xs text-primary underline truncate block">
-                    {shareUrl}
-                  </a>
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <p className="text-[10px] text-text-muted">Segmentos (edita y regenera)</p>
-                <div className="max-h-60 overflow-y-auto border border-border rounded-lg bg-background-tertiary">
-                  <table className="w-full text-[10px] border-collapse">
-                    <thead className="bg-background-elevated sticky top-0 z-10">
-                      <tr>
-                        <th className="px-2 py-1.5 text-left font-medium border-b border-border w-10">#</th>
-                        <th className="px-2 py-1.5 text-left font-medium border-b border-border w-16">Inicio</th>
-                        <th className="px-2 py-1.5 text-left font-medium border-b border-border w-16">Final</th>
-                        <th className="px-2 py-1.5 text-left font-medium border-b border-border">Texto</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {segments.map((seg, i) => (
-                        <tr
-                          key={i}
-                          onClick={() => setSelectedRowIndex(i)}
-                          className={`cursor-pointer hover:bg-background-elevated transition-colors ${selectedRowIndex === i ? "bg-primary/10" : "border-t border-border/50"}`}
-                        >
-                          <td className="px-2 py-1.5 text-text-muted">{seg.seg}</td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              type="number"
-                              step="0.01"
-                              className="w-full bg-transparent border-none p-0 focus:ring-0"
-                              value={seg.start}
-                              onChange={(e) => handleSegmentEdit(i, "start", parseFloat(e.target.value) || 0)}
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              type="number"
-                              step="0.01"
-                              className="w-full bg-transparent border-none p-0 focus:ring-0"
-                              value={seg.end}
-                              onChange={(e) => handleSegmentEdit(i, "end", parseFloat(e.target.value) || 0)}
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              type="text"
-                              className="w-full bg-transparent border-none p-0 focus:ring-0 truncate"
-                              value={seg.text}
-                              onChange={(e) => handleSegmentEdit(i, "text", e.target.value)}
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="flex-1 text-[11px]"
-                  onClick={handleRegenerateSegment}
-                  disabled={selectedRowIndex === null || isProcessing}
+            {shareUrl && (
+              <div className="p-2 rounded bg-background-tertiary">
+                <p className="text-[10px] text-text-muted mb-1">Enlace Catbox:</p>
+                <a
+                  href={shareUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-primary break-all"
                 >
-                  <RefreshCw size={12} className="mr-1.5" />
-                  Regenerar Segmento
-                </Button>
-                <Button size="sm" className="flex-1 text-[11px]" onClick={handleRegenerateVideo} disabled={isProcessing}>
-                  Aplicar cambios y renderizar
-                </Button>
+                  {shareUrl}
+                </a>
               </div>
+            )}
 
-              {regenStatus && (
-                <p className={`text-[10px] text-center ${regenStatus.toLowerCase().includes("error") ? "text-red-400" : "text-text-muted animate-pulse"}`}>
-                  {regenStatus}
-                </p>
-              )}
-            </div>
-          )}
-
-          {urlItems.length > 0 && (
-            <div className="space-y-2 border-t border-border pt-4">
-              <p className="text-[10px] text-text-muted">Estado del Proceso</p>
-              <div className="bg-black/20 rounded-lg p-3 font-mono text-[10px] max-h-48 overflow-y-auto space-y-2">
-                {urlItems.map((item, i) => (
-                  <div key={i} className="flex flex-col gap-1 pb-2 border-b border-white/5 last:border-0 last:pb-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-white truncate flex-1" title={item.url}>
-                        {i + 1}. {item.output_name || item.url}
-                      </span>
-                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase whitespace-nowrap ${statusToBadgeClass(item.status)}`}>
-                        {STATUS_LABEL[item.status] || item.status}
-                      </span>
-                    </div>
-                    {urlLogs[item.url] && urlLogs[item.url].split("\n").slice(-2).map((msg, j) => (
-                      <p key={j} className="text-text-muted/60 pl-3 border-l border-white/10 italic text-[9px]">
-                        {msg}
-                      </p>
+            <div>
+              <p className="text-[10px] text-text-muted mb-2">Segmentos (edita y regenera)</p>
+              <div className="max-h-48 overflow-y-auto border border-border rounded-lg">
+                <table className="w-full text-[10px]">
+                  <thead className="bg-background-tertiary sticky top-0">
+                    <tr>
+                      <th className="px-2 py-1 text-left">#</th>
+                      <th className="px-2 py-1 text-left">Inicio</th>
+                      <th className="px-2 py-1 text-left">Final</th>
+                      <th className="px-2 py-1 text-left">Texto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {segments.map((seg, i) => (
+                      <tr
+                        key={i}
+                        onClick={() => setSelectedRowIndex(i)}
+                        className={`cursor-pointer border-t border-border hover:bg-background-tertiary ${
+                          selectedRowIndex === i ? "bg-primary/10" : ""
+                        }`}
+                      >
+                        <td className="px-2 py-1">{seg.seg}</td>
+                        <td className="px-2 py-1">
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={seg.start}
+                            onChange={(e) =>
+                              handleSegmentEdit(i, "start", parseFloat(e.target.value) || 0)
+                            }
+                            className="w-14 bg-transparent border-none p-0 text-inherit"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={seg.end}
+                            onChange={(e) =>
+                              handleSegmentEdit(i, "end", parseFloat(e.target.value) || 0)
+                            }
+                            className="w-14 bg-transparent border-none p-0 text-inherit"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </td>
+                        <td className="px-2 py-1 max-w-[120px] truncate">
+                          <input
+                            type="text"
+                            value={seg.text}
+                            onChange={(e) => handleSegmentEdit(i, "text", e.target.value)}
+                            className="w-full bg-transparent border-none p-0 text-inherit truncate"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </td>
+                      </tr>
                     ))}
-                  </div>
-                ))}
+                  </tbody>
+                </table>
               </div>
             </div>
-          )}
-        </div>
-      </ScrollArea>
-    </div>
+
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={handleRegenerateSegment}
+                disabled={selectedRowIndex == null}
+              >
+                <RefreshCw size={12} className="mr-1" />
+                Regenerar segmento
+              </Button>
+              <Button size="sm" onClick={handleRegenerateVideo}>
+                Aplicar cambios y renderizar
+              </Button>
+            </div>
+
+            {regenStatus && (
+              <p
+                className={`text-[10px] ${
+                  regenStatus.toLowerCase().includes("error") ? "text-red-500" : "text-text-muted"
+                }`}
+              >
+                {regenStatus}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </ScrollArea>
   );
 };
 
-export default V2VPanel;

@@ -22,7 +22,6 @@ import {
   Sparkles,
   Play,
   Save,
-  Youtube,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/project-store";
 import { useUIStore } from "../../stores/ui-store";
@@ -42,7 +41,6 @@ import { ExportDialog } from "./ExportDialog";
 import { ScreenRecorder } from "./ScreenRecorder";
 import { HistoryPanel } from "./inspector/HistoryPanel";
 import { ProjectSwitcher } from "./ProjectSwitcher";
-import { V2VPanel } from "./V2VPanel";
 import { autoSaveManager } from "../../services/auto-save";
 import { toast } from "../../stores/notification-store";
 import { useAnalytics, AnalyticsEvents } from "../../hooks/useAnalytics";
@@ -870,24 +868,6 @@ export const Toolbar: React.FC = () => {
         <Tooltip>
           <TooltipTrigger asChild>
             <button
-              onClick={() => togglePanel("v2v")}
-              className={`p-2 rounded-lg transition-colors ${
-                panels.v2v?.visible
-                  ? "bg-primary/20 text-primary"
-                  : "hover:bg-background-elevated text-text-secondary hover:text-text-primary"
-              }`}
-            >
-              <Youtube size={16} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p>Video2Video - Traductores y Doblaje IA</p>
-          </TooltipContent>
-        </Tooltip>
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
               onClick={() => setIsRecorderOpen(true)}
               className="flex items-center gap-2 px-3 py-2 bg-error/10 hover:bg-error/20 text-error rounded-lg transition-colors"
             >
@@ -1073,32 +1053,6 @@ export const Toolbar: React.FC = () => {
             </div>
             <div className="h-[calc(100%-49px)]">
               <HistoryPanel />
-            </div>
-          </div>
-        </>
-      )}
-
-      {panels.v2v?.visible && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/20 z-40"
-            onClick={() => togglePanel("v2v")}
-          />
-          <div className="fixed top-16 right-0 bottom-0 w-[400px] bg-background-secondary border-l border-border z-50 shadow-2xl animate-in slide-in-from-right duration-200">
-            <div className="flex items-center justify-between p-3 border-b border-border">
-              <div className="flex items-center gap-2 text-primary">
-                <Youtube size={16} />
-                <span className="text-sm font-bold text-text-primary">Video2Video</span>
-              </div>
-              <button
-                onClick={() => togglePanel("v2v")}
-                className="p-1.5 rounded hover:bg-background-tertiary text-text-muted hover:text-text-primary transition-colors"
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <div className="h-[calc(100%-49px)]">
-              <V2VPanel />
             </div>
           </div>
         </>
