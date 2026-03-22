@@ -23,6 +23,7 @@ import {
   ChevronDown as ChevronDownIcon,
   Magnet,
 } from "lucide-react";
+import type { Project } from "@openreel/core";
 import { useProjectStore } from "../../stores/project-store";
 import { useTimelineStore } from "../../stores/timeline-store";
 import { useUIStore } from "../../stores/ui-store";
@@ -49,6 +50,14 @@ import {
   formatTimecode,
   getTrackInfo,
 } from "./timeline/index";
+
+function findClipStartInProject(project: Project, clipId: string): number | null {
+  for (const t of project.timeline.tracks) {
+    const c = t.clips.find((cl) => cl.id === clipId);
+    if (c) return c.startTime;
+  }
+  return null;
+}
 
 export const Timeline: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -97,6 +106,11 @@ export const Timeline: React.FC = () => {
 
   const { select, selectMultiple, clearSelection, getSelectedClipIds, snapSettings, toggleSnap } =
     useUIStore();
+  const selectedItems = useUIStore((s) => s.selectedItems);
+  const selectedTimelineClipIds = useMemo(
+    () => selectedItems.filter((s) => s.type === "clip").map((s) => s.id),
+    [selectedItems],
+  );
   const selectedClipIds = getSelectedClipIds();
 
   const { getTitleEngine, getGraphicsEngine } = useEngineStore();
@@ -493,11 +507,47 @@ export const Timeline: React.FC = () => {
         useProjectStore.setState((state) => ({
           project: { ...state.project, modifiedAt: Date.now() },
         }));
-      } else {
+        return;
+      }
+
+      const projectBefore = useProjectStore.getState().project;
+      const leaderStart = findClipStartInProject(projectBefore, clipId);
+      if (leaderStart === null) {
         await moveClip(clipId, newStartTime, targetTrackId);
+        return;
+      }
+
+      const deltaTime = newStartTime - leaderStart;
+      const groupIds = selectedTimelineClipIds.filter(
+        (id) => findClipStartInProject(projectBefore, id) !== null,
+      );
+
+      const isGroupMove =
+        groupIds.length > 1 &&
+        groupIds.includes(clipId) &&
+        deltaTime !== 0;
+
+      if (!isGroupMove) {
+        await moveClip(clipId, newStartTime, targetTrackId);
+        return;
+      }
+
+      const { actionHistory } = useProjectStore.getState();
+      actionHistory.beginGroup("Move clips");
+      try {
+        await moveClip(clipId, newStartTime, targetTrackId);
+        for (const id of groupIds) {
+          if (id === clipId) continue;
+          const start = findClipStartInProject(projectBefore, id);
+          if (start === null) continue;
+          const nextStart = Math.max(0, start + deltaTime);
+          await moveClip(id, nextStart, undefined);
+        }
+      } finally {
+        actionHistory.endGroup();
       }
     },
-    [moveClip, allShapeClips, graphicsEngine],
+    [moveClip, allShapeClips, graphicsEngine, selectedTimelineClipIds],
   );
 
   const [snapIndicatorTime, setSnapIndicatorTime] = React.useState<
