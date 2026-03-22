@@ -32,7 +32,11 @@ interface TrackLaneProps {
     newStartTime: number,
     targetTrackId?: string,
   ) => void;
-  onMoveTextClip: (clipId: string, newStartTime: number) => void;
+  onMoveTextClip: (
+    clipId: string,
+    newStartTime: number,
+    targetTrackId?: string,
+  ) => void;
   onSnapIndicator: (time: number | null) => void;
   onTrimClip?: (
     clipId: string,
@@ -221,22 +225,30 @@ export const TrackLane: React.FC<TrackLaneProps> = ({
           <TextClipComponent
             key={textClip.id}
             textClip={textClip}
+            track={track}
+            trackHeights={trackHeights}
+            timelineRef={timelineRef}
             pixelsPerSecond={pixelsPerSecond}
             isSelected={selectedClipIds.includes(textClip.id)}
             onSelect={onSelectClip}
             onTrim={onTrimTextClip}
             onMoveClip={onMoveTextClip}
+            onSnapIndicator={onSnapIndicator}
           />
         ))}
         {shapeClips.map((shapeClip) => (
           <ShapeClipComponent
             key={shapeClip.id}
             shapeClip={shapeClip}
+            track={track}
+            trackHeights={trackHeights}
+            timelineRef={timelineRef}
             pixelsPerSecond={pixelsPerSecond}
             isSelected={selectedClipIds.includes(shapeClip.id)}
             onSelect={onSelectClip}
             onTrim={onTrimShapeClip}
             onMoveClip={onMoveClip}
+            onSnapIndicator={onSnapIndicator}
           />
         ))}
         {isDragOver && (

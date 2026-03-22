@@ -23,7 +23,7 @@ import {
   ChevronDown as ChevronDownIcon,
   Magnet,
 } from "lucide-react";
-import type { Project } from "@openreel/core";
+import type { Project, Track } from "@openreel/core";
 import { useProjectStore } from "../../stores/project-store";
 import { useTimelineStore } from "../../stores/timeline-store";
 import { useUIStore } from "../../stores/ui-store";
@@ -57,6 +57,38 @@ function findClipStartInProject(project: Project, clipId: string): number | null
     if (c) return c.startTime;
   }
   return null;
+}
+
+function getTrackTypeRank(
+  tracks: Track[],
+  trackId: string,
+): { type: Track["type"]; rank: number } | null {
+  const tr = tracks.find((t) => t.id === trackId);
+  if (!tr) return null;
+  const sameType = tracks.filter((t) => t.type === tr.type);
+  const rank = sameType.findIndex((t) => t.id === trackId);
+  if (rank < 0) return null;
+  return { type: tr.type, rank };
+}
+
+function trackIdAtTypeRank(
+  tracks: Track[],
+  trackType: Track["type"],
+  rank: number,
+): string | undefined {
+  const sameType = tracks.filter((t) => t.type === trackType);
+  if (rank < 0 || rank >= sameType.length) return undefined;
+  return sameType[rank].id;
+}
+
+function clampTypeRank(
+  rank: number,
+  tracks: Track[],
+  trackType: Track["type"],
+): number {
+  const n = tracks.filter((t) => t.type === trackType).length;
+  if (n === 0) return 0;
+  return Math.max(0, Math.min(rank, n - 1));
 }
 
 export const Timeline: React.FC = () => {
@@ -107,8 +139,24 @@ export const Timeline: React.FC = () => {
   const { select, selectMultiple, clearSelection, getSelectedClipIds, snapSettings, toggleSnap } =
     useUIStore();
   const selectedItems = useUIStore((s) => s.selectedItems);
-  const selectedTimelineClipIds = useMemo(
-    () => selectedItems.filter((s) => s.type === "clip").map((s) => s.id),
+  const selectedClipLikeItems = useMemo(
+    () =>
+      selectedItems
+        .filter(
+          (s) =>
+            s.type === "clip" ||
+            s.type === "text-clip" ||
+            s.type === "shape-clip",
+        )
+        .map((s) => ({
+          id: s.id,
+          kind:
+            s.type === "clip"
+              ? ("timeline" as const)
+              : s.type === "text-clip"
+                ? ("text" as const)
+                : ("shape" as const),
+        })),
     [selectedItems],
   );
   const selectedClipIds = getSelectedClipIds();
@@ -493,41 +541,113 @@ export const Timeline: React.FC = () => {
   );
 
   const { moveClip } = useProjectStore();
+
   const handleMoveClip = useCallback(
     async (clipId: string, newStartTime: number, targetTrackId?: string) => {
-      const graphicClip = allShapeClips.find((sc) => sc.id === clipId);
-      if (graphicClip && graphicsEngine) {
-        if (graphicClip.type === "sticker" || graphicClip.type === "emoji") {
-          graphicsEngine.updateStickerClip(clipId, { startTime: newStartTime });
-        } else if (graphicClip.type === "svg") {
-          graphicsEngine.updateSVGClip(clipId, { startTime: newStartTime });
-        } else {
-          graphicsEngine.updateShapeClip(clipId, { startTime: newStartTime });
-        }
-        useProjectStore.setState((state) => ({
-          project: { ...state.project, modifiedAt: Date.now() },
-        }));
-        return;
-      }
-
       const projectBefore = useProjectStore.getState().project;
-      const leaderStart = findClipStartInProject(projectBefore, clipId);
-      if (leaderStart === null) {
-        await moveClip(clipId, newStartTime, targetTrackId);
+      const tracks = projectBefore.timeline.tracks;
+
+      const graphicClip = allShapeClips.find((sc) => sc.id === clipId);
+      const textClip = allTextClips.find((tc) => tc.id === clipId);
+      const timelineStart = findClipStartInProject(projectBefore, clipId);
+
+      let leaderTrackId: string | undefined;
+      let leaderKind: "shape" | "text" | "timeline";
+      let leaderStart: number;
+
+      if (graphicClip) {
+        leaderKind = "shape";
+        leaderStart = graphicClip.startTime;
+        leaderTrackId = graphicClip.trackId;
+      } else if (textClip) {
+        leaderKind = "text";
+        leaderStart = textClip.startTime;
+        leaderTrackId = textClip.trackId;
+      } else if (timelineStart !== null) {
+        leaderKind = "timeline";
+        leaderStart = timelineStart;
+        const tr = tracks.find((t) => t.clips.some((c) => c.id === clipId));
+        leaderTrackId = tr?.id;
+      } else {
         return;
       }
 
       const deltaTime = newStartTime - leaderStart;
-      const groupIds = selectedTimelineClipIds.filter(
-        (id) => findClipStartInProject(projectBefore, id) !== null,
-      );
 
+      let deltaRank = 0;
+      let leaderTrackType: Track["type"] | undefined;
+      if (targetTrackId && leaderTrackId) {
+        const oldR = getTrackTypeRank(tracks, leaderTrackId);
+        const newR = getTrackTypeRank(tracks, targetTrackId);
+        if (oldR && newR && oldR.type === newR.type) {
+          deltaRank = newR.rank - oldR.rank;
+          leaderTrackType = oldR.type;
+        }
+      }
+
+      const groupHasClip = selectedClipLikeItems.some((s) => s.id === clipId);
       const isGroupMove =
-        groupIds.length > 1 &&
-        groupIds.includes(clipId) &&
-        deltaTime !== 0;
+        selectedClipLikeItems.length > 1 &&
+        groupHasClip &&
+        (deltaTime !== 0 || deltaRank !== 0);
+
+      const applyShapeUpdate = (
+        id: string,
+        clip: (typeof allShapeClips)[number],
+        start: number,
+        tId?: string,
+      ) => {
+        if (!graphicsEngine) return;
+        const base = { startTime: start, ...(tId ? { trackId: tId } : {}) };
+        if (clip.type === "sticker" || clip.type === "emoji") {
+          graphicsEngine.updateStickerClip(id, base);
+        } else if (clip.type === "svg") {
+          graphicsEngine.updateSVGClip(id, base);
+        } else {
+          graphicsEngine.updateShapeClip(id, base);
+        }
+      };
+
+      const applyTextUpdate = (id: string, start: number, tId?: string) => {
+        if (!titleEngine) return;
+        titleEngine.updateTextClip(id, {
+          startTime: Math.max(0, start),
+          ...(tId ? { trackId: tId } : {}),
+        });
+      };
+
+      const followerTargetTrack = (
+        itemTrackId: string,
+        itemTrackType: Track["type"],
+      ): string | undefined => {
+        if (deltaRank === 0 || !leaderTrackType || itemTrackType !== leaderTrackType) {
+          return undefined;
+        }
+        const r = getTrackTypeRank(tracks, itemTrackId);
+        if (!r) return undefined;
+        const nextRank = clampTypeRank(
+          r.rank + deltaRank,
+          tracks,
+          r.type,
+        );
+        return trackIdAtTypeRank(tracks, r.type, nextRank);
+      };
 
       if (!isGroupMove) {
+        if (leaderKind === "shape" && graphicClip && graphicsEngine) {
+          applyShapeUpdate(clipId, graphicClip, newStartTime, targetTrackId);
+          useProjectStore.setState((state) => ({
+            project: { ...state.project, modifiedAt: Date.now() },
+          }));
+          return;
+        }
+        if (leaderKind === "text" && textClip && titleEngine) {
+          applyTextUpdate(clipId, newStartTime, targetTrackId);
+          useProjectStore.setState((state) => ({
+            project: { ...state.project, modifiedAt: Date.now() },
+          }));
+          return;
+        }
         await moveClip(clipId, newStartTime, targetTrackId);
         return;
       }
@@ -535,19 +655,73 @@ export const Timeline: React.FC = () => {
       const { actionHistory } = useProjectStore.getState();
       actionHistory.beginGroup("Move clips");
       try {
-        await moveClip(clipId, newStartTime, targetTrackId);
-        for (const id of groupIds) {
-          if (id === clipId) continue;
-          const start = findClipStartInProject(projectBefore, id);
-          if (start === null) continue;
+        if (leaderKind === "shape" && graphicClip && graphicsEngine) {
+          applyShapeUpdate(clipId, graphicClip, newStartTime, targetTrackId);
+        } else if (leaderKind === "text" && textClip && titleEngine) {
+          applyTextUpdate(clipId, newStartTime, targetTrackId);
+        } else if (leaderKind === "timeline") {
+          await moveClip(clipId, newStartTime, targetTrackId);
+        }
+
+        for (const item of selectedClipLikeItems) {
+          if (item.id === clipId) continue;
+
+          let start: number | null = null;
+          let itemTrackId: string | undefined;
+
+          if (item.kind === "timeline") {
+            start = findClipStartInProject(projectBefore, item.id);
+            const ot = tracks.find((t) => t.clips.some((c) => c.id === item.id));
+            itemTrackId = ot?.id;
+          } else if (item.kind === "text") {
+            const tc = allTextClips.find((t) => t.id === item.id);
+            if (tc) {
+              start = tc.startTime;
+              itemTrackId = tc.trackId;
+            }
+          } else {
+            const sc = allShapeClips.find((s) => s.id === item.id);
+            if (sc) {
+              start = sc.startTime;
+              itemTrackId = sc.trackId;
+            }
+          }
+
+          if (start === null || itemTrackId === undefined) continue;
+
           const nextStart = Math.max(0, start + deltaTime);
-          await moveClip(id, nextStart, undefined);
+          const tr = tracks.find((t) => t.id === itemTrackId);
+          const fTarget =
+            tr && itemTrackId
+              ? followerTargetTrack(itemTrackId, tr.type)
+              : undefined;
+
+          if (item.kind === "timeline") {
+            await moveClip(item.id, nextStart, fTarget);
+          } else if (item.kind === "text") {
+            const tc = allTextClips.find((t) => t.id === item.id);
+            if (tc) applyTextUpdate(item.id, nextStart, fTarget);
+          } else {
+            const sc = allShapeClips.find((s) => s.id === item.id);
+            if (sc) applyShapeUpdate(item.id, sc, nextStart, fTarget);
+          }
         }
       } finally {
         actionHistory.endGroup();
       }
+
+      useProjectStore.setState((state) => ({
+        project: { ...state.project, modifiedAt: Date.now() },
+      }));
     },
-    [moveClip, allShapeClips, graphicsEngine, selectedTimelineClipIds],
+    [
+      moveClip,
+      allShapeClips,
+      allTextClips,
+      graphicsEngine,
+      titleEngine,
+      selectedClipLikeItems,
+    ],
   );
 
   const [snapIndicatorTime, setSnapIndicatorTime] = React.useState<
@@ -593,24 +767,6 @@ export const Timeline: React.FC = () => {
       useProjectStore
         .getState()
         .updateTextClipKeyframes(clipId, adjustedKeyframes);
-
-      useProjectStore.setState((state) => ({
-        project: { ...state.project, modifiedAt: Date.now() },
-      }));
-    },
-    [titleEngine, allTextClips],
-  );
-
-  const handleMoveTextClip = useCallback(
-    (clipId: string, newStartTime: number) => {
-      if (!titleEngine) return;
-
-      const textClip = allTextClips.find((tc) => tc.id === clipId);
-      if (!textClip) return;
-
-      titleEngine.updateTextClip(clipId, {
-        startTime: Math.max(0, newStartTime),
-      });
 
       useProjectStore.setState((state) => ({
         project: { ...state.project, modifiedAt: Date.now() },
@@ -1082,7 +1238,7 @@ export const Timeline: React.FC = () => {
                       : undefined
                   }
                   onTrimTextClip={handleTrimTextClip}
-                  onMoveTextClip={handleMoveTextClip}
+                  onMoveTextClip={handleMoveClip}
                   onTrimShapeClip={handleTrimShapeClip}
                   scrollX={scrollX}
                   trackHeight={getTrackHeight(track.id)}
