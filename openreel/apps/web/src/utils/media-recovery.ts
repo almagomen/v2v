@@ -4,6 +4,11 @@ export async function generateThumbnailFromBlob(
   blob: Blob,
   type: "video" | "audio" | "image",
 ): Promise<string | null> {
+  if (!(blob instanceof Blob)) {
+    console.warn("[MediaRecovery] Provided blob is not a valid Blob instance", blob);
+    return null;
+  }
+
   if (type === "audio") {
     return null;
   }
@@ -81,8 +86,8 @@ export async function restoreMediaItem(
 ): Promise<MediaItem> {
   const blob = storedBlob || item.blob;
 
-  if (!blob) {
-    return item;
+  if (!blob || !(blob instanceof Blob)) {
+    return { ...item, blob: null };
   }
 
   let thumbnailUrl = item.thumbnailUrl;

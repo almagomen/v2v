@@ -458,10 +458,24 @@ export const useProjectStore = create<ProjectState>()(
           }
         }
 
+        // Sanitizar medios para evitar que objetos {} (de JSON) rompan createObjectURL
+        const sanitizedItems = project.mediaLibrary?.items?.map(item => ({
+          ...item,
+          blob: (item.blob instanceof Blob) ? item.blob : null
+        })) || [];
+
+        const sanitizedProject = {
+          ...project,
+          mediaLibrary: {
+            ...project.mediaLibrary,
+            items: sanitizedItems
+          }
+        };
+
         const newHistory = new ActionHistory();
         const newExecutor = new ActionExecutor(newHistory);
         set({
-          project,
+          project: sanitizedProject as Project,
           actionHistory: newHistory,
           actionExecutor: newExecutor,
           clipUndoStack: [],
