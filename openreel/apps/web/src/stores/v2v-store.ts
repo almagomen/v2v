@@ -1,6 +1,29 @@
 import { create } from "zustand";
 import type { Segment, VideoResult, JobUrlItem } from "../lib/v2v-api";
 
+const FOLDER_REFS_STORAGE_KEY = "openreel.v2v.folderRefs";
+
+export type V2VFolderRef = { jobId: string; videoIndex: number };
+
+function loadFolderRefsFromStorage(): Record<string, V2VFolderRef> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(FOLDER_REFS_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, V2VFolderRef>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveFolderRefsToStorage(refs: Record<string, V2VFolderRef>): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(FOLDER_REFS_STORAGE_KEY, JSON.stringify(refs));
+  } catch {
+    // ignore quota
+  }
+}
+
 export interface V2VState {
   urls: string;
   translateLang: string;
@@ -19,7 +42,7 @@ export interface V2VState {
   log: string;
   importStatusByKey: Record<string, "in_progress" | "done" | "error">; // `${jobId}:${videoIndex}`
   urlItems: JobUrlItem[];
-  folderRefs: Record<string, { jobId: string; videoIndex: number }>;
+  folderRefs: Record<string, V2VFolderRef>;
   selectedUrlForLogs: string | null;
   urlLogs: Record<string, string>;
   jobPhase: string;
@@ -48,7 +71,8 @@ export interface V2VState {
   appendUrlLog: (url: string, line: string) => void;
   setJobPhase: (phase: string) => void;
 
-  setFolderRef: (folder: string, ref: { jobId: string; videoIndex: number }) => void;
+  setFolderRef: (folder: string, ref: V2VFolderRef) => void;
+  getFolderRef: (folder: string) => V2VFolderRef | undefined;
   removeFolderRef: (folder: string) => void;
   renameFolderRef: (oldFolder: string, newFolder: string) => void;
 
@@ -59,7 +83,7 @@ export interface V2VState {
   reset: () => void;
 }
 
-export const useV2VStore = create<V2VState>((set) => ({
+export const useV2VStore = create<V2VState>((set, get) => ({
   urls: "",
   translateLang: "None",
   speaker: "mrbeast_lmnt",
@@ -77,7 +101,7 @@ export const useV2VStore = create<V2VState>((set) => ({
   log: "",
   importStatusByKey: {},
   urlItems: [],
-  folderRefs: {},
+  folderRefs: loadFolderRefsFromStorage(),
   selectedUrlForLogs: null,
   urlLogs: {},
   jobPhase: "idle",
@@ -117,14 +141,29 @@ export const useV2VStore = create<V2VState>((set) => ({
       return { urlLogs: { ...state.urlLogs, [url]: next } };
     }),
   setJobPhase: (jobPhase) => set({ jobPhase }),
-  setFolderRef: (folder: string, ref: { jobId: string; videoIndex: number }) =>
-    set((state) => ({
-      folderRefs: { ...state.folderRefs, [folder]: ref },
-    })),
+  setFolderRef: (folder: string, ref: V2VFolderRef) =>
+    set((state) => {
+      const folderRefs = { ...state.folderRefs, [folder]: ref };
+      saveFolderRefsToStorage(folderRefs);
+      return { folderRefs };
+    }),
+  getFolderRef: (folder: string) => {
+    const mem = get().folderRefs[folder];
+    if (mem) return mem;
+    const disk = loadFolderRefsFromStorage()[folder];
+    if (disk) {
+      set((state) => ({
+        folderRefs: { ...state.folderRefs, [folder]: disk },
+      }));
+      return disk;
+    }
+    return undefined;
+  },
   removeFolderRef: (folder: string) =>
     set((state) => {
       const next = { ...state.folderRefs };
       delete next[folder];
+      saveFolderRefsToStorage(next);
       return { folderRefs: next };
     }),
   renameFolderRef: (oldFolder: string, newFolder: string) =>
@@ -133,6 +172,7 @@ export const useV2VStore = create<V2VState>((set) => ({
       const next = { ...state.folderRefs };
       next[newFolder] = next[oldFolder];
       delete next[oldFolder];
+      saveFolderRefsToStorage(next);
       return { folderRefs: next };
     }),
 
@@ -156,13 +196,14 @@ export const useV2VStore = create<V2VState>((set) => ({
         selectedUrlForLogs: null,
         urlLogs: {},
         jobPhase: "idle",
-        folderRefs: keepImports ? state.folderRefs : {},
+        folderRefs: state.folderRefs,
       };
     }),
 
   setLastUrlsSignature: (lastUrlsSignature) => set({ lastUrlsSignature }),
 
-  reset: () =>
+  reset: () => {
+    saveFolderRefsToStorage({});
     set({
       urls: "",
       translateLang: "None",
@@ -184,6 +225,7 @@ export const useV2VStore = create<V2VState>((set) => ({
       selectedUrlForLogs: null,
       urlLogs: {},
       jobPhase: "idle",
-    }),
+    });
+  },
 }));
 

@@ -89,6 +89,20 @@ function collectFolderMediaFiles(items: MediaItem[], folder: string): File[] {
   return out;
 }
 
+function renameTimelineTrack(trackId: string, name: string) {
+  useProjectStore.setState((state) => ({
+    project: {
+      ...state.project,
+      timeline: {
+        ...state.project.timeline,
+        tracks: state.project.timeline.tracks.map((t) =>
+          t.id === trackId ? { ...t, name } : t,
+        ),
+      },
+    },
+  }));
+}
+
 /**
  * Media Item Thumbnail Component
  * Shows thumbnail with metadata below (not overlaid)
@@ -438,6 +452,10 @@ export const AssetsPanel: React.FC = () => {
     replaceMediaAsset,
     renameMedia,
     updateSettings,
+    addTrack,
+    addClip,
+    trimClip,
+    forceSave,
   } = useProjectStore();
   const mediaItems = project.mediaLibrary.items;
 
@@ -679,138 +697,201 @@ export const AssetsPanel: React.FC = () => {
     [addMediaToTimeline],
   );
 
-  /** Importa video+WAV desde la API V2V al proyecto actual (requiere folderRefs). */
+  /** Descarga/importa a Media el video y WAV del job V2V. Devuelve los segmentos del backend. */
+  const ensureV2VMediaInProject = useCallback(
+    async (folder: string, ref: { jobId: string; videoIndex: number }) => {
+      const segments: AudioSegmentItem[] = await v2vApi.getAudioSegments(
+        ref.jobId,
+        ref.videoIndex,
+      );
+
+      const videoMediaName = `${folder}/video.mp4`;
+      const refreshState = () => useProjectStore.getState();
+      let mediaNames = new Set(refreshState().project.mediaLibrary.items.map((m) => m.name));
+      if (!mediaNames.has(videoMediaName)) {
+        const vblob = await v2vApi.fetchOutputVideoBlob(ref.jobId, ref.videoIndex);
+        const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
+        const vres = await importMedia(vfile);
+        if (!vres.success) {
+          throw new Error(vres.error?.message || "Error importando video");
+        }
+      }
+
+      for (const seg of segments) {
+        const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
+          seg.seg,
+        ).padStart(4, "0")}.wav`;
+
+        mediaNames = new Set(refreshState().project.mediaLibrary.items.map((m) => m.name));
+        if (mediaNames.has(wavName)) continue;
+
+        const wavBlob = await v2vApi.fetchAudioSegmentBlob(
+          ref.jobId,
+          ref.videoIndex,
+          seg.seg,
+        );
+        const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
+        const wres = await importMedia(wavFile);
+        if (!wres.success) {
+          throw new Error(wres.error?.message || `Error importando WAV seg ${seg.seg}`);
+        }
+      }
+
+      return segments;
+    },
+    [importMedia],
+  );
+
   const importFolderTtsViaApi = useCallback(
     async (folder: string, ref: { jobId: string; videoIndex: number }) => {
       setIsImporting(true);
       setImportProgress("Copiando carpeta al proyecto seleccionado...");
-
       try {
-        const segments: AudioSegmentItem[] = await v2vApi.getAudioSegments(
-          ref.jobId,
-          ref.videoIndex,
-        );
-
-        const videoMediaName = `${folder}/video.mp4`;
-
-        const refreshState = () => useProjectStore.getState();
-        let mediaNames = new Set(refreshState().project.mediaLibrary.items.map((m) => m.name));
-        if (!mediaNames.has(videoMediaName)) {
-          const vblob = await v2vApi.fetchOutputVideoBlob(ref.jobId, ref.videoIndex);
-          const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
-          const vres = await importMedia(vfile);
-          if (!vres.success) {
-            window.alert(vres.error?.message || "Error importando video");
-            return;
-          }
-        }
-
-        for (const seg of segments) {
-          const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
-            seg.seg,
-          ).padStart(4, "0")}.wav`;
-
-          mediaNames = new Set(refreshState().project.mediaLibrary.items.map((m) => m.name));
-          if (mediaNames.has(wavName)) continue;
-
-          const wavBlob = await v2vApi.fetchAudioSegmentBlob(
-            ref.jobId,
-            ref.videoIndex,
-            seg.seg,
-          );
-          const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-          const wres = await importMedia(wavFile);
-          if (!wres.success) {
-            window.alert(wres.error?.message || `Error importando WAV seg ${seg.seg}`);
-            return;
-          }
-        }
+        await ensureV2VMediaInProject(folder, ref);
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : "Error al importar media");
       } finally {
         setIsImporting(false);
         setImportProgress("");
       }
     },
-    [importMedia],
+    [ensureV2VMediaInProject],
   );
 
-  /** Restaura posiciones y trims según el job V2V (video en 0, audios en seg.start). */
-  const handleResetV2VFolderTimeline = useCallback(async () => {
+  /**
+   * Añade nuevas pistas al timeline actual: video a t=0 y audios por speaker con start/end del backend.
+   */
+  const handleAddV2VFolderAsNewTracks = useCallback(async () => {
     if (!activeFolder) return;
-    const ref = useV2VStore.getState().folderRefs[activeFolder];
+    const ref = useV2VStore.getState().getFolderRef(activeFolder);
     if (!ref) {
       window.alert(
-        `No hay referencia V2V para "${activeFolder}". Vuelve a procesar desde Video2Video o usa una carpeta creada tras una inferencia reciente.`,
+        `No hay referencia V2V para "${activeFolder}". Procesa el video desde Video2Video (icono YouTube) o vuelve a ejecutar la inferencia.`,
       );
       return;
     }
 
     setIsImporting(true);
-    setImportProgress("Restaurando posiciones en el timeline...");
+    setImportProgress("Sincronizando Media y añadiendo pistas al timeline…");
     try {
-      const segments = await v2vApi.getAudioSegments(ref.jobId, ref.videoIndex);
-      const videoName = `${activeFolder}/video.mp4`;
-      const wavStartByName = new Map<string, number>();
-      for (const seg of segments) {
-        const wavName = `${activeFolder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
-          seg.seg,
-        ).padStart(4, "0")}.wav`;
-        wavStartByName.set(wavName, seg.start);
+      const segments = await ensureV2VMediaInProject(activeFolder, ref);
+      const folder = activeFolder;
+      const videoName = `${folder}/video.mp4`;
+
+      const videoMedia = useProjectStore
+        .getState()
+        .project.mediaLibrary.items.find((m) => m.name === videoName);
+      if (!videoMedia) {
+        window.alert(`No se encuentra "${videoName}" en Media.`);
+        return;
       }
 
-      type Op = {
-        clipId: string;
-        trackId: string;
-        startTime: number;
-        fullDuration: number;
-      };
-      const ops: Op[] = [];
-      const snap = useProjectStore.getState();
-      for (const track of snap.project.timeline.tracks) {
-        for (const clip of track.clips) {
-          const media = snap.getMediaItem(clip.mediaId);
-          if (!media?.name) continue;
-          const idx = media.name.indexOf("/");
-          if (idx <= 0 || media.name.slice(0, idx) !== activeFolder) continue;
+      let proj = useProjectStore.getState().project;
+      const beforeVideo = new Set(proj.timeline.tracks.map((t) => t.id));
+      const rVideo = await addTrack("video");
+      if (!rVideo.success) {
+        window.alert("No se pudo crear la pista de video.");
+        return;
+      }
+      proj = useProjectStore.getState().project;
+      const videoTrack = proj.timeline.tracks.find(
+        (t) => t.type === "video" && !beforeVideo.has(t.id),
+      );
+      if (!videoTrack) {
+        window.alert("No se encontró la pista de video nueva.");
+        return;
+      }
 
-          const fullDur =
-            media.metadata?.duration && media.metadata.duration > 0
-              ? media.metadata.duration
-              : clip.duration;
+      const folderLabel = folder.length > 52 ? `${folder.slice(0, 49)}…` : folder;
+      renameTimelineTrack(videoTrack.id, `V2V · ${folderLabel}`);
 
-          if (media.name === videoName) {
-            ops.push({
-              clipId: clip.id,
-              trackId: track.id,
-              startTime: 0,
-              fullDuration: fullDur,
-            });
-          } else if (wavStartByName.has(media.name)) {
-            ops.push({
-              clipId: clip.id,
-              trackId: track.id,
-              startTime: wavStartByName.get(media.name)!,
-              fullDuration: fullDur,
-            });
+      const addV = await addClip(videoTrack.id, videoMedia.id, 0);
+      if (!addV.success) {
+        window.alert("No se pudo añadir el clip de video.");
+        return;
+      }
+
+      const vDur =
+        videoMedia.metadata?.duration && videoMedia.metadata.duration > 0
+          ? videoMedia.metadata.duration
+          : undefined;
+      if (vDur) {
+        proj = useProjectStore.getState().project;
+        const vt = proj.timeline.tracks.find((t) => t.id === videoTrack.id);
+        const vClip = vt?.clips.find((c) => c.mediaId === videoMedia.id);
+        if (vClip) await trimClip(vClip.id, 0, vDur);
+      }
+
+      const bySpeaker: Record<string, AudioSegmentItem[]> = {};
+      for (const seg of segments) {
+        const raw = (seg.speaker || "").trim();
+        const key = raw || `TTS_${toSafeToken(seg.speaker || "speaker")}_seg${seg.seg}`;
+        (bySpeaker[key] ||= []).push(seg);
+      }
+
+      for (const speakerKey of Object.keys(bySpeaker)) {
+        const segs = bySpeaker[speakerKey].slice().sort((a, b) => a.seg - b.seg);
+        const beforeA = new Set(
+          useProjectStore.getState().project.timeline.tracks.map((t) => t.id),
+        );
+        const rA = await addTrack("audio");
+        if (!rA.success) continue;
+
+        proj = useProjectStore.getState().project;
+        const audioTrack = proj.timeline.tracks.find(
+          (t) => t.type === "audio" && !beforeA.has(t.id),
+        );
+        if (!audioTrack) continue;
+
+        const displaySpeaker = (segs[0]?.speaker || "").trim();
+        const trackTitle =
+          displaySpeaker.length > 0
+            ? displaySpeaker.length > 80
+              ? `${displaySpeaker.slice(0, 77)}…`
+              : displaySpeaker
+            : speakerKey;
+
+        renameTimelineTrack(audioTrack.id, trackTitle);
+
+        for (const seg of segs) {
+          const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
+            seg.seg,
+          ).padStart(4, "0")}.wav`;
+          const wm = useProjectStore
+            .getState()
+            .project.mediaLibrary.items.find((m) => m.name === wavName);
+          if (!wm) continue;
+
+          const addW = await addClip(audioTrack.id, wm.id, seg.start);
+          if (!addW.success) continue;
+
+          proj = useProjectStore.getState().project;
+          const tr = proj.timeline.tracks.find((t) => t.id === audioTrack.id);
+          const clipOnTrack = tr?.clips.find(
+            (c) => c.mediaId === wm.id && Math.abs(c.startTime - seg.start) < 0.05,
+          );
+          if (!clipOnTrack) continue;
+
+          const span = Math.max(0, seg.end - seg.start);
+          const mediaDur =
+            wm.metadata?.duration && wm.metadata.duration > 0
+              ? wm.metadata.duration
+              : clipOnTrack.duration;
+          if (span > 0) {
+            const trimOut = Math.min(span, mediaDur);
+            await trimClip(clipOnTrack.id, 0, trimOut);
           }
         }
       }
 
-      for (const op of ops) {
-        const st = useProjectStore.getState();
-        await st.moveClip(op.clipId, op.startTime, op.trackId);
-        if (op.fullDuration > 0) {
-          await st.trimClip(op.clipId, 0, op.fullDuration);
-        }
-      }
-
-      await useProjectStore.getState().forceSave();
+      await forceSave();
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "Error al restaurar el timeline");
+      window.alert(e instanceof Error ? e.message : "Error al montar en el timeline");
     } finally {
       setIsImporting(false);
       setImportProgress("");
     }
-  }, [activeFolder]);
+  }, [activeFolder, addTrack, addClip, trimClip, ensureV2VMediaInProject, forceSave]);
 
   const handleCopyFolderTtsToAnotherProject = useCallback(async () => {
     if (!activeFolder) return;
@@ -870,7 +951,7 @@ export const AssetsPanel: React.FC = () => {
           useProjectStore.getState().project.mediaLibrary.items,
           activeFolder,
         );
-        const ref = useV2VStore.getState().folderRefs[activeFolder];
+        const ref = useV2VStore.getState().getFolderRef(activeFolder);
 
         if (targetId !== "__current__") {
           await useProjectStore.getState().recoverFromAutoSave(targetId);
@@ -1126,9 +1207,9 @@ export const AssetsPanel: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={handleResetV2VFolderTimeline}
+                    onClick={handleAddV2VFolderAsNewTracks}
                     className="p-1 rounded bg-background-tertiary border border-border hover:border-primary/50 text-text-muted hover:text-primary"
-                    title="Restaurar posiciones V2V en el timeline (video t=0, audios según segmentos)"
+                    title="Añadir al timeline en nuevas pistas (video y segmentos según start/end del job; pistas de audio nombradas por speaker)"
                   >
                     <RefreshCw size={14} />
                   </button>
