@@ -50,10 +50,10 @@ import {
   type ClipHistoryEntry,
 } from "./project/index";
 import {
-  saveMediaBlob,
   deleteMediaBlob,
   loadProjectMedia,
 } from "../services/media-storage";
+import { importMediaIntoProject } from "../lib/import-media-into-project";
 import { restoreMediaItem } from "../utils/media-recovery";
 import { projectManager } from "../services/project-manager";
 
@@ -505,134 +505,31 @@ export const useProjectStore = create<ProjectState>()(
         const { project } = get();
 
         try {
-          const mediaBridge = getMediaBridge();
-          if (!mediaBridge.isInitialized()) {
-            await initializeMediaBridge();
-          }
-
           const isLargeFile = file.size > 50 * 1024 * 1024;
-          const importResult = await mediaBridge.importFile(file, true, isLargeFile);
-
-          if (!importResult.success || !importResult.media) {
-            return {
-              success: false,
-              error: {
-                code: "DECODE_ERROR" as const,
-                message: importResult.error || "Failed to import media",
-              },
-            };
+          const result = await importMediaIntoProject(project, file);
+          if (!result.success) {
+            return result;
           }
 
-          // Create a MediaItem from the processed media
-          const processedMedia = importResult.media;
-
-          // Get thumbnail URL from the first thumbnail if available
-          // Also collect all thumbnails for filmstrip display
-          let thumbnailUrl: string | null = null;
-          const filmstripThumbnails: { timestamp: number; url: string }[] = [];
-
-          if (
-            processedMedia.thumbnails &&
-            processedMedia.thumbnails.length > 0
-          ) {
-            // Process all thumbnails for filmstrip display
-            for (const thumb of processedMedia.thumbnails) {
-              let thumbUrl: string | null = null;
-
-              // Check if dataUrl already exists
-              if (thumb.dataUrl) {
-                thumbUrl = thumb.dataUrl;
-              } else if (thumb.canvas) {
-                // Convert canvas to dataUrl
-                try {
-                  if (thumb.canvas instanceof OffscreenCanvas) {
-                    const blob = await thumb.canvas.convertToBlob({
-                      type: "image/jpeg",
-                      quality: 0.7,
-                    });
-                    thumbUrl = URL.createObjectURL(blob);
-                  } else if (thumb.canvas instanceof HTMLCanvasElement) {
-                    thumbUrl = thumb.canvas.toDataURL("image/jpeg", 0.7);
-                  }
-                } catch (e) {
-                  console.warn("Failed to convert thumbnail canvas to URL:", e);
-                }
-              }
-
-              if (thumbUrl) {
-                filmstripThumbnails.push({
-                  timestamp: thumb.timestamp,
-                  url: thumbUrl,
-                });
-              }
-            }
-
-            // Use first thumbnail as the main thumbnail
-            if (filmstripThumbnails.length > 0) {
-              thumbnailUrl = filmstripThumbnails[0].url;
-            }
-          }
-
-          // Determine media type - check file MIME type first for images
-          let mediaType: "video" | "audio" | "image";
-          if (file.type.startsWith("image/")) {
-            mediaType = "image";
-          } else if (processedMedia.metadata.hasVideo) {
-            mediaType = "video";
-          } else if (processedMedia.metadata.hasAudio) {
-            mediaType = "audio";
-          } else {
-            mediaType = "image";
-          }
-
-          const newMediaItem: MediaItem = {
-            id: uuidv4(),
-            name: file.name,
-            type: mediaType,
-            fileHandle: null,
-            blob: file,
-            metadata: {
-              // Images have no inherent duration (like graphics), duration is set on the clip
-              duration: processedMedia.metadata.duration || 0,
-              width: processedMedia.metadata.width || 0,
-              height: processedMedia.metadata.height || 0,
-              frameRate: processedMedia.metadata.frameRate || 0,
-              codec: processedMedia.metadata.codec || "",
-              sampleRate: processedMedia.metadata.sampleRate || 0,
-              channels: processedMedia.metadata.channels || 0,
-              fileSize: file.size,
-            },
-            thumbnailUrl,
-            waveformData: processedMedia.waveformData?.peaks || null,
-            filmstripThumbnails:
-              filmstripThumbnails.length > 0 ? filmstripThumbnails : undefined,
-          };
-
-          const updatedProject = {
-            ...project,
-            mediaLibrary: {
-              ...project.mediaLibrary,
-              items: [...project.mediaLibrary.items, newMediaItem],
-            },
-            modifiedAt: Date.now(),
-          };
-
+          const { project: updatedProject, newMediaItem } = result;
           set({ project: updatedProject });
 
-          try {
-            await saveMediaBlob(
-              updatedProject.id,
-              newMediaItem.id,
-              file,
-              newMediaItem.metadata,
-            );
-          } catch (err) {
-            console.error("[ProjectStore] Failed to persist media blob:", err);
+          const mediaBridge = getMediaBridge();
+          let mediaType: "video" | "audio" | "image" = "video";
+          if (file.type.startsWith("image/")) {
+            mediaType = "image";
+          } else if (newMediaItem.type === "audio") {
+            mediaType = "audio";
+          } else if (newMediaItem.type === "video") {
+            mediaType = "video";
           }
 
-          if (isLargeFile && !thumbnailUrl) {
+          if (isLargeFile && !newMediaItem.thumbnailUrl) {
             setTimeout(async () => {
               try {
+                if (!mediaBridge.isInitialized()) {
+                  await initializeMediaBridge();
+                }
                 const thumbs = await mediaBridge.generateThumbnailsForMedia(
                   file,
                   mediaType,

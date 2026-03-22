@@ -6,6 +6,14 @@ import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
 import { useV2VStore } from "../../stores/v2v-store";
 import { autoSaveManager } from "../../services/auto-save";
+import { projectManager } from "../../services/project-manager";
+import { createEmptyProject } from "../../stores/project";
+import { importMediaIntoProject } from "../../lib/import-media-into-project";
+import {
+  addClipToDetachedProject,
+  addTrackToDetachedProject,
+  renameTrackInProject,
+} from "../../lib/detached-project-actions";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -91,7 +99,9 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export const V2VPanel: React.FC = () => {
+export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
+  embedInDrawer = false,
+}) => {
   // Lock para evitar ejecuciones concurrentes del bloque de auto-import/creación de proyectos.
   const importingRef = useRef(false);
 
@@ -212,8 +222,8 @@ export const V2VPanel: React.FC = () => {
           const seq = pos >= 0 ? pos + 1 : v.index + 1;
           const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
 
-          // Un proyecto nuevo por cada video.
-          useProjectStore.getState().createNewProject(projectTitle, {
+          // Proyecto nuevo por URL en memoria: no sustituye el proyecto activo del editor (importación en segundo plano).
+          let workingProject = createEmptyProject(projectTitle, {
             width: baseProjectSettings.width,
             height: baseProjectSettings.height,
             frameRate: baseProjectSettings.frameRate,
@@ -224,7 +234,7 @@ export const V2VPanel: React.FC = () => {
 
           // Evita duplicados: si ya existe el archivo con el mismo nombre en Media, no lo re-importamos.
           const existingNames = new Set(
-            useProjectStore.getState().project.mediaLibrary.items.map((m) => m.name),
+            workingProject.mediaLibrary.items.map((m) => m.name),
           );
 
           // 1) Video (sin audio, servido por /files/{index})
@@ -234,8 +244,7 @@ export const V2VPanel: React.FC = () => {
             if (urlForLog) appendUrlLog(urlForLog, `✅ Video importado`);
           } else {
             const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
-            // Usamos getState().importMedia para garantizar que importa al proyecto activo actual.
-            const vimport = await useProjectStore.getState().importMedia(vfile);
+            const vimport = await importMediaIntoProject(workingProject, vfile);
             if (!vimport.success) {
               setRegenStatus(
                 vimport.error?.message || `Error importando video: ${folder}`,
@@ -248,6 +257,7 @@ export const V2VPanel: React.FC = () => {
               setImportStatus(key, "error");
               continue;
             }
+            workingProject = vimport.project;
             existingNames.add(videoMediaName);
             if (urlForLog) appendUrlLog(urlForLog, `✅ Video importado`);
           }
@@ -263,8 +273,7 @@ export const V2VPanel: React.FC = () => {
             }
 
             const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-            // Usamos getState().importMedia para garantizar que importa al proyecto activo actual.
-            const wres = await useProjectStore.getState().importMedia(wavFile);
+            const wres = await importMediaIntoProject(workingProject, wavFile);
             if (!wres.success) {
               if (urlForLog)
                 appendUrlLog(
@@ -274,27 +283,24 @@ export const V2VPanel: React.FC = () => {
               setImportStatus(key, "error");
               break;
             }
+            workingProject = wres.project;
             existingNames.add(wavName);
           }
 
           if (useV2VStore.getState().importStatusByKey[key] !== "error") {
             setImportStatus(key, "done");
-            // Auto-import al timeline en el proyecto recién creado.
-            // (Video en pista de video + audios agrupados por speaker en pistas de audio.)
-            const { addTrack, addClip } = useProjectStore.getState();
-            const currentProject = useProjectStore.getState().project;
-
+            // Auto-import al timeline en el proyecto recién creado (en memoria).
             const videoMediaName = `${folder}/video.mp4`;
-            const videoMedia = currentProject.mediaLibrary.items.find(
+            const videoMedia = workingProject.mediaLibrary.items.find(
               (m) => m.name === videoMediaName,
             );
 
             // Video track
             const beforeVideoTrackIds = new Set(
-              currentProject.timeline.tracks.map((t) => t.id),
+              workingProject.timeline.tracks.map((t) => t.id),
             );
-            const videoAddRes = await addTrack("video");
-            if (!videoAddRes.success) {
+            const videoAddRes = await addTrackToDetachedProject(workingProject, "video");
+            if (!videoAddRes.success || !videoAddRes.project) {
               setRegenStatus(`Importado en Media, pero falló crear video track: ${folder}`);
               useV2VStore.getState().setFolderRef(folder, {
                 jobId,
@@ -302,14 +308,22 @@ export const V2VPanel: React.FC = () => {
               });
               continue;
             }
+            workingProject = videoAddRes.project;
 
-            const afterVideoProject = useProjectStore.getState().project;
-            const videoTrack = afterVideoProject.timeline.tracks.find(
+            const videoTrack = workingProject.timeline.tracks.find(
               (t) => t.type === "video" && !beforeVideoTrackIds.has(t.id),
             );
 
             if (videoTrack && videoMedia) {
-              await addClip(videoTrack.id, videoMedia.id, 0);
+              const clipRes = await addClipToDetachedProject(
+                workingProject,
+                videoTrack.id,
+                videoMedia.id,
+                0,
+              );
+              if (clipRes.success && clipRes.project) {
+                workingProject = clipRes.project;
+              }
             }
 
             // Audio tracks (1 por speaker)
@@ -320,30 +334,23 @@ export const V2VPanel: React.FC = () => {
             }
             for (const speakerToken of Object.keys(bySpeaker)) {
               const beforeAudioTrackIds = new Set(
-                useProjectStore.getState().project.timeline.tracks.map((t) => t.id),
+                workingProject.timeline.tracks.map((t) => t.id),
               );
-              const audioAddRes = await addTrack("audio");
-              if (!audioAddRes.success) continue;
+              const audioAddRes = await addTrackToDetachedProject(workingProject, "audio");
+              if (!audioAddRes.success || !audioAddRes.project) continue;
+              workingProject = audioAddRes.project;
 
-              const afterAudioProject = useProjectStore.getState().project;
-              const audioTrack = afterAudioProject.timeline.tracks.find(
+              const audioTrack = workingProject.timeline.tracks.find(
                 (t) =>
                   t.type === "audio" && !beforeAudioTrackIds.has(t.id),
               );
               if (!audioTrack) continue;
 
-              // Renombramos el track para que sea fácil identificar el speaker.
-              useProjectStore.setState((state) => ({
-                project: {
-                  ...state.project,
-                  timeline: {
-                    ...state.project.timeline,
-                    tracks: state.project.timeline.tracks.map((t) =>
-                      t.id === audioTrack.id ? { ...t, name: `TTS_${speakerToken}` } : t,
-                    ),
-                  },
-                },
-              }));
+              workingProject = renameTrackInProject(
+                workingProject,
+                audioTrack.id,
+                `TTS_${speakerToken}`,
+              );
 
               const orderedSegs = bySpeaker[speakerToken]
                 .slice()
@@ -353,17 +360,25 @@ export const V2VPanel: React.FC = () => {
                 const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
                   seg.seg,
                 ).padStart(4, "0")}.wav`;
-                const wavMedia = useProjectStore.getState().project.mediaLibrary.items.find(
+                const wavMedia = workingProject.mediaLibrary.items.find(
                   (m) => m.name === wavName,
                 );
                 if (!wavMedia) continue;
 
-                await addClip(audioTrack.id, wavMedia.id, seg.start);
+                const clipRes = await addClipToDetachedProject(
+                  workingProject,
+                  audioTrack.id,
+                  wavMedia.id,
+                  seg.start,
+                );
+                if (clipRes.success && clipRes.project) {
+                  workingProject = clipRes.project;
+                }
               }
             }
 
-            // Fuerza guardado para que cada URL quede como proyecto recuperable.
-            await useProjectStore.getState().forceSave();
+            await autoSaveManager.forceSave(workingProject);
+            await projectManager.addToRecent(workingProject);
 
             setRegenStatus(`Importado y pegado al timeline: ${folder}`);
             if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
@@ -532,14 +547,16 @@ export const V2VPanel: React.FC = () => {
   }, [jobId]);
 
   return (
-    <ScrollArea className="flex-1 w-full">
+    <ScrollArea className="h-full min-h-0 flex-1 w-full">
       <div className="p-4 space-y-4 min-w-0">
-        <div className="flex items-center gap-2">
-          <Youtube size={20} className="text-red-500" />
-          <h2 className="text-sm font-semibold text-text-primary">
-            Video2Video – Traducción y doblaje
-          </h2>
-        </div>
+        {!embedInDrawer && (
+          <div className="flex items-center gap-2">
+            <Youtube size={20} className="text-red-500" />
+            <h2 className="text-sm font-semibold text-text-primary">
+              Video2Video – Traducción y doblaje
+            </h2>
+          </div>
+        )}
 
         <div>
           <label className="text-[10px] text-text-muted block mb-1">

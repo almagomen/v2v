@@ -37,10 +37,9 @@ import { useUIStore } from "../../stores/ui-store";
 import { useV2VStore } from "../../stores/v2v-store";
 import type { MediaItem } from "@openreel/core";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
-import { autoSaveManager, type AutoSaveMetadata } from "../../services/auto-save";
+import { autoSaveManager } from "../../services/auto-save";
 import { AspectRatioMatchDialog } from "./dialogs/AspectRatioMatchDialog";
 import { AIGenTab } from "./AIGenTab";
-import { V2VPanel } from "./V2VPanel";
 import {
   Button,
   Dialog,
@@ -388,7 +387,7 @@ export const AssetsPanel: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<
-    "media" | "text" | "graphics" | "ai" | "v2v"
+    "media" | "text" | "graphics" | "ai"
   >("media");
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -668,7 +667,7 @@ export const AssetsPanel: React.FC = () => {
     const ref = useV2VStore.getState().folderRefs[activeFolder];
     if (!ref) {
       window.alert(
-        `No encuentro referencia de V2V para la carpeta "${activeFolder}".\nVuelve a procesar el video desde Video2Video.`,
+        `No encuentro referencia de V2V para la carpeta "${activeFolder}".\nVuelve a procesar el video desde el panel Video2Video (icono de YouTube en la barra superior).`,
       );
       return;
     }
@@ -732,7 +731,7 @@ export const AssetsPanel: React.FC = () => {
     const ref = useV2VStore.getState().folderRefs[activeFolder];
     if (!ref) {
       window.alert(
-        `No encuentro referencia de V2V para la carpeta "${activeFolder}".\nVuelve a procesar el video desde Video2Video.`,
+        `No encuentro referencia de V2V para la carpeta "${activeFolder}".\nVuelve a procesar el video desde el panel Video2Video (icono de YouTube en la barra superior).`,
       );
       return;
     }
@@ -909,19 +908,6 @@ export const AssetsPanel: React.FC = () => {
         >
           AI Gen
           {activeTab === "ai" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(34,197,94,0.5)]" />
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab("v2v")}
-          className={`pb-3 transition-all relative ${
-            activeTab === "v2v"
-              ? "text-text-primary"
-              : "hover:text-text-secondary"
-          }`}
-        >
-          Video2Video
-          {activeTab === "v2v" && (
             <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(34,197,94,0.5)]" />
           )}
         </button>
@@ -1452,9 +1438,6 @@ export const AssetsPanel: React.FC = () => {
 
       {/* AI Tab Content */}
       {activeTab === "ai" && <AIGenTab />}
-
-      {/* Video2Video Tab Content */}
-      {activeTab === "v2v" && <V2VPanel />}
 
       {aspectRatioDialogData && (
         <AspectRatioMatchDialog

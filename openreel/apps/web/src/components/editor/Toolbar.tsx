@@ -20,6 +20,7 @@ import {
   HelpCircle,
   Diamond,
   Sparkles,
+  Youtube,
   Play,
   Save,
 } from "lucide-react";
@@ -40,6 +41,7 @@ import {
 import { ExportDialog } from "./ExportDialog";
 import { ScreenRecorder } from "./ScreenRecorder";
 import { HistoryPanel } from "./inspector/HistoryPanel";
+import { V2VPanel } from "./V2VPanel";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { autoSaveManager } from "../../services/auto-save";
 import { toast } from "../../stores/notification-store";
@@ -94,6 +96,7 @@ export const Toolbar: React.FC = () => {
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
   const [isRecorderOpen, setIsRecorderOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isV2VOpen, setIsV2VOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const { importMedia } = useProjectStore();
   const { track } = useAnalytics();
@@ -850,7 +853,33 @@ export const Toolbar: React.FC = () => {
         <Tooltip>
           <TooltipTrigger asChild>
             <button
-              onClick={() => setIsHistoryOpen(!isHistoryOpen)}
+              type="button"
+              onClick={() => {
+                setIsV2VOpen((open) => !open);
+                setIsHistoryOpen(false);
+              }}
+              className={`p-2 rounded-lg transition-colors ${
+                isV2VOpen
+                  ? "bg-primary/20 text-primary"
+                  : "hover:bg-background-elevated text-text-secondary hover:text-text-primary"
+              }`}
+            >
+              <Youtube size={16} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Video2Video – Traducción y doblaje</p>
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => {
+                setIsHistoryOpen((open) => !open);
+                setIsV2VOpen(false);
+              }}
               className={`p-2 rounded-lg transition-colors ${
                 isHistoryOpen
                   ? "bg-primary/20 text-primary"
@@ -1035,6 +1064,30 @@ export const Toolbar: React.FC = () => {
         onRecordingComplete={handleRecordingComplete}
       />
 
+      {isV2VOpen && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/20 z-40"
+            onClick={() => setIsV2VOpen(false)}
+          />
+          <div className="fixed top-16 right-0 bottom-0 w-full max-w-md bg-background-secondary border-l border-border z-50 shadow-2xl animate-in slide-in-from-right duration-200 flex flex-col">
+            <div className="flex items-center justify-between p-3 border-b border-border shrink-0">
+              <span className="text-sm font-medium text-text-primary">Video2Video</span>
+              <button
+                type="button"
+                onClick={() => setIsV2VOpen(false)}
+                className="p-1.5 rounded hover:bg-background-tertiary text-text-muted hover:text-text-primary transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+              <V2VPanel embedInDrawer />
+            </div>
+          </div>
+        </>
+      )}
+
       {isHistoryOpen && (
         <>
           <div
@@ -1045,6 +1098,7 @@ export const Toolbar: React.FC = () => {
             <div className="flex items-center justify-between p-3 border-b border-border">
               <span className="text-sm font-medium text-text-primary">Action History</span>
               <button
+                type="button"
                 onClick={() => setIsHistoryOpen(false)}
                 className="p-1.5 rounded hover:bg-background-tertiary text-text-muted hover:text-text-primary transition-colors"
               >
