@@ -380,9 +380,14 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             await autoSaveManager.forceSave(workingProject);
             await projectManager.addToRecent(workingProject);
 
+            useV2VStore.getState().setFolderRef(folder, {
+              jobId,
+              videoIndex: v.index,
+            });
+
             setRegenStatus(`Importado y pegado al timeline: ${folder}`);
             if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
-            // Referencia para el botón "Añadir a la timeline" desde la carpeta.
+            // Referencia para copiar carpeta / restaurar timeline desde Media.
             } // end if importStatus !== "error"
           } // end for
         } finally {

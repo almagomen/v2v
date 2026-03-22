@@ -72,6 +72,23 @@ function toSafeToken(s: string): string {
   return ascii || "speaker";
 }
 
+/** Copia blobs de Media de una carpeta `folder/…` a archivos para importar en otro proyecto. */
+function collectFolderMediaFiles(items: MediaItem[], folder: string): File[] {
+  const out: File[] = [];
+  for (const m of items) {
+    const idx = m.name.indexOf("/");
+    if (idx <= 0) continue;
+    if (m.name.slice(0, idx) !== folder) continue;
+    if (!m.blob) continue;
+    out.push(
+      new File([m.blob], m.name, {
+        type: m.blob.type || "application/octet-stream",
+      }),
+    );
+  }
+  return out;
+}
+
 /**
  * Media Item Thumbnail Component
  * Shows thumbnail with metadata below (not overlaid)
@@ -662,79 +679,141 @@ export const AssetsPanel: React.FC = () => {
     [addMediaToTimeline],
   );
 
-  const handleAddFolderTtsToTimeline = useCallback(async () => {
+  /** Importa video+WAV desde la API V2V al proyecto actual (requiere folderRefs). */
+  const importFolderTtsViaApi = useCallback(
+    async (folder: string, ref: { jobId: string; videoIndex: number }) => {
+      setIsImporting(true);
+      setImportProgress("Copiando carpeta al proyecto seleccionado...");
+
+      try {
+        const segments: AudioSegmentItem[] = await v2vApi.getAudioSegments(
+          ref.jobId,
+          ref.videoIndex,
+        );
+
+        const videoMediaName = `${folder}/video.mp4`;
+
+        const refreshState = () => useProjectStore.getState();
+        let mediaNames = new Set(refreshState().project.mediaLibrary.items.map((m) => m.name));
+        if (!mediaNames.has(videoMediaName)) {
+          const vblob = await v2vApi.fetchOutputVideoBlob(ref.jobId, ref.videoIndex);
+          const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
+          const vres = await importMedia(vfile);
+          if (!vres.success) {
+            window.alert(vres.error?.message || "Error importando video");
+            return;
+          }
+        }
+
+        for (const seg of segments) {
+          const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
+            seg.seg,
+          ).padStart(4, "0")}.wav`;
+
+          mediaNames = new Set(refreshState().project.mediaLibrary.items.map((m) => m.name));
+          if (mediaNames.has(wavName)) continue;
+
+          const wavBlob = await v2vApi.fetchAudioSegmentBlob(
+            ref.jobId,
+            ref.videoIndex,
+            seg.seg,
+          );
+          const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
+          const wres = await importMedia(wavFile);
+          if (!wres.success) {
+            window.alert(wres.error?.message || `Error importando WAV seg ${seg.seg}`);
+            return;
+          }
+        }
+      } finally {
+        setIsImporting(false);
+        setImportProgress("");
+      }
+    },
+    [importMedia],
+  );
+
+  /** Restaura posiciones y trims según el job V2V (video en 0, audios en seg.start). */
+  const handleResetV2VFolderTimeline = useCallback(async () => {
     if (!activeFolder) return;
     const ref = useV2VStore.getState().folderRefs[activeFolder];
     if (!ref) {
       window.alert(
-        `No encuentro referencia de V2V para la carpeta "${activeFolder}".\nVuelve a procesar el video desde el panel Video2Video (icono de YouTube en la barra superior).`,
+        `No hay referencia V2V para "${activeFolder}". Vuelve a procesar desde Video2Video o usa una carpeta creada tras una inferencia reciente.`,
       );
       return;
     }
 
     setIsImporting(true);
-    setImportProgress("Copiando carpeta al proyecto seleccionado...");
-
+    setImportProgress("Restaurando posiciones en el timeline...");
     try {
-      const segments: AudioSegmentItem[] = await v2vApi.getAudioSegments(
-        ref.jobId,
-        ref.videoIndex,
-      );
-
-      const videoMediaName = `${activeFolder}/video.mp4`;
-
-      // Importa video si falta en la Media library del proyecto actual.
-      const refreshState = () => useProjectStore.getState();
-      const state0 = refreshState();
-      let mediaNames = new Set(state0.project.mediaLibrary.items.map((m) => m.name));
-      if (!mediaNames.has(videoMediaName)) {
-        const vblob = await v2vApi.fetchOutputVideoBlob(ref.jobId, ref.videoIndex);
-        const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
-        const vres = await importMedia(vfile);
-        if (!vres.success) {
-          window.alert(vres.error?.message || "Error importando video");
-          return;
-        }
-      }
-
-      // Importa todos los WAV si faltan.
+      const segments = await v2vApi.getAudioSegments(ref.jobId, ref.videoIndex);
+      const videoName = `${activeFolder}/video.mp4`;
+      const wavStartByName = new Map<string, number>();
       for (const seg of segments) {
         const wavName = `${activeFolder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
           seg.seg,
         ).padStart(4, "0")}.wav`;
+        wavStartByName.set(wavName, seg.start);
+      }
 
-        mediaNames = new Set(refreshState().project.mediaLibrary.items.map((m) => m.name));
-        if (mediaNames.has(wavName)) continue;
+      type Op = {
+        clipId: string;
+        trackId: string;
+        startTime: number;
+        fullDuration: number;
+      };
+      const ops: Op[] = [];
+      const snap = useProjectStore.getState();
+      for (const track of snap.project.timeline.tracks) {
+        for (const clip of track.clips) {
+          const media = snap.getMediaItem(clip.mediaId);
+          if (!media?.name) continue;
+          const idx = media.name.indexOf("/");
+          if (idx <= 0 || media.name.slice(0, idx) !== activeFolder) continue;
 
-        const wavBlob = await v2vApi.fetchAudioSegmentBlob(
-          ref.jobId,
-          ref.videoIndex,
-          seg.seg,
-        );
-        const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-        const wres = await importMedia(wavFile);
-        if (!wres.success) {
-          window.alert(wres.error?.message || `Error importando WAV seg ${seg.seg}`);
-          return;
+          const fullDur =
+            media.metadata?.duration && media.metadata.duration > 0
+              ? media.metadata.duration
+              : clip.duration;
+
+          if (media.name === videoName) {
+            ops.push({
+              clipId: clip.id,
+              trackId: track.id,
+              startTime: 0,
+              fullDuration: fullDur,
+            });
+          } else if (wavStartByName.has(media.name)) {
+            ops.push({
+              clipId: clip.id,
+              trackId: track.id,
+              startTime: wavStartByName.get(media.name)!,
+              fullDuration: fullDur,
+            });
+          }
         }
       }
 
-      // Solo copiar a Media del proyecto destino (sin pegar a timeline).
+      for (const op of ops) {
+        const st = useProjectStore.getState();
+        await st.moveClip(op.clipId, op.startTime, op.trackId);
+        if (op.fullDuration > 0) {
+          await st.trimClip(op.clipId, 0, op.fullDuration);
+        }
+      }
+
+      await useProjectStore.getState().forceSave();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Error al restaurar el timeline");
     } finally {
       setIsImporting(false);
       setImportProgress("");
     }
-  }, [activeFolder, importMedia]);
+  }, [activeFolder]);
 
   const handleCopyFolderTtsToAnotherProject = useCallback(async () => {
     if (!activeFolder) return;
-    const ref = useV2VStore.getState().folderRefs[activeFolder];
-    if (!ref) {
-      window.alert(
-        `No encuentro referencia de V2V para la carpeta "${activeFolder}".\nVuelve a procesar el video desde el panel Video2Video (icono de YouTube en la barra superior).`,
-      );
-      return;
-    }
 
     try {
       await autoSaveManager.initialize();
@@ -784,12 +863,40 @@ export const AssetsPanel: React.FC = () => {
 
   const handleConfirmCopyToTarget = useCallback(
     async (targetId: string) => {
+      if (!activeFolder) return;
       setCopyingTargetId(targetId);
       try {
+        const snapshotFiles = collectFolderMediaFiles(
+          useProjectStore.getState().project.mediaLibrary.items,
+          activeFolder,
+        );
+        const ref = useV2VStore.getState().folderRefs[activeFolder];
+
         if (targetId !== "__current__") {
           await useProjectStore.getState().recoverFromAutoSave(targetId);
         }
-        await handleAddFolderTtsToTimeline();
+
+        if (ref) {
+          await importFolderTtsViaApi(activeFolder, ref);
+        } else {
+          if (snapshotFiles.length === 0) {
+            window.alert(
+              "No hay archivos locales en esta carpeta (o faltan blobs). Ejecuta otra vez la inferencia desde Video2Video para registrar la referencia, o importa los archivos manualmente.",
+            );
+            return;
+          }
+          for (const file of snapshotFiles) {
+            const exists = useProjectStore
+              .getState()
+              .project.mediaLibrary.items.some((m) => m.name === file.name);
+            if (exists) continue;
+            const r = await useProjectStore.getState().importMedia(file);
+            if (!r.success) {
+              throw new Error(r.error?.message || "Error importando archivo");
+            }
+          }
+        }
+
         setShowCopyProjectModal(false);
       } catch (e) {
         window.alert(e instanceof Error ? e.message : "Error al copiar a proyecto");
@@ -797,7 +904,7 @@ export const AssetsPanel: React.FC = () => {
         setCopyingTargetId(null);
       }
     },
-    [handleAddFolderTtsToTimeline],
+    [activeFolder, importFolderTtsViaApi],
   );
 
   const triggerFileInput = useCallback(() => {
@@ -1018,9 +1125,18 @@ export const AssetsPanel: React.FC = () => {
                     <Trash2 size={14} />
                   </button>
                   <button
+                    type="button"
+                    onClick={handleResetV2VFolderTimeline}
+                    className="p-1 rounded bg-background-tertiary border border-border hover:border-primary/50 text-text-muted hover:text-primary"
+                    title="Restaurar posiciones V2V en el timeline (video t=0, audios según segmentos)"
+                  >
+                    <RefreshCw size={14} />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handleCopyFolderTtsToAnotherProject()}
                     className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary"
-                    title="Copiar TTS a otro proyecto"
+                    title="Copiar carpeta a otro proyecto (Media)"
                   >
                     <Plus size={14} />
                   </button>
