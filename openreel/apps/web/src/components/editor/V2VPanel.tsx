@@ -767,7 +767,7 @@ export const V2VPanel: React.FC = () => {
                     
                     setIsProcessing(true);
                     try {
-                      const projectStore = useProjectStore.getState();
+                      let projectStore = useProjectStore.getState();
                       let targetProjectLoaded = false;
                       
                       if (projectStore.project.name === projectTitle) {
@@ -803,28 +803,42 @@ export const V2VPanel: React.FC = () => {
                         return;
                       }
 
-                      // Estado fresco tras posible cambio de proyecto
-                      const freshStore = useProjectStore.getState();
+                      // Obtenemos el store fresco tras el posible cambio de proyecto
+                      let freshStore = useProjectStore.getState();
                       
-                      const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
+                      // 1) Video
                       const videoMediaName = `${folder}/video.mp4`;
-                      const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
-                      await freshStore.importMedia(vfile);
+                      const videoExists = freshStore.project.mediaLibrary.items.some(m => m.name === videoMediaName);
                       
+                      if (!videoExists) {
+                        const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
+                        const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
+                        await freshStore.importMedia(vfile);
+                        // Refresh store reference after import
+                        freshStore = useProjectStore.getState();
+                      }
+                      
+                      // 2) Audios por segmento
                       const audioSegs = v.segments.filter((s) => s.text?.trim().length > 0);
                       for (const seg of audioSegs) {
-                        const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
                         const speakerToken = toSafeToken(seg.speaker || "speaker");
                         const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
-                        const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-                        await freshStore.importMedia(wavFile);
+                        
+                        // Solo importamos si no existe ya
+                        if (!freshStore.project.mediaLibrary.items.some(m => m.name === wavName)) {
+                          const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
+                          const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
+                          await freshStore.importMedia(wavFile);
+                          // Refresh store reference after each import to see new items
+                          freshStore = useProjectStore.getState();
+                        }
                       }
                       
                       await freshStore.forceSave();
                       
-                      toast.success("Re-importado con éxito", `Los archivos de "${folder}" se añadieron al proyecto "${projectTitle}".`);
+                      toast.success("Re-importación completa", `Archivos en proyecto "${projectTitle}".`);
                     } catch (e) {
-                      toast.error("Error importando Media", String(e));
+                      toast.error("Error al re-importar", String(e));
                     } finally {
                       setIsProcessing(false);
                     }
