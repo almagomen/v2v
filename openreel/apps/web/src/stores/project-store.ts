@@ -101,7 +101,9 @@ export interface ProjectState {
   updateSettings: (settings: Partial<ProjectSettings>) => Promise<ActionResult>;
 
   // Media library actions
-  importMedia: (file: File) => Promise<ActionResult>;
+  importMedia: (file: File) => Promise<{ success: boolean; actionId?: string; error?: { code: string; message: string } }>;
+  importMediaToProjectSilent: (projectId: string, file: File) => Promise<{ success: boolean; error?: string }>;
+  createProjectSilent: (name: string, settings: Partial<ProjectSettings>) => Promise<string>;
   deleteMedia: (mediaId: string) => Promise<ActionResult>;
   replaceMediaAsset: (mediaId: string, file: File) => Promise<ActionResult>;
   renameMedia: (mediaId: string, name: string) => Promise<ActionResult>;
@@ -682,6 +684,92 @@ export const useProjectStore = create<ProjectState>()(
                 error instanceof Error ? error.message : "Unknown import error",
             },
           };
+        }
+      },
+      createProjectSilent: async (name: string, settings: Partial<ProjectSettings>) => {
+        const newProject = createEmptyProject(name, settings);
+        await autoSaveManager.initialize();
+        await autoSaveManager.forceSave(newProject);
+        return newProject.id;
+      },
+      importMediaToProjectSilent: async (projectId: string, file: File) => {
+        const { project: currentProject } = get();
+        
+        // Si el proyecto ya es el activo, usamos la importación normal
+        if (currentProject.id === projectId) {
+          const res = await get().importMedia(file);
+          return res.success ? { success: true } : { success: false, error: res.error?.message };
+        }
+
+        try {
+          // 1. Cargar el proyecto de IndexedDB
+          await autoSaveManager.initialize();
+          const saves = await autoSaveManager.checkForRecovery();
+          const targetSave = saves.find(s => s.projectId === projectId || s.id === projectId);
+          
+          let targetProject: Project;
+          if (targetSave) {
+            targetProject = (await autoSaveManager.recover(targetSave.id)) as Project;
+            if (!targetProject) return { success: false, error: "Failed to parse project data" };
+          } else {
+            return { success: false, error: "Project not found in storage" };
+          }
+
+          // 2. Procesar el medio (Bridge)
+          const bridge = getMediaBridge();
+          const mediaType = file.type.startsWith("video/") ? "video" : file.type.startsWith("audio/") ? "audio" : "image";
+          const processedMedia = await bridge.importFile(file);
+          
+          if (!processedMedia.success || !processedMedia.media) {
+            throw new Error(processedMedia.error || "Processing failed");
+          }
+
+          let thumbnailUrl: string | undefined;
+          if (mediaType === "video" || mediaType === "image") {
+            const thumbs = await bridge.generateThumbnailsForMedia(file, mediaType);
+            if (thumbs.length > 0) thumbnailUrl = thumbs[0].dataUrl;
+          }
+
+          // 3. Crear el MediaItem
+          const newMediaItem: MediaItem = {
+            id: uuidv4(),
+            type: mediaType,
+            name: file.name,
+            fileHandle: null,
+            blob: file,
+            metadata: {
+              duration: processedMedia.media.metadata.duration || 0,
+              width: processedMedia.media.metadata.width || 0,
+              height: processedMedia.media.metadata.height || 0,
+              frameRate: processedMedia.media.metadata.frameRate || 0,
+              codec: processedMedia.media.metadata.codec || "",
+              sampleRate: processedMedia.media.metadata.sampleRate || 0,
+              channels: processedMedia.media.metadata.channels || 0,
+              fileSize: file.size,
+            },
+            thumbnailUrl: thumbnailUrl || null,
+            waveformData: processedMedia.media.waveformData?.peaks || null,
+          };
+
+          // 4. Actualizar el objeto de proyecto
+          const updatedProject: Project = {
+            ...targetProject,
+            mediaLibrary: {
+              ...targetProject.mediaLibrary,
+              items: [...targetProject.mediaLibrary.items, newMediaItem],
+            },
+            modifiedAt: Date.now(),
+          };
+
+          // 5. Persistir en IndexedDB (Media Blob + Proyecto)
+          const { saveMediaBlob } = await import("../services/media-storage");
+          await saveMediaBlob(updatedProject.id, newMediaItem.id, file, newMediaItem.metadata);
+          await autoSaveManager.forceSave(updatedProject);
+
+          return { success: true };
+        } catch (error) {
+          console.error("[ProjectStore] Silent import failed:", error);
+          return { success: false, error: error instanceof Error ? error.message : "Internal error" };
         }
       },
 
