@@ -53,7 +53,7 @@ import {
   deleteMediaBlob,
   loadProjectMedia,
 } from "../services/media-storage";
-import { importMediaIntoProject } from "../lib/import-media-into-project";
+import { importMediaIntoProject } from "../utils/import-media-into-project";
 import { restoreMediaItem } from "../utils/media-recovery";
 import { projectManager } from "../services/project-manager";
 

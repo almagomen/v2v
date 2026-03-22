@@ -8,12 +8,12 @@ import { useV2VStore } from "../../stores/v2v-store";
 import { autoSaveManager } from "../../services/auto-save";
 import { projectManager } from "../../services/project-manager";
 import { createEmptyProject } from "../../stores/project";
-import { importMediaIntoProject } from "../../lib/import-media-into-project";
+import { importMediaIntoProject } from "../../utils/import-media-into-project";
 import {
   addClipToDetachedProject,
   addTrackToDetachedProject,
   renameTrackInProject,
-} from "../../lib/detached-project-actions";
+} from "../../utils/detached-project-actions";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
