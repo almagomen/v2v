@@ -24,6 +24,7 @@ import { useProjectStore } from "../../stores/project-store";
 import { useTimelineStore } from "../../stores/timeline-store";
 import { useUIStore } from "../../stores/ui-store";
 import { useThemeStore } from "../../stores/theme-store";
+import { useAudioCacheStore } from "../../stores/audio-cache-store";
 import { getRenderBridge } from "../../bridges/render-bridge";
 import {
   RendererFactory,
@@ -218,6 +219,14 @@ export const Preview: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [showZoomMenu, setShowZoomMenu] = useState(false);
+
+  const audioCacheTrigger = useAudioCacheStore((state) => state.invalidationTrigger);
+
+  useEffect(() => {
+    if (audioCacheTrigger > 0) {
+      audioBufferCacheRef.current.clear();
+    }
+  }, [audioCacheTrigger]);
 
   const ZOOM_OPTIONS = [
     { label: "100%", value: 1 },

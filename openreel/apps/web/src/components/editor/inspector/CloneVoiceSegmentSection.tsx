@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, History, Loader2, RefreshCw } from "lucide-react";
 import {
   getTranscriptionService,
   initializeTranscriptionService,
@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { v2vApi, type SpeakerOption } from "../../../lib/v2v-api";
 import { useProjectStore } from "../../../stores/project-store";
 import { useV2VStore } from "../../../stores/v2v-store";
+import { invalidateAudioCache } from "../../../stores/audio-cache-store";
 
 type V2VParsedSegment = {
   folder: string;
@@ -16,9 +17,14 @@ type V2VParsedSegment = {
   segIdx: number;
 };
 
+type TextVersion = {
+  text: string;
+  speaker: string;
+  timestamp: number;
+  isCurrent: boolean;
+};
+
 function parseV2VSegmentFromName(name: string): V2VParsedSegment | null {
-  // V2VPanel importa wav con nombre: `${folder}/tts_${speakerToken}_${segIdx:0000}.wav`
-  // Normalizamos separadores de path por si el nombre trae `\`.
   const normalized = name.replace(/\\/g, "/");
   const match = normalized.match(/^(?:(.+?)\/)?tts_(.+)_(\d+)\.wav$/);
   if (!match) return null;
@@ -40,6 +46,55 @@ function joinNonEmpty(parts: string[]): string {
     .trim();
 }
 
+function getLocalStorageKey(filename: string): string {
+  return `v2v_cloned_text_${filename}`;
+}
+
+function loadFromLocalStorage(filename: string): { text: string; speaker: string; timestamp: number } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const key = getLocalStorageKey(filename);
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as { text: string; speaker: string; timestamp: number };
+  } catch {
+    return null;
+  }
+}
+
+function saveToLocalStorage(filename: string, data: { text: string; speaker: string; timestamp: number }): void {
+  if (typeof window === "undefined") return;
+  try {
+    const key = getLocalStorageKey(filename);
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch {
+    // ignore quota errors
+  }
+}
+
+function loadHistoryFromLocalStorage(filename: string): TextVersion[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const key = `v2v_cloned_history_${filename}`;
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const history = JSON.parse(raw) as TextVersion[];
+    return history.filter(v => !v.isCurrent);
+  } catch {
+    return [];
+  }
+}
+
+function saveHistoryToLocalStorage(filename: string, history: TextVersion[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    const key = `v2v_cloned_history_${filename}`;
+    localStorage.setItem(key, JSON.stringify(history));
+  } catch {
+    // ignore
+  }
+}
+
 export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId }) => {
   const { getClip, getMediaItem, replaceMediaAsset } = useProjectStore();
   const clip = getClip(clipId);
@@ -55,7 +110,8 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const folderRef = parsed ? getFolderRef(parsed.folder) : undefined;
 
   const [speakers, setSpeakers] = useState<SpeakerOption[]>([]);
-  const [selectedVoice, setSelectedVoice] = useState<string>(defaultSpeaker);
+  const [selectedVoice, setSelectedVoice] = useState<string>("");
+  const [initialized, setInitialized] = useState(false);
 
   const [jobLoading, setJobLoading] = useState(false);
   const [jobError, setJobError] = useState<string | null>(null);
@@ -70,25 +126,32 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const [regenError, setRegenError] = useState<string | null>(null);
   const [regenStatus, setRegenStatus] = useState<string | null>(null);
 
+  const [textVersions, setTextVersions] = useState<TextVersion[]>([]);
+
   useEffect(() => {
-    setSelectedVoice(defaultSpeaker);
-  }, [defaultSpeaker]);
+    if (!initialized && defaultSpeaker) {
+      setSelectedVoice(defaultSpeaker);
+      setInitialized(true);
+    }
+  }, [defaultSpeaker, initialized]);
 
   useEffect(() => {
     v2vApi.getSpeakers().then(setSpeakers).catch(() => setSpeakers([]));
   }, []);
 
-  // Cargar texto/start/end desde el job actual si este clip está mapeado a un segmento V2V.
   useEffect(() => {
     let cancelled = false;
 
     async function loadFromJob() {
-      if (!folderRef || !parsed || !clip) return;
+      if (!folderRef || !parsed || !clip || !mediaItem) return;
       if (!folderRef.jobId) return;
 
       setJobLoading(true);
       setJobError(null);
+
       try {
+        const localData = loadFromLocalStorage(mediaItem.name);
+        
         const job = await v2vApi.getJobResult(folderRef.jobId);
         if (cancelled) return;
 
@@ -99,7 +162,18 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         const end = seg?.end ?? clip.startTime + clip.duration;
 
         setSegmentTimes({ start, end });
-        setSegmentText(seg?.text ?? "");
+        
+        if (localData) {
+          setSegmentText(localData.text);
+          setSelectedVoice(localData.speaker);
+        } else {
+          setSegmentText(seg?.text ?? "");
+        }
+
+        const history = loadHistoryFromLocalStorage(mediaItem.name);
+        if (history.length > 0) {
+          setTextVersions(history);
+        }
       } catch (e) {
         if (cancelled) return;
         setJobError(e instanceof Error ? e.message : "Error al cargar texto del segmento");
@@ -112,7 +186,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     return () => {
       cancelled = true;
     };
-  }, [folderRef, parsed, clip]);
+  }, [folderRef, parsed, clip, mediaItem]);
 
   const effectiveTimes = useMemo(() => {
     if (segmentTimes) return segmentTimes;
@@ -159,7 +233,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   }, [clip, mediaItem, segmentTimes]);
 
   const handleTranscribeWithBackend = useCallback(async () => {
-    // Fallback opcional. Requiere que exista el endpoint backend /api/transcribe-audio.
     if (!mediaItem?.blob) return;
 
     setSttLoading(true);
@@ -214,6 +287,11 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     }
   }, [mediaItem]);
 
+  const handleRestoreVersion = useCallback((version: TextVersion) => {
+    setSegmentText(version.text);
+    setSelectedVoice(version.speaker);
+  }, []);
+
   const handleRegenerate = useCallback(async () => {
     if (!folderRef || !parsed || !clip || !mediaItem) return;
     if (!effectiveTimes) return;
@@ -221,6 +299,9 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       setRegenError("El texto no puede estar vacío");
       return;
     }
+
+    const currentText = segmentText;
+    const currentSpeaker = selectedVoice;
 
     setRegenLoading(true);
     setRegenError(null);
@@ -250,6 +331,25 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         throw new Error(msg);
       }
 
+      invalidateAudioCache(mediaItem.id);
+
+      const timestamp = Date.now();
+      saveToLocalStorage(mediaItem.name, {
+        text: currentText,
+        speaker: currentSpeaker,
+        timestamp,
+      });
+
+      const newVersion: TextVersion = {
+        text: currentText,
+        speaker: currentSpeaker,
+        timestamp,
+        isCurrent: true,
+      };
+      const updatedHistory = [newVersion, ...textVersions.slice(0, 9)];
+      setTextVersions(updatedHistory);
+      saveHistoryToLocalStorage(mediaItem.name, updatedHistory);
+
       setRegenStatus("Segmento regenerado");
     } catch (e) {
       setRegenError(e instanceof Error ? e.message : "Error al regenerar");
@@ -266,6 +366,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     normalizeTranslateLang,
     selectedVoice,
     replaceMediaAsset,
+    textVersions,
   ]);
 
   if (!clip || !mediaItem) {
@@ -280,7 +381,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     return (
       <div className="p-3 bg-background-tertiary border border-border rounded-lg text-[10px] text-text-muted">
         Este clip no parece provenir de Video2Video (V2V), por lo que no hay
-        “clonar voz” disponible.
+        "clonar voz" disponible.
       </div>
     );
   }
@@ -353,6 +454,40 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         />
       </div>
 
+      {textVersions.length > 0 && (
+        <div className="space-y-2">
+          <label className="text-[10px] text-text-secondary block mb-1 flex items-center gap-1">
+            <History size={10} />
+            Versiones anteriores
+          </label>
+          <Select
+            onValueChange={(value) => {
+              const version = textVersions.find((v) => v.timestamp.toString() === value);
+              if (version) {
+                handleRestoreVersion(version);
+              }
+            }}
+            value=""
+            disabled={regenLoading}
+          >
+            <SelectTrigger className="w-full bg-background-secondary border-border text-text-primary text-[11px]">
+              <SelectValue placeholder="Restaurar versión anterior..." />
+            </SelectTrigger>
+            <SelectContent className="bg-background-secondary border-border max-h-[200px]">
+              {textVersions.map((version) => (
+                <SelectItem key={version.timestamp} value={version.timestamp.toString()}>
+                  <span className="text-[10px]">
+                    {version.text.slice(0, 30)}
+                    {version.text.length > 30 ? "..." : ""}
+                    {" "}({version.speaker}) - {new Date(version.timestamp).toLocaleTimeString()}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
       <div className="space-y-2">
         {sttError && (
           <div className="flex items-center gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded-lg">
@@ -383,7 +518,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
             className="flex-1 py-2 bg-background-secondary border border-border rounded-lg text-[10px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
             title="Fallback backend (requiere endpoint /api/transcribe-audio)"
           >
-            "Whisper+diar."
+            Whisper+diar.
           </button>
         </div>
       </div>
@@ -423,4 +558,3 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     </div>
   );
 };
-
