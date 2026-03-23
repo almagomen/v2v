@@ -87,7 +87,11 @@ def _do_regenerate_segment(
     split_audio_sequences(path.with_name("vocals.wav"), texts_edited, edit_indices=[seg_idx])
 
     speaker_audio = SPEAKER_OPTIONS.get(speaker, speaker)
-    lang = translate_lang if translate_lang and translate_lang != "None" else "es"
+    lang = (
+        translate_lang
+        if translate_lang and translate_lang != "None"
+        else getattr(transcription, "language", None) or "es"
+    )
 
     paths_es, _, _ = clone_voice_segments(
         path,

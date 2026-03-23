@@ -88,3 +88,15 @@ class RegenerateVideoRequest(BaseModel):
 class SpeakerOption(BaseModel):
     label: str
     value: str
+
+
+class TranscribeSegmentSchema(BaseModel):
+    start: float
+    end: float
+    text: str
+    speaker: Optional[str] = None
+
+
+class TranscribeAudioResponse(BaseModel):
+    segments: list[TranscribeSegmentSchema]
+    language: Optional[str] = None

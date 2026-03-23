@@ -45,6 +45,7 @@ import {
   MotionPathSection,
   ParticleEffectsSection,
   AudioTextSyncPanel,
+  CloneVoiceSegmentSection,
   AlignmentSection,
 } from "./inspector";
 import {
@@ -699,6 +700,16 @@ export const InspectorPanel: React.FC = () => {
             {showAudioEffects && (
               <Section title="Auto Cut Silence" sectionId="auto-cut-silence" defaultOpen={false}>
                 <AutoCutSilenceSection clipId={clipId} />
+              </Section>
+            )}
+
+            {clipType === "audio" && (
+              <Section
+                title="Clone Voice (V2V)"
+                sectionId="clone-voice-v2v"
+                defaultOpen={false}
+              >
+                <CloneVoiceSegmentSection clipId={clipId} />
               </Section>
             )}
 
