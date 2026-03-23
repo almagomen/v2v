@@ -59,6 +59,40 @@ function findClipStartInProject(project: Project, clipId: string): number | null
   return null;
 }
 
+/** Pista del clip y su índice entre pistas del mismo `type` (orden en `project.timeline.tracks`). */
+function findClipTrackInfo(
+  project: Project,
+  clipId: string,
+): { trackId: string; trackType: string; typeIndex: number } | null {
+  const track = project.timeline.tracks.find((t) =>
+    t.clips.some((c) => c.id === clipId),
+  );
+  if (!track) return null;
+  const sameType = project.timeline.tracks.filter((t) => t.type === track.type);
+  const typeIndex = sameType.findIndex((t) => t.id === track.id);
+  if (typeIndex < 0) return null;
+  return { trackId: track.id, trackType: track.type, typeIndex };
+}
+
+/** Desplazamiento en “filas” de pista del mismo tipo que el líder (video↔video, audio↔audio, etc.). */
+function computeLeaderTrackDelta(
+  project: Project,
+  leaderClipId: string,
+  targetTrackId: string | undefined,
+): number {
+  if (!targetTrackId) return 0;
+  const leaderInfo = findClipTrackInfo(project, leaderClipId);
+  if (!leaderInfo) return 0;
+  const destTrack = project.timeline.tracks.find((t) => t.id === targetTrackId);
+  if (!destTrack || destTrack.type !== leaderInfo.trackType) return 0;
+  const sameType = project.timeline.tracks.filter(
+    (t) => t.type === leaderInfo.trackType,
+  );
+  const newIdx = sameType.findIndex((t) => t.id === targetTrackId);
+  if (newIdx < 0) return 0;
+  return newIdx - leaderInfo.typeIndex;
+}
+
 export const Timeline: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const tracksRef = useRef<HTMLDivElement>(null);
@@ -518,6 +552,12 @@ export const Timeline: React.FC = () => {
       }
 
       const deltaTime = newStartTime - leaderStart;
+      const deltaTypeIndex = computeLeaderTrackDelta(
+        projectBefore,
+        clipId,
+        targetTrackId,
+      );
+      const leaderInfo = findClipTrackInfo(projectBefore, clipId);
       const groupIds = selectedTimelineClipIds.filter(
         (id) => findClipStartInProject(projectBefore, id) !== null,
       );
@@ -525,7 +565,7 @@ export const Timeline: React.FC = () => {
       const isGroupMove =
         groupIds.length > 1 &&
         groupIds.includes(clipId) &&
-        deltaTime !== 0;
+        (deltaTime !== 0 || deltaTypeIndex !== 0);
 
       if (!isGroupMove) {
         await moveClip(clipId, newStartTime, targetTrackId);
@@ -541,7 +581,27 @@ export const Timeline: React.FC = () => {
           const start = findClipStartInProject(projectBefore, id);
           if (start === null) continue;
           const nextStart = Math.max(0, start + deltaTime);
-          await moveClip(id, nextStart, undefined);
+          const info = findClipTrackInfo(projectBefore, id);
+          if (!info || !leaderInfo) {
+            await moveClip(id, nextStart, undefined);
+            continue;
+          }
+          if (info.trackType !== leaderInfo.trackType) {
+            await moveClip(id, nextStart, undefined);
+            continue;
+          }
+          const sameType = projectBefore.timeline.tracks.filter(
+            (t) => t.type === info.trackType,
+          );
+          const nextIdx = Math.max(
+            0,
+            Math.min(sameType.length - 1, info.typeIndex + deltaTypeIndex),
+          );
+          const nextTrackId = sameType[nextIdx]!.id;
+          const nextTrackArg =
+            nextTrackId !== info.trackId ? nextTrackId : undefined;
+          if (nextStart === start && !nextTrackArg) continue;
+          await moveClip(id, nextStart, nextTrackArg);
         }
       } finally {
         actionHistory.endGroup();
@@ -727,7 +787,7 @@ export const Timeline: React.FC = () => {
       data-tour="timeline"
       className="h-full bg-background border-t border-border flex flex-col"
     >
-      <div className="h-12 border-b border-border flex items-center justify-between px-4 bg-background-secondary relative z-[100]">
+      <div className="h-12 border-b border-border flex items-center justify-between px-4 bg-background-secondary relative z-auto">
         <div className="flex items-center gap-2">
           <div className="flex bg-background-tertiary rounded-lg p-1 border border-border">
             <IconButton

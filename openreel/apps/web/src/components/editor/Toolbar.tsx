@@ -1067,10 +1067,10 @@ export const Toolbar: React.FC = () => {
       {isV2VOpen && (
         <>
           <div
-            className="fixed inset-0 bg-black/20 z-[110]"
+            className="fixed inset-0 bg-black/20 z-40"
             onClick={() => setIsV2VOpen(false)}
           />
-          <div className="fixed top-16 right-0 bottom-0 w-full max-w-md bg-background-secondary border-l border-border z-[120] shadow-2xl animate-in slide-in-from-right duration-200 flex flex-col">
+          <div className="fixed top-16 right-0 bottom-0 w-full max-w-md bg-background-secondary border-l border-border z-50 shadow-2xl animate-in slide-in-from-right duration-200 flex flex-col">
             <div className="flex items-center justify-between p-3 border-b border-border shrink-0">
               <span className="text-sm font-medium text-text-primary">Video2Video</span>
               <button
@@ -1091,10 +1091,10 @@ export const Toolbar: React.FC = () => {
       {isHistoryOpen && (
         <>
           <div
-            className="fixed inset-0 bg-black/20 z-[110]"
+            className="fixed inset-0 bg-black/20 z-40"
             onClick={() => setIsHistoryOpen(false)}
           />
-          <div className="fixed top-16 right-0 bottom-0 w-80 bg-background-secondary border-l border-border z-[120] shadow-2xl animate-in slide-in-from-right duration-200">
+          <div className="fixed top-16 right-0 bottom-0 w-80 bg-background-secondary border-l border-border z-50 shadow-2xl animate-in slide-in-from-right duration-200">
             <div className="flex items-center justify-between p-3 border-b border-border">
               <span className="text-sm font-medium text-text-primary">Action History</span>
               <button
