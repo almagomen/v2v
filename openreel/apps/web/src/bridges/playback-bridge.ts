@@ -17,6 +17,27 @@ export class PlaybackBridge {
   private initialized = false;
   private isUpdatingProject = false;
 
+  private async applyProjectUpdate(project: ReturnType<typeof useProjectStore.getState>["project"]): Promise<void> {
+    if (!this.playbackController) return;
+
+    const timelineStore = useTimelineStore.getState();
+    const currentTime = timelineStore.playheadPosition;
+    const wasPlaying = timelineStore.playbackState === "playing";
+
+    this.isUpdatingProject = true;
+    try {
+      this.playbackController.setProject(project);
+      await this.playbackController.scrubTo(currentTime);
+      // Ensure UI timeline doesn't jump to zero if controller emits transient "stopped".
+      useTimelineStore.getState().setPlayheadPosition(currentTime);
+      if (wasPlaying) {
+        await this.playbackController.play();
+      }
+    } finally {
+      this.isUpdatingProject = false;
+    }
+  }
+
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;
@@ -122,20 +143,7 @@ export class PlaybackBridge {
     this.unsubscribeTimelineStore = useProjectStore.subscribe(
       (state) => state.project,
       (project) => {
-        if (this.playbackController) {
-          const timelineStore = useTimelineStore.getState();
-          const currentTime = timelineStore.playheadPosition;
-          const wasPlaying = timelineStore.playbackState === "playing";
-
-          this.isUpdatingProject = true;
-          this.playbackController.setProject(project);
-          this.isUpdatingProject = false;
-
-          this.playbackController.scrubTo(currentTime);
-          if (wasPlaying) {
-            this.playbackController.play();
-          }
-        }
+        void this.applyProjectUpdate(project);
       },
     );
   }
