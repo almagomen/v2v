@@ -1,6 +1,7 @@
 """
 Descarga de videos YouTube (yt-dlp) y separación de voces (BS-RoFormer).
 """
+
 import os
 import re
 import subprocess
@@ -61,22 +62,36 @@ def get_roformer_model():
     """
     return get_or_load_model("bs_roformer", _load_bs_roformer)
 
+
 class OneLineLogger:
     """Solo imprime una línea por descarga (al 100%%) para no saturar el log."""
+
     def debug(self, msg):
         if msg.startswith("[download]"):
-            if "100%" in msg: print(msg)
+            if "100%" in msg:
+                print(msg)
 
-    def info(self, msg): print(f"\nℹ️ {msg}")
-    def warning(self, msg): print(f"\n⚠️ {msg}")
-    def error(self, msg): pass
+    def info(self, msg):
+        print(f"\nℹ️ {msg}")
 
-def print_codecs(info): 
-    v = info.get("requested_formats", [])[0] 
-    a = info.get("requested_formats", [])[1] 
+    def warning(self, msg):
+        print(f"\n⚠️ {msg}")
 
-    print(f"Video: itag {v['format_id']} | {v.get('ext')} | {v.get('vcodec')} | {v.get('height')}p | {v.get('fps')}fps") 
-    print(f"Audio: itag {a['format_id']} | {a.get('ext')} | {a.get('acodec')} | {a.get('asr')}Hz | {a.get('abr')}kbps")
+    def error(self, msg):
+        pass
+
+
+def print_codecs(info):
+    v = info.get("requested_formats", [])[0]
+    a = info.get("requested_formats", [])[1]
+
+    print(
+        f"Video: itag {v['format_id']} | {v.get('ext')} | {v.get('vcodec')} | {v.get('height')}p | {v.get('fps')}fps"
+    )
+    print(
+        f"Audio: itag {a['format_id']} | {a.get('ext')} | {a.get('acodec')} | {a.get('asr')}Hz | {a.get('abr')}kbps"
+    )
+
 
 def download_video(
     url: str,
@@ -88,14 +103,16 @@ def download_video(
     Descarga un video de YouTube y extrae información.
     Returns: (path, info)
     """
-    if output_dir is None: output_dir = QUEUE_DIR
+    if output_dir is None:
+        output_dir = QUEUE_DIR
 
     from yt_dlp import YoutubeDL
 
     cookies_file = (DRIVE_DIR / "cookies.txt") if DRIVE_DIR else None
 
     video = "bv[vcodec^=avc1]"
-    if resolution: video += f"[width<={resolution}]"
+    if resolution:
+        video += f"[width<={resolution}]"
     audio = f"ba[language^={language}]" if language else "ba"
 
     opts = {
@@ -107,12 +124,13 @@ def download_video(
         "keepvideo": True,
         "logger": OneLineLogger(),
         "quiet": True,
-        'js_runtimes': {'node': {}},
-        'remote_components': ['ejs:github'],
+        "js_runtimes": {"node": {}},
+        "remote_components": ["ejs:github"],
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "referer": "https://www.google.com/",
     }
-    if cookies_file and cookies_file.exists(): opts["cookiefile"] = str(cookies_file)
+    if cookies_file and cookies_file.exists():
+        opts["cookiefile"] = str(cookies_file)
 
     try:
         with YoutubeDL(opts) as ydl:
@@ -145,8 +163,8 @@ def download_video(
             except Exception as e:
                 print(f"⚠️ No se pudieron registrar paths de descarga: {e}")
 
-            # Fallback: si NO tenemos un video-only real (caso progresivo: un solo archivo con audio,
-            # p.ej. -f 18) generamos *_video.mp4 con ffmpeg -an.
+            # Fallback: buscar archivos intermedios de yt-dlp (f137.mp4, f251.webm, etc.)
+            # o generar *_video.mp4 / *_audio.m4a solo si faltan.
             try:
                 v2v_paths = info.get("_v2v_paths") if isinstance(info, dict) else {}
                 existing_vonly = (
@@ -160,7 +178,31 @@ def download_video(
                     else None
                 )
 
-                if (not existing_vonly or not existing_vonly.exists()) or (not existing_aonly or not existing_aonly.exists()):
+                # Buscar archivos intermedios de yt-dlp que coincidan con el patrón
+                # yt-dlp nombra: titulo.f137.mp4 (video), titulo.f251.webm (audio)
+                video_pattern = f"{media_path.stem}.f*.mp4"
+                audio_pattern = f"{media_path.stem}.f*.webm"
+
+                yt_video_files = list(media_path.parent.glob(video_pattern))
+                yt_audio_files = list(media_path.parent.glob(audio_pattern))
+
+                # Si yt-dlp ya generó los archivos intermedios, usarlos
+                if not existing_vonly or not existing_vonly.exists():
+                    if yt_video_files:
+                        existing_vonly = yt_video_files[0]
+                        if isinstance(info, dict):
+                            info.setdefault("_v2v_paths", {})
+                            info["_v2v_paths"]["video_only"] = str(existing_vonly)
+
+                if not existing_aonly or not existing_aonly.exists():
+                    if yt_audio_files:
+                        existing_aonly = yt_audio_files[0]
+                        if isinstance(info, dict):
+                            info.setdefault("_v2v_paths", {})
+                            info["_v2v_paths"]["audio_only"] = str(existing_aonly)
+
+                # Solo generar fallbacks si NO hay archivos de yt-dlp ni paths registrados
+                if not existing_vonly or not existing_vonly.exists():
                     video_only_path = media_path.with_name(
                         f"{media_path.stem}_video{media_path.suffix}"
                     )
@@ -178,9 +220,16 @@ def download_video(
                             str(video_only_path),
                         ]
                         subprocess.run(cmd, capture_output=True, text=True, check=False)
+                        existing_vonly = video_only_path
 
-                    # Extraer audio-only también (si no existe).
-                    audio_only_path = media_path.with_name(f"{media_path.stem}_audio.m4a")
+                    if isinstance(info, dict):
+                        info.setdefault("_v2v_paths", {})
+                        info["_v2v_paths"]["video_only"] = str(video_only_path)
+
+                if not existing_aonly or not existing_aonly.exists():
+                    audio_only_path = media_path.with_name(
+                        f"{media_path.stem}_audio.m4a"
+                    )
                     if not audio_only_path.exists():
                         cmd_a = [
                             "ffmpeg",
@@ -194,16 +243,14 @@ def download_video(
                             "copy",
                             str(audio_only_path),
                         ]
-                        subprocess.run(cmd_a, capture_output=True, text=True, check=False)
+                        subprocess.run(
+                            cmd_a, capture_output=True, text=True, check=False
+                        )
+                        existing_aonly = audio_only_path
 
-                    # Registrar fallbacks como video_only/audio_only si se generaron.
                     if isinstance(info, dict):
                         info.setdefault("_v2v_paths", {})
-                        if isinstance(info["_v2v_paths"], dict):
-                            if video_only_path.exists():
-                                info["_v2v_paths"]["video_only"] = str(video_only_path)
-                            if audio_only_path.exists():
-                                info["_v2v_paths"]["audio_only"] = str(audio_only_path)
+                        info["_v2v_paths"]["audio_only"] = str(audio_only_path)
             except Exception as e:
                 print(f"⚠️ No se pudo generar/registrar video_only fallback: {e}")
 
@@ -213,8 +260,9 @@ def download_video(
         raise
 
 
-
-def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[Path, Path]:
+def separate_vocals(
+    video_path: Path, output_dir: Path | None = None
+) -> tuple[Path, Path]:
     """
     Separa las voces del audio usando BS-RoFormer.
     Returns: (vocals_path, no_vocals_path)
@@ -237,7 +285,7 @@ def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[P
     config, model, device = get_roformer_model()
 
     # 2) Leer audio directamente del video con torchaudio (backend ffmpeg)
-    
+
     mix, sr = torchaudio.load(str(video_path))
     original_channels = mix.shape[0]
     if original_channels == 1:
@@ -246,7 +294,10 @@ def separate_vocals(video_path: Path, output_dir: Path | None = None) -> tuple[P
 
     # 3) Separar stems con BS-RoFormer, ocultando logs internos de la librería
     with torch.no_grad():
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
             result, _ = demix_track(config, model, mixture, device)
 
     # Guardar stems individuales (vocals, drums, bass, etc.)
