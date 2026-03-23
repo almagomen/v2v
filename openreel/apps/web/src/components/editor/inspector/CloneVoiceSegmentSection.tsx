@@ -6,9 +6,17 @@ import {
 } from "@openreel/core";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
-import { v2vApi, type SpeakerOption } from "../../../lib/v2v-api";
-import { getCachedJobResult, setCachedJobResult } from "../../../lib/job-result-cache";
+import { v2vApi, type SpeakerOption, type JobResultResponse } from "../../../lib/v2v-api";
 import { useProjectStore } from "../../../stores/project-store";
+
+// Cache en memoria para resultados de jobs
+const jobResultCache = new Map<string, JobResultResponse>();
+function getCachedJobResult(jobId: string): JobResultResponse | undefined {
+  return jobResultCache.get(jobId);
+}
+function setCachedJobResult(jobId: string, result: JobResultResponse): void {
+  jobResultCache.set(jobId, result);
+}
 import { useV2VStore } from "../../../stores/v2v-store";
 import { invalidateAudioCache } from "../../../stores/audio-cache-store";
 
