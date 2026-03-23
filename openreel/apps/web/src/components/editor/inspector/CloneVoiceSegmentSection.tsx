@@ -7,6 +7,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
 import { v2vApi, type SpeakerOption } from "../../../lib/v2v-api";
+import { getCachedJobResult, setCachedJobResult } from "../../../lib/job-result-cache";
 import { useProjectStore } from "../../../stores/project-store";
 import { useV2VStore } from "../../../stores/v2v-store";
 import { invalidateAudioCache } from "../../../stores/audio-cache-store";
@@ -140,6 +141,13 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   }, []);
 
   useEffect(() => {
+    if (mediaItem?.name) {
+      const history = loadHistoryFromLocalStorage(mediaItem.name);
+      setTextVersions(history);
+    }
+  }, [mediaItem?.name]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadFromJob() {
@@ -152,7 +160,11 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       try {
         const localData = loadFromLocalStorage(mediaItem.name);
         
-        const job = await v2vApi.getJobResult(folderRef.jobId);
+        let job = getCachedJobResult(folderRef.jobId);
+        if (!job) {
+          job = await v2vApi.getJobResult(folderRef.jobId);
+          setCachedJobResult(folderRef.jobId, job);
+        }
         if (cancelled) return;
 
         const video = job.videos.find((v) => v.index === folderRef.videoIndex);
@@ -168,11 +180,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           setSelectedVoice(localData.speaker);
         } else {
           setSegmentText(seg?.text ?? "");
-        }
-
-        const history = loadHistoryFromLocalStorage(mediaItem.name);
-        if (history.length > 0) {
-          setTextVersions(history);
         }
       } catch (e) {
         if (cancelled) return;
@@ -391,9 +398,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <RefreshCw size={14} className="text-primary" />
-          <span className="text-xs font-medium text-text-primary">
-            Clonar voz (V2V)
-          </span>
         </div>
         {jobLoading && (
           <div className="flex items-center gap-2 text-[10px] text-text-muted">
@@ -429,7 +433,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           disabled={regenLoading || speakers.length === 0}
         >
           <SelectTrigger className="w-full bg-background-secondary border-border text-text-primary text-[11px]">
-            <SelectValue />
+            <SelectValue placeholder={speakers.length === 0 ? "Cargando voces..." : "Seleccionar voz..."} />
           </SelectTrigger>
           <SelectContent className="bg-background-secondary border-border">
             {speakers.map((s) => (
