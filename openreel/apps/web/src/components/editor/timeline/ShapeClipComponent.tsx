@@ -15,7 +15,10 @@ interface ShapeClipComponentProps {
   pixelsPerSecond: number;
   isSelected: boolean;
   timelineRef: React.RefObject<HTMLDivElement>;
-  onSelect: (clipId: string, addToSelection: boolean) => void;
+  onSelect: (
+    clipId: string,
+    options?: { addToSelection?: boolean; rangeSelect?: boolean },
+  ) => void;
   onTrim: (clipId: string, edge: "left" | "right", newTime: number) => void;
   onMoveClip: (clipId: string, newStartTime: number) => void;
 }
@@ -75,7 +78,10 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
     if (e.button !== 0) return;
     if (isTrimming || isDragging) return;
     e.stopPropagation();
-    onSelect(shapeClip.id, e.shiftKey || e.metaKey);
+    onSelect(shapeClip.id, {
+      addToSelection: e.shiftKey || e.metaKey,
+      rangeSelect: e.shiftKey && e.altKey,
+    });
   };
 
   const handleTrimStart = (e: React.MouseEvent, edge: "left" | "right") => {

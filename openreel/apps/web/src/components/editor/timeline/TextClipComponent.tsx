@@ -13,7 +13,10 @@ interface TextClipComponentProps {
   pixelsPerSecond: number;
   isSelected: boolean;
   timelineRef: React.RefObject<HTMLDivElement>;
-  onSelect: (clipId: string, addToSelection: boolean) => void;
+  onSelect: (
+    clipId: string,
+    options?: { addToSelection?: boolean; rangeSelect?: boolean },
+  ) => void;
   onTrim: (clipId: string, edge: "left" | "right", newTime: number) => void;
   onMoveClip?: (clipId: string, newStartTime: number) => void;
 }
@@ -57,7 +60,10 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
     if (e.button !== 0) return;
     if (isTrimming || isDragging) return;
     e.stopPropagation();
-    onSelect(textClip.id, e.shiftKey || e.metaKey);
+    onSelect(textClip.id, {
+      addToSelection: e.shiftKey || e.metaKey,
+      rangeSelect: e.shiftKey && e.altKey,
+    });
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -75,7 +81,10 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
     setIsDragging(true);
     mousePositionRef.current = { x: e.clientX, y: e.clientY };
 
-    onSelect(textClip.id, e.shiftKey || e.metaKey);
+    onSelect(textClip.id, {
+      addToSelection: e.shiftKey || e.metaKey,
+      rangeSelect: e.shiftKey && e.altKey,
+    });
   };
 
   useEffect(() => {

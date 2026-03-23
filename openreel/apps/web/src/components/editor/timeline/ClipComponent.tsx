@@ -16,7 +16,10 @@ interface ClipComponentProps {
   isSelected: boolean;
   trackHeights: Map<string, number>;
   timelineRef: React.RefObject<HTMLDivElement>;
-  onSelect: (clipId: string, addToSelection: boolean) => void;
+  onSelect: (
+    clipId: string,
+    options?: { addToSelection?: boolean; rangeSelect?: boolean },
+  ) => void;
   onMoveClip: (
     clipId: string,
     newStartTime: number,
@@ -97,7 +100,10 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     if (e.button !== 0) return;
     if (isDragging || isPendingDrag) return;
     e.stopPropagation();
-    onSelect(clip.id, e.shiftKey || e.metaKey);
+    onSelect(clip.id, {
+      addToSelection: e.shiftKey || e.metaKey,
+      rangeSelect: e.shiftKey && e.altKey,
+    });
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -159,7 +165,10 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     const handlePendingMouseUp = (e: MouseEvent) => {
       dragPendingRef.current.active = false;
       setIsPendingDrag(false);
-      onSelect(clip.id, e.shiftKey || e.metaKey);
+      onSelect(clip.id, {
+        addToSelection: e.shiftKey || e.metaKey,
+        rangeSelect: e.shiftKey && e.altKey,
+      });
     };
 
     window.addEventListener("mousemove", handlePendingMouseMove);

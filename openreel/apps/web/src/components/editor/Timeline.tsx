@@ -268,36 +268,110 @@ export const Timeline: React.FC = () => {
   }, [playheadPosition, playbackState, pixelsPerSecond, scrollX, viewportWidth]);
 
   const handleSelectClip = useCallback(
-    (clipId: string, addToSelection: boolean) => {
-      const isTextClip = allTextClips.some((tc) => tc.id === clipId);
-      if (isTextClip) {
-        const textClip = allTextClips.find((tc) => tc.id === clipId);
-        select(
-          { type: "text-clip", id: clipId, trackId: textClip?.trackId },
-          addToSelection,
-        );
-        return;
-      }
-      const isShapeClip = allShapeClips.some((sc) => sc.id === clipId);
-      if (isShapeClip) {
-        const shapeClip = allShapeClips.find((sc) => sc.id === clipId);
-        select(
-          { type: "shape-clip", id: clipId, trackId: shapeClip?.trackId },
-          addToSelection,
-        );
-        return;
-      }
+    (
+      clipId: string,
+      options?: { addToSelection?: boolean; rangeSelect?: boolean },
+    ) => {
+      const addToSelection = options?.addToSelection ?? false;
+      const rangeSelect = options?.rangeSelect ?? false;
 
-      let trackId: string | undefined;
-      for (const track of tracks) {
-        if (track.clips.some((c) => c.id === clipId)) {
-          trackId = track.id;
-          break;
+      const getItemById = (id: string): { type: "clip" | "text-clip" | "shape-clip"; id: string; trackId?: string; startTime: number } | null => {
+        const textClip = allTextClips.find((tc) => tc.id === id);
+        if (textClip) {
+          return {
+            type: "text-clip",
+            id,
+            trackId: textClip.trackId,
+            startTime: textClip.startTime,
+          };
+        }
+        const shapeClip = allShapeClips.find((sc) => sc.id === id);
+        if (shapeClip) {
+          return {
+            type: "shape-clip",
+            id,
+            trackId: shapeClip.trackId,
+            startTime: shapeClip.startTime,
+          };
+        }
+        for (const track of tracks) {
+          const clip = track.clips.find((c) => c.id === id);
+          if (clip) {
+            return {
+              type: "clip",
+              id,
+              trackId: track.id,
+              startTime: clip.startTime,
+            };
+          }
+        }
+        return null;
+      };
+
+      const clickedItem = getItemById(clipId);
+      if (!clickedItem) return;
+
+      if (rangeSelect && clickedItem.trackId) {
+        const anchorFromSelection = selectedItems.find(
+          (s) =>
+            (s.type === "clip" || s.type === "text-clip" || s.type === "shape-clip") &&
+            s.trackId === clickedItem.trackId &&
+            s.id !== clickedItem.id,
+        );
+        const anchorItem = anchorFromSelection
+          ? getItemById(anchorFromSelection.id)
+          : null;
+
+        if (anchorItem) {
+          const laneItems = [
+            ...tracks
+              .find((t) => t.id === clickedItem.trackId)
+              ?.clips.map((c) => ({
+                type: "clip" as const,
+                id: c.id,
+                trackId: clickedItem.trackId,
+                startTime: c.startTime,
+              })) ?? [],
+            ...allTextClips
+              .filter((tc) => tc.trackId === clickedItem.trackId)
+              .map((tc) => ({
+                type: "text-clip" as const,
+                id: tc.id,
+                trackId: clickedItem.trackId,
+                startTime: tc.startTime,
+              })),
+            ...allShapeClips
+              .filter((sc) => sc.trackId === clickedItem.trackId)
+              .map((sc) => ({
+                type: "shape-clip" as const,
+                id: sc.id,
+                trackId: clickedItem.trackId,
+                startTime: sc.startTime,
+              })),
+          ].sort((a, b) => a.startTime - b.startTime);
+
+          const anchorIdx = laneItems.findIndex((i) => i.id === anchorItem.id);
+          const clickedIdx = laneItems.findIndex((i) => i.id === clickedItem.id);
+          if (anchorIdx >= 0 && clickedIdx >= 0) {
+            const [from, to] =
+              anchorIdx <= clickedIdx
+                ? [anchorIdx, clickedIdx]
+                : [clickedIdx, anchorIdx];
+            const rangeItems = laneItems
+              .slice(from, to + 1)
+              .map((i) => ({ type: i.type, id: i.id, trackId: i.trackId }));
+            selectMultiple(rangeItems);
+            return;
+          }
         }
       }
-      select({ type: "clip", id: clipId, trackId }, addToSelection);
+
+      select(
+        { type: clickedItem.type, id: clickedItem.id, trackId: clickedItem.trackId },
+        addToSelection,
+      );
     },
-    [tracks, select, allTextClips, allShapeClips],
+    [tracks, select, selectMultiple, selectedItems, allTextClips, allShapeClips],
   );
 
   const [selectedKeyframeIds, setSelectedKeyframeIds] = useState<string[]>([]);
