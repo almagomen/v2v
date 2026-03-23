@@ -264,7 +264,6 @@ export class GraphicsEngine {
     updates: {
       startTime?: number;
       duration?: number;
-      trackId?: string;
       transform?: Partial<Transform>;
       blendMode?: import("../video/types").BlendMode;
       blendOpacity?: number;
@@ -276,7 +275,6 @@ export class GraphicsEngine {
 
     const updatedClip: ShapeClip = {
       ...existing,
-      trackId: updates.trackId ?? existing.trackId,
       startTime: updates.startTime ?? existing.startTime,
       duration: updates.duration ?? existing.duration,
       transform: updates.transform
@@ -1702,7 +1700,6 @@ export class GraphicsEngine {
     updates: {
       startTime?: number;
       duration?: number;
-      trackId?: string;
       transform?: Partial<Transform>;
       entryAnimation?: GraphicAnimation;
       exitAnimation?: GraphicAnimation;
@@ -1720,7 +1717,6 @@ export class GraphicsEngine {
 
     const updatedClip: SVGClip = {
       ...existing,
-      trackId: updates.trackId ?? existing.trackId,
       startTime: updates.startTime ?? existing.startTime,
       duration: updates.duration ?? existing.duration,
       transform: updates.transform
@@ -1840,7 +1836,6 @@ export class GraphicsEngine {
     updates: {
       startTime?: number;
       duration?: number;
-      trackId?: string;
       transform?: Partial<Transform>;
       blendMode?: import("../video/types").BlendMode;
       blendOpacity?: number;
@@ -1855,7 +1850,6 @@ export class GraphicsEngine {
 
     const updatedClip: StickerClip = {
       ...existing,
-      trackId: updates.trackId ?? existing.trackId,
       startTime: updates.startTime ?? existing.startTime,
       duration: updates.duration ?? existing.duration,
       transform: updates.transform

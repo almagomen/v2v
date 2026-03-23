@@ -27,7 +27,6 @@ export interface UpdateTextClipOptions {
   transform?: Partial<Transform>;
   startTime?: number;
   duration?: number;
-  trackId?: string;
   animation?: TextAnimation;
   keyframes?: Keyframe[];
   blendMode?: import("../video/types").BlendMode;
@@ -111,7 +110,6 @@ export class TitleEngine {
     const updatedClip: TextClip = {
       ...existing,
       text: updates.text ?? existing.text,
-      trackId: updates.trackId ?? existing.trackId,
       startTime: updates.startTime ?? existing.startTime,
       duration: updates.duration ?? existing.duration,
       style: updates.style
