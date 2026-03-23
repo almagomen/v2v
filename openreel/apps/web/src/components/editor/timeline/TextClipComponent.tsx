@@ -12,15 +12,20 @@ interface TextClipComponentProps {
   textClip: TextClip;
   pixelsPerSecond: number;
   isSelected: boolean;
+  timelineRef: React.RefObject<HTMLDivElement>;
   onSelect: (clipId: string, addToSelection: boolean) => void;
   onTrim: (clipId: string, edge: "left" | "right", newTime: number) => void;
   onMoveClip?: (clipId: string, newStartTime: number) => void;
 }
 
+const HORIZONTAL_AUTO_SCROLL_THRESHOLD = 120;
+const HORIZONTAL_AUTO_SCROLL_SPEED = 14;
+
 export const TextClipComponent: React.FC<TextClipComponentProps> = ({
   textClip,
   pixelsPerSecond,
   isSelected,
+  timelineRef,
   onSelect,
   onTrim,
   onMoveClip,
@@ -31,6 +36,7 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
   const [dragOffset, setDragOffset] = useState(0);
   const [dragTime, setDragTime] = useState<number | null>(null);
   const pendingDropRef = useRef<{ time: number }>({ time: 0 });
+  const mousePositionRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const { snapSettings } = useUIStore();
   const { playheadPosition } = useTimelineStore();
   const trimStartRef = useRef<{
@@ -59,14 +65,15 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
     if (isTrimming) return;
     e.stopPropagation();
 
-    const rect = clipRef.current?.parentElement?.getBoundingClientRect();
-    if (!rect) return;
-
-    const clickX = e.clientX - rect.left;
+    const timelineRect = timelineRef.current?.getBoundingClientRect();
+    if (!timelineRect) return;
+    const scrollLeft = timelineRef.current?.scrollLeft || 0;
+    const clickX = e.clientX - timelineRect.left + scrollLeft;
     const clipStartX = textClip.startTime * pixelsPerSecond;
     setDragOffset(clickX - clipStartX);
     setDragTime(null);
     setIsDragging(true);
+    mousePositionRef.current = { x: e.clientX, y: e.clientY };
 
     onSelect(textClip.id, e.shiftKey || e.metaKey);
   };
@@ -74,11 +81,44 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
   useEffect(() => {
     if (!isDragging || !onMoveClip) return;
 
-    const handleMouseMove = (e: MouseEvent) => {
-      const rect = clipRef.current?.parentElement?.getBoundingClientRect();
-      if (!rect) return;
+    let animationFrameId: number | null = null;
 
-      const x = e.clientX - rect.left - dragOffset;
+    const scrollLoop = () => {
+      if (!timelineRef.current) {
+        animationFrameId = requestAnimationFrame(scrollLoop);
+        return;
+      }
+
+      const timeline = timelineRef.current;
+      const timelineRect = timeline.getBoundingClientRect();
+      const mouseX = mousePositionRef.current.x;
+      const distanceFromLeft = mouseX - timelineRect.left;
+      const distanceFromRight = timelineRect.right - mouseX;
+      const canScrollLeft = timeline.scrollLeft > 0;
+      const canScrollRight =
+        timeline.scrollLeft < timeline.scrollWidth - timeline.clientWidth;
+
+      if (distanceFromLeft < HORIZONTAL_AUTO_SCROLL_THRESHOLD && canScrollLeft) {
+        timeline.scrollLeft -= HORIZONTAL_AUTO_SCROLL_SPEED;
+      } else if (
+        distanceFromRight < HORIZONTAL_AUTO_SCROLL_THRESHOLD &&
+        canScrollRight
+      ) {
+        timeline.scrollLeft += HORIZONTAL_AUTO_SCROLL_SPEED;
+      }
+
+      animationFrameId = requestAnimationFrame(scrollLoop);
+    };
+
+    animationFrameId = requestAnimationFrame(scrollLoop);
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const timelineRect = timelineRef.current?.getBoundingClientRect();
+      if (!timelineRect) return;
+      mousePositionRef.current = { x: e.clientX, y: e.clientY };
+
+      const scrollLeft = timelineRef.current?.scrollLeft || 0;
+      const x = e.clientX - timelineRect.left + scrollLeft - dragOffset;
       const rawTime = Math.max(0, x / pixelsPerSecond);
       const allTracks = useProjectStore.getState().project.timeline.tracks;
       const dragSnapSettings = { ...snapSettings, snapToPlayhead: false };
@@ -96,6 +136,9 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
     };
 
     const handleMouseUp = () => {
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+      }
       setIsDragging(false);
       const { time } = pendingDropRef.current;
       if (time !== textClip.startTime) {
@@ -108,10 +151,24 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
     window.addEventListener("mouseup", handleMouseUp);
 
     return () => {
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+      }
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isDragging, textClip.id, textClip.duration, pixelsPerSecond, dragOffset, onMoveClip, snapSettings, playheadPosition]);
+  }, [
+    isDragging,
+    textClip.id,
+    textClip.duration,
+    textClip.startTime,
+    pixelsPerSecond,
+    dragOffset,
+    onMoveClip,
+    snapSettings,
+    playheadPosition,
+    timelineRef,
+  ]);
 
   const handleTrimStart = (e: React.MouseEvent, edge: "left" | "right") => {
     if (e.button !== 0) return;

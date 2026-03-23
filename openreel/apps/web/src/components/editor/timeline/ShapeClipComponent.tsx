@@ -14,15 +14,20 @@ interface ShapeClipComponentProps {
   shapeClip: GraphicClipUnion;
   pixelsPerSecond: number;
   isSelected: boolean;
+  timelineRef: React.RefObject<HTMLDivElement>;
   onSelect: (clipId: string, addToSelection: boolean) => void;
   onTrim: (clipId: string, edge: "left" | "right", newTime: number) => void;
   onMoveClip: (clipId: string, newStartTime: number) => void;
 }
 
+const HORIZONTAL_AUTO_SCROLL_THRESHOLD = 120;
+const HORIZONTAL_AUTO_SCROLL_SPEED = 14;
+
 export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
   shapeClip,
   pixelsPerSecond,
   isSelected,
+  timelineRef,
   onSelect,
   onTrim,
   onMoveClip,
@@ -32,6 +37,7 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
   const [dragOffset, setDragOffset] = useState(0);
   const [dragTime, setDragTime] = useState<number | null>(null);
   const pendingDropRef = useRef<{ time: number }>({ time: 0 });
+  const mousePositionRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isTrimming, setIsTrimming] = useState<"left" | "right" | null>(null);
   const { snapSettings } = useUIStore();
   const { playheadPosition } = useTimelineStore();
@@ -54,13 +60,15 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
     if (isTrimming) return;
     e.stopPropagation();
 
-    const rect = clipRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    const offsetX = e.clientX - rect.left;
-    setDragOffset(offsetX);
+    const timelineRect = timelineRef.current?.getBoundingClientRect();
+    if (!timelineRect) return;
+    const scrollLeft = timelineRef.current?.scrollLeft || 0;
+    const clickX = e.clientX - timelineRect.left + scrollLeft;
+    const clipStartX = shapeClip.startTime * pixelsPerSecond;
+    setDragOffset(clickX - clipStartX);
     setDragTime(null);
     setIsDragging(true);
+    mousePositionRef.current = { x: e.clientX, y: e.clientY };
   };
 
   const handleClick = (e: React.MouseEvent) => {
@@ -87,12 +95,43 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
   useEffect(() => {
     if (!isDragging) return;
 
-    const handleMouseMove = (e: MouseEvent) => {
-      const timelineElement = clipRef.current?.parentElement;
-      if (!timelineElement) return;
+    let animationFrameId: number | null = null;
 
-      const rect = timelineElement.getBoundingClientRect();
-      const x = e.clientX - rect.left - dragOffset;
+    const scrollLoop = () => {
+      if (!timelineRef.current) {
+        animationFrameId = requestAnimationFrame(scrollLoop);
+        return;
+      }
+
+      const timeline = timelineRef.current;
+      const timelineRect = timeline.getBoundingClientRect();
+      const mouseX = mousePositionRef.current.x;
+      const distanceFromLeft = mouseX - timelineRect.left;
+      const distanceFromRight = timelineRect.right - mouseX;
+      const canScrollLeft = timeline.scrollLeft > 0;
+      const canScrollRight =
+        timeline.scrollLeft < timeline.scrollWidth - timeline.clientWidth;
+
+      if (distanceFromLeft < HORIZONTAL_AUTO_SCROLL_THRESHOLD && canScrollLeft) {
+        timeline.scrollLeft -= HORIZONTAL_AUTO_SCROLL_SPEED;
+      } else if (
+        distanceFromRight < HORIZONTAL_AUTO_SCROLL_THRESHOLD &&
+        canScrollRight
+      ) {
+        timeline.scrollLeft += HORIZONTAL_AUTO_SCROLL_SPEED;
+      }
+
+      animationFrameId = requestAnimationFrame(scrollLoop);
+    };
+
+    animationFrameId = requestAnimationFrame(scrollLoop);
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const timelineRect = timelineRef.current?.getBoundingClientRect();
+      if (!timelineRect) return;
+      mousePositionRef.current = { x: e.clientX, y: e.clientY };
+      const scrollLeft = timelineRef.current?.scrollLeft || 0;
+      const x = e.clientX - timelineRect.left + scrollLeft - dragOffset;
       const rawTime = Math.max(0, x / pixelsPerSecond);
       const allTracks = useProjectStore.getState().project.timeline.tracks;
       const dragSnapSettings = { ...snapSettings, snapToPlayhead: false };
@@ -110,6 +149,9 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
     };
 
     const handleMouseUp = () => {
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+      }
       setIsDragging(false);
       const { time } = pendingDropRef.current;
       if (time !== shapeClip.startTime) {
@@ -122,10 +164,24 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
     window.addEventListener("mouseup", handleMouseUp);
 
     return () => {
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+      }
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isDragging, dragOffset, pixelsPerSecond, shapeClip.id, shapeClip.duration, onMoveClip, snapSettings, playheadPosition]);
+  }, [
+    isDragging,
+    dragOffset,
+    pixelsPerSecond,
+    shapeClip.id,
+    shapeClip.duration,
+    shapeClip.startTime,
+    onMoveClip,
+    snapSettings,
+    playheadPosition,
+    timelineRef,
+  ]);
 
   useEffect(() => {
     if (!isTrimming) return;

@@ -32,6 +32,8 @@ interface ClipComponentProps {
 
 const AUTO_SCROLL_THRESHOLD = 80;
 const AUTO_SCROLL_SPEED = 10;
+const HORIZONTAL_AUTO_SCROLL_THRESHOLD = 120;
+const HORIZONTAL_AUTO_SCROLL_SPEED = 14;
 const DRAG_THRESHOLD = 5;
 
 export const ClipComponent: React.FC<ClipComponentProps> = ({
@@ -103,17 +105,17 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     if (track.locked || isTrimming) return;
     e.stopPropagation();
 
-    const rect = clipRef.current?.parentElement?.getBoundingClientRect();
+    const timelineRect = timelineRef.current?.getBoundingClientRect();
     const clipRect = clipRef.current?.getBoundingClientRect();
-    if (!rect || !clipRect) return;
-
-    const clickX = e.clientX - rect.left;
+    if (!timelineRect || !clipRect) return;
+    const scrollLeft = timelineRef.current?.scrollLeft || 0;
+    const clickX = e.clientX - timelineRect.left + scrollLeft;
     const clipStartX = clip.startTime * pixelsPerSecond;
     setDragOffset(clickX - clipStartX);
 
     dragStartRef.current = {
       mouseY: e.clientY,
-      clipY: clipRect.top - rect.top,
+      clipY: clipRect.top - timelineRect.top,
       scrollTop: timelineRef.current?.scrollTop || 0,
     };
     mousePositionRef.current = { x: e.clientX, y: e.clientY };
@@ -185,16 +187,31 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       const mouseY = mousePositionRef.current.y;
       const timelineTop = timelineRect.top;
       const timelineBottom = timelineRect.bottom;
+      const timelineLeft = timelineRect.left;
+      const timelineRight = timelineRect.right;
       const canScrollUp = timeline.scrollTop > 0;
       const canScrollDown = timeline.scrollTop < timeline.scrollHeight - timeline.clientHeight;
+      const canScrollLeft = timeline.scrollLeft > 0;
+      const canScrollRight = timeline.scrollLeft < timeline.scrollWidth - timeline.clientWidth;
 
+      const mouseX = mousePositionRef.current.x;
       const distanceFromTop = mouseY - timelineTop;
       const distanceFromBottom = timelineBottom - mouseY;
+      const distanceFromLeft = mouseX - timelineLeft;
+      const distanceFromRight = timelineRight - mouseX;
 
       if (distanceFromTop < AUTO_SCROLL_THRESHOLD && canScrollUp) {
         timeline.scrollTop -= AUTO_SCROLL_SPEED;
       } else if (distanceFromBottom < AUTO_SCROLL_THRESHOLD && canScrollDown) {
         timeline.scrollTop += AUTO_SCROLL_SPEED;
+      }
+      if (distanceFromLeft < HORIZONTAL_AUTO_SCROLL_THRESHOLD && canScrollLeft) {
+        timeline.scrollLeft -= HORIZONTAL_AUTO_SCROLL_SPEED;
+      } else if (
+        distanceFromRight < HORIZONTAL_AUTO_SCROLL_THRESHOLD &&
+        canScrollRight
+      ) {
+        timeline.scrollLeft += HORIZONTAL_AUTO_SCROLL_SPEED;
       }
 
       animationFrameId = requestAnimationFrame(scrollLoop);
@@ -206,11 +223,11 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       mousePositionRef.current.x = e.clientX;
       mousePositionRef.current.y = e.clientY;
 
-      const rect = clipRef.current?.parentElement?.getBoundingClientRect();
       const timelineRect = timelineRef.current?.getBoundingClientRect();
-      if (!rect || !timelineRect) return;
+      if (!timelineRect) return;
 
-      const x = e.clientX - rect.left - dragOffset;
+      const scrollLeft = timelineRef.current?.scrollLeft || 0;
+      const x = e.clientX - timelineRect.left + scrollLeft - dragOffset;
       const rawTime = Math.max(0, x / pixelsPerSecond);
 
       const dragSnapSettings = { ...snapSettings, snapToPlayhead: false };
