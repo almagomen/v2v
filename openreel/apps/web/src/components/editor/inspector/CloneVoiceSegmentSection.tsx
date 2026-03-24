@@ -113,19 +113,31 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const pendingToken = React.useRef<string | null>(null);
 
   // Resuelve un token (key del backend) al value correcto del Select.
-  // Busca por value exacto, luego por label exacto, luego por coincidencia parcial.
+  // Busca por value exacto, luego por label exacto, y por último una normalización agresiva.
   function resolveSpeakerValue(token: string, speakerList: SpeakerOption[]): string {
     if (!token || speakerList.length === 0) return token;
+    
+    // Coincidencia exacta
     const byValue = speakerList.find((s) => s.value === token);
     if (byValue) return byValue.value;
     const byLabel = speakerList.find((s) => s.label === token);
     if (byLabel) return byLabel.value;
-    // Búsqueda parcial (por si el token está contenido en el label o viceversa)
-    const byPartial = speakerList.find(
-      (s) => s.label.toLowerCase().includes(token.toLowerCase()) ||
-             token.toLowerCase().includes(s.label.toLowerCase())
-    );
-    if (byPartial) return byPartial.value;
+
+    // Función de normalización (remueve todo menos minúsculas/números)
+    const normalize = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const normToken = normalize(token);
+
+    // Búsqueda parcial ultra-tolerante (token puede venir con GUIDs raros, espacios como _, URI encoded, etc)
+    const byFuzzy = speakerList.find((s) => {
+      const normLabel = normalize(s.label);
+      const normValue = normalize(s.value);
+      return (
+        normLabel.includes(normToken) || normToken.includes(normLabel) ||
+        normValue.includes(normToken) || normToken.includes(normValue)
+      );
+    });
+
+    if (byFuzzy) return byFuzzy.value;
     return token;
   }
 
