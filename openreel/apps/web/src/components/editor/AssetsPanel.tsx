@@ -423,6 +423,7 @@ export const AssetsPanel: React.FC = () => {
   >("media");
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [draggedOverFolder, setDraggedOverFolder] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState("");
   const [showOnlyMissing, setShowOnlyMissing] = useState(false);
@@ -533,7 +534,7 @@ export const AssetsPanel: React.FC = () => {
 
   // Handle file import with loading state
   const handleFileImport = useCallback(
-    async (files: FileList | null) => {
+    async (files: FileList | null, targetFolderOverride?: string) => {
       if (!files || files.length === 0) return;
 
       setIsImporting(true);
@@ -543,8 +544,9 @@ export const AssetsPanel: React.FC = () => {
         for (let i = 0; i < fileArray.length; i++) {
           let file = fileArray[i];
           
-          if (activeFolder) {
-            file = new File([file], `${activeFolder}/${file.name}`, { type: file.type });
+          const folderPrefix = targetFolderOverride || activeFolder;
+          if (folderPrefix) {
+            file = new File([file], `${folderPrefix}/${file.name}`, { type: file.type });
           }
           
           setImportProgress(
@@ -569,6 +571,55 @@ export const AssetsPanel: React.FC = () => {
     },
     [importMedia, activeFolder],
   );
+
+  const handleFolderDrop = useCallback(
+    async (e: React.DragEvent, targetFolder: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDraggedOverFolder(null);
+
+      // Check external files first
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        return handleFileImport(e.dataTransfer.files, targetFolder);
+      }
+
+      // Handle internal media item
+      const dataStr = e.dataTransfer.getData("application/json");
+      if (!dataStr) return;
+      
+      try {
+        const { mediaId } = JSON.parse(dataStr);
+        if (mediaId && mediaId.length > 0) {
+          const mediaItem = project.mediaLibrary.items.find(m => m.id === mediaId);
+          if (!mediaItem) return;
+          
+          // Recreate proper file path inside chosen folder
+          const currentName = mediaItem.name;
+          const nameWithoutPrefix = currentName.includes("/") 
+            ? currentName.substring(currentName.lastIndexOf("/") + 1) 
+            : currentName;
+            
+          const newName = `${targetFolder}/${nameWithoutPrefix}`;
+          if (currentName !== newName) {
+            await renameMedia(mediaId, newName);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to parse dragged media", err);
+      }
+    },
+    [handleFileImport, project.mediaLibrary.items, renameMedia]
+  );
+
+  const handleFolderDragOver = useCallback((e: React.DragEvent, folder: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDraggedOverFolder(folder);
+  }, []);
+
+  const handleFolderDragLeave = useCallback(() => {
+    setDraggedOverFolder(null);
+  }, []);
 
   // Handle drag and drop import
   const handleDrop = useCallback(
@@ -1218,11 +1269,18 @@ export const AssetsPanel: React.FC = () => {
                   <button
                     key={f}
                     onClick={() => setActiveFolder(f)}
-                    className="aspect-video bg-background-tertiary rounded-lg border-2 border-border hover:border-primary/50 transition-all flex flex-col items-center justify-center gap-1.5"
+                    onDragOver={(e) => handleFolderDragOver(e, f)}
+                    onDragLeave={handleFolderDragLeave}
+                    onDrop={(e) => handleFolderDrop(e, f)}
+                    className={`aspect-video bg-background-tertiary rounded-lg border-2 transition-all flex flex-col items-center justify-center gap-1.5 ${
+                      draggedOverFolder === f 
+                        ? "border-primary bg-primary/10 shadow-[0_0_15px_rgba(108,99,255,0.4)]" 
+                        : "border-border hover:border-primary/50"
+                    }`}
                     title={f}
                   >
-                    <Folder size={22} className="text-text-muted" />
-                    <span className="text-[10px] text-text-secondary truncate max-w-[120px]">
+                    <Folder size={22} className={draggedOverFolder === f ? "text-primary" : "text-text-muted"} />
+                    <span className={`text-[10px] truncate max-w-[120px] ${draggedOverFolder === f ? "text-primary" : "text-text-secondary"}`}>
                       {f}
                     </span>
                     <span className="text-[9px] text-text-muted">
