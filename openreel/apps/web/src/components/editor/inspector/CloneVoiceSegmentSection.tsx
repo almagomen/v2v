@@ -369,6 +369,14 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       const newDuration = await getAudioDuration(blob);
 
       const file = new File([blob], mediaItem.name, { type: "audio/wav" });
+      
+      const timestamp = Date.now();
+      saveToLocalStorage(mediaItem.name, {
+        text: currentText,
+        speaker: currentSpeaker,
+        timestamp,
+      });
+
       const result = await replaceMediaAsset(mediaItem.id, file);
       if (!result.success) {
         const msg =
@@ -398,12 +406,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         });
       }
 
-      const timestamp = Date.now();
-      saveToLocalStorage(mediaItem.name, {
-        text: currentText,
-        speaker: currentSpeaker,
-        timestamp,
-      });
+
 
       setRegenStatus("Segmento regenerado");
     } catch (e) {
