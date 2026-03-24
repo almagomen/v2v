@@ -105,7 +105,7 @@ function saveHistoryToLocalStorage(filename: string, history: TextVersion[]): vo
 }
 
 export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId }) => {
-  const { getClip, getMediaItem, replaceMediaAsset } = useProjectStore();
+  const { getClip, getMediaItem, replaceMediaAsset, forceSave } = useProjectStore();
   const clip = getClip(clipId);
   const mediaItem = clip ? getMediaItem(clip.mediaId) : undefined;
 
@@ -346,7 +346,8 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         throw new Error(msg);
       }
 
-      invalidateAudioCache(mediaItem.id);
+        invalidateAudioCache(mediaItem.id);
+        await forceSave();
 
       const timestamp = Date.now();
       saveToLocalStorage(mediaItem.name, {
