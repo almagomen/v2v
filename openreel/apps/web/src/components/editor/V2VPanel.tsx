@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useEffect, useCallback, useRef } from "react";
 import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2, FolderDown } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
@@ -141,15 +141,15 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     appendUrlLog,
     jobPhase,
     setJobPhase,
+    speakers,
+    fetchSpeakers,
   } = useV2VStore();
 
-  const [speakers, setSpeakers] = useState<{ label: string; value: string }[]>(
-    []
-  );
-
   useEffect(() => {
-    v2vApi.getSpeakers().then(setSpeakers);
-  }, []);
+    if (speakers.length === 0) {
+      fetchSpeakers();
+    }
+  }, [speakers.length, fetchSpeakers]);
 
   useEffect(() => {
     if (!jobId || !isProcessing) return;

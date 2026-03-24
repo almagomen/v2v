@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Segment, VideoResult, JobUrlItem } from "../lib/v2v-api";
+import { v2vApi, type Segment, type VideoResult, type JobUrlItem } from "../lib/v2v-api";
 
 const FOLDER_REFS_STORAGE_KEY = "openreel.v2v.folderRefs";
 
@@ -51,6 +51,9 @@ export interface V2VState {
   setUrls: (urls: string) => void;
   setTranslateLang: (lang: string) => void;
   setSpeaker: (speaker: string) => void;
+  
+  speakers: { label: string; value: string }[];
+  fetchSpeakers: () => Promise<void>;
 
   setJobId: (jobId: string | null) => void;
   setProgress: (progress: number) => void;
@@ -107,9 +110,20 @@ export const useV2VStore = create<V2VState>((set, get) => ({
   jobPhase: "idle",
   lastUrlsSignature: null,
 
+  speakers: [],
+
   setUrls: (urls) => set({ urls }),
   setTranslateLang: (translateLang) => set({ translateLang }),
   setSpeaker: (speaker) => set({ speaker }),
+
+  fetchSpeakers: async () => {
+    try {
+      const list = await v2vApi.getSpeakers();
+      set({ speakers: list });
+    } catch {
+      // log o ignorar
+    }
+  },
 
   setJobId: (jobId) => set({ jobId }),
   setProgress: (progress) => set({ progress }),
