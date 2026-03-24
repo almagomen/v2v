@@ -96,7 +96,8 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const clip = getClip(clipId);
   const mediaItem = clip ? getMediaItem(clip.mediaId) : undefined;
 
-  const { translateLang, getFolderRef } = useV2VStore();
+  const { translateLang, speaker: defaultSpeaker, getFolderRef } = useV2VStore();
+
 
   const parsed = useMemo(() => {
     if (!mediaItem?.name) return null;
@@ -114,8 +115,8 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
   // Resuelve un token (key del backend) al value correcto del Select.
   // Busca por value exacto, luego por label exacto, y por último una normalización agresiva.
-  function resolveSpeakerValue(token: string, speakerList: SpeakerOption[]): string {
-    if (!token || speakerList.length === 0) return token;
+  function resolveSpeakerValue(token: string, speakerList: SpeakerOption[], defaultVal?: string): string {
+    if (!token || speakerList.length === 0) return defaultVal || token;
     
     // Coincidencia exacta
     const byValue = speakerList.find((s) => s.value === token);
@@ -138,6 +139,17 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     });
 
     if (byFuzzy) return byFuzzy.value;
+
+    // Fallback: si es algo como "SPEAKER_00" de diarización, intentamos aplicar
+    // la voz seleccionada por defecto en el store global.
+    if (defaultVal) {
+      const byDefValue = speakerList.find((s) => s.value === defaultVal);
+      if (byDefValue) return byDefValue.value;
+      const byDefLabel = speakerList.find((s) => s.label === defaultVal);
+      if (byDefLabel) return byDefLabel.value;
+      return defaultVal;
+    }
+
     return token;
   }
 
@@ -162,11 +174,11 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       setSpeakers(list);
       // Si había un token pendiente de resolver, resolverlo ahora que tenemos la lista
       if (pendingToken.current && list.length > 0) {
-        setSelectedVoice(resolveSpeakerValue(pendingToken.current, list));
+        setSelectedVoice(resolveSpeakerValue(pendingToken.current, list, defaultSpeaker));
         pendingToken.current = null;
       }
     }).catch(() => setSpeakers([]));
-  }, []);
+  }, [defaultSpeaker]);
 
 
   useEffect(() => {
@@ -202,7 +214,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           // Usar speakersRef.current para evitar stale closure
           const currentSpeakers = speakersRef.current;
           if (currentSpeakers.length > 0) {
-            setSelectedVoice(resolveSpeakerValue(localData.speaker, currentSpeakers));
+            setSelectedVoice(resolveSpeakerValue(localData.speaker, currentSpeakers, defaultSpeaker));
           } else {
             pendingToken.current = localData.speaker;
           }
@@ -212,7 +224,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           if (parsed.speakerToken) {
             const currentSpeakers = speakersRef.current;
             if (currentSpeakers.length > 0) {
-              setSelectedVoice(resolveSpeakerValue(parsed.speakerToken, currentSpeakers));
+              setSelectedVoice(resolveSpeakerValue(parsed.speakerToken, currentSpeakers, defaultSpeaker));
             } else {
               pendingToken.current = parsed.speakerToken;
             }
