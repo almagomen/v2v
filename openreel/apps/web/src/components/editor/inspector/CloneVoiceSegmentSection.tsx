@@ -104,6 +104,21 @@ function saveHistoryToLocalStorage(filename: string, history: TextVersion[]): vo
   }
 }
 
+async function getAudioDuration(blob: Blob): Promise<number> {
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+  if (!AudioContextClass) {
+    throw new Error("AudioContext no soportado");
+  }
+  const audioContext = new AudioContextClass();
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    return audioBuffer.duration;
+  } finally {
+    audioContext.close();
+  }
+}
+
 export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId }) => {
   const { getClip, getMediaItem, replaceMediaAsset, forceSave } = useProjectStore();
   const clip = getClip(clipId);
@@ -336,6 +351,9 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         return { blob: regenBlob };
       })();
 
+      // Calcular la duración del nuevo audio
+      const newDuration = await getAudioDuration(blob);
+
       const file = new File([blob], mediaItem.name, { type: "audio/wav" });
       const result = await replaceMediaAsset(mediaItem.id, file);
       if (!result.success) {
@@ -346,8 +364,25 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         throw new Error(msg);
       }
 
-        invalidateAudioCache(mediaItem.id);
-        await forceSave();
+      invalidateAudioCache(mediaItem.id);
+      await forceSave();
+
+      // Ajustar la duración del clip en el timeline
+      const { getClip, trimClip } = useProjectStore.getState();
+      const currentClip = getClip(clipId);
+      if (currentClip) {
+        // Mantener el mismo inPoint, ajustar outPoint a inPoint + newDuration
+        const newOutPoint = currentClip.inPoint + newDuration;
+        await trimClip(clipId, currentClip.inPoint, newOutPoint);
+      }
+
+      // Actualizar segmentTimes.end para que coincida con la nueva duración
+      if (segmentTimes) {
+        setSegmentTimes({
+          start: segmentTimes.start,
+          end: segmentTimes.start + newDuration,
+        });
+      }
 
       const timestamp = Date.now();
       saveToLocalStorage(mediaItem.name, {
@@ -376,6 +411,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     folderRef,
     parsed,
     clip,
+    clipId,
     mediaItem,
     effectiveTimes,
     segmentText,
@@ -383,6 +419,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     selectedVoice,
     replaceMediaAsset,
     textVersions,
+    segmentTimes,
   ]);
 
   if (!clip || !mediaItem) {
