@@ -1,5 +1,4 @@
 """Regenerate segment and video endpoints."""
-
 import pickle
 from pathlib import Path
 
@@ -26,7 +25,6 @@ def _get_video_path_from_job(job_id: str, video_index: int) -> Path:
 def _get_video_path_from_path(video_path: str) -> Path:
     """Resolve video path - must be under Queue dir."""
     from src.config import QUEUE_DIR
-
     folder = QUEUE_DIR.resolve()
     p = Path(video_path).resolve()
     try:
@@ -72,9 +70,7 @@ def _do_regenerate_segment(
         raise HTTPException(status_code=404, detail="result.pkl no encontrado")
 
     with open(pkl_path, "rb") as f:
-        texts_original, output_name, url, result, transcription, diarization = (
-            pickle.load(f)
-        )
+        texts_original, output_name, url, result, transcription, diarization = pickle.load(f)
 
     if seg_idx < 1 or seg_idx > len(texts_original):
         raise HTTPException(status_code=400, detail="Índice de segmento inválido")
@@ -88,9 +84,7 @@ def _do_regenerate_segment(
     texts_edited = list(texts_original)
     texts_edited[seg_idx - 1] = t_edit
 
-    split_audio_sequences(
-        path.with_name("vocals.wav"), texts_edited, edit_indices=[seg_idx]
-    )
+    split_audio_sequences(path.with_name("vocals.wav"), texts_edited, edit_indices=[seg_idx])
 
     speaker_audio = SPEAKER_OPTIONS.get(speaker, speaker)
     lang = (
@@ -106,15 +100,15 @@ def _do_regenerate_segment(
         speaker_audio,
         model_tts,
         only_indices=[seg_idx],
+        slowdown_range=(0.5, 0.8),
+        stretch_target_ratio=0.85,
     )
 
     if not paths_es:
         raise HTTPException(status_code=500, detail="No se pudo generar el audio")
 
     with open(pkl_path, "wb") as f:
-        pickle.dump(
-            (texts_edited, output_name, url, result, transcription, diarization), f
-        )
+        pickle.dump((texts_edited, output_name, url, result, transcription, diarization), f)
 
     return FileResponse(paths_es[0], filename=paths_es[0].name, media_type="audio/wav")
 
@@ -131,9 +125,7 @@ async def regenerate_video(req: RegenerateVideoRequest):
         raise HTTPException(status_code=404, detail="result.pkl no encontrado")
 
     with open(pkl_path, "rb") as f:
-        texts_original, output_name, url, result, transcription, diarization = (
-            pickle.load(f)
-        )
+        texts_original, output_name, url, result, transcription, diarization = pickle.load(f)
 
     texts_edited = []
     changed_indices = []
@@ -157,15 +149,9 @@ async def regenerate_video(req: RegenerateVideoRequest):
     from src.tts import model_tts
 
     if changed_indices:
-        split_audio_sequences(
-            path.with_name("vocals.wav"), texts_edited, edit_indices=changed_indices
-        )
+        split_audio_sequences(path.with_name("vocals.wav"), texts_edited, edit_indices=changed_indices)
         speaker_audio = SPEAKER_OPTIONS.get(req.speaker, req.speaker)
-        lang = (
-            req.translate_lang
-            if req.translate_lang and req.translate_lang != "None"
-            else transcription.language
-        )
+        lang = req.translate_lang if req.translate_lang and req.translate_lang != "None" else transcription.language
         clone_voice_segments(
             path,
             texts_edited,
@@ -178,32 +164,24 @@ async def regenerate_video(req: RegenerateVideoRequest):
         )
 
     with open(pkl_path, "wb") as f:
-        pickle.dump(
-            (texts_edited, output_name, url, result, transcription, diarization), f
-        )
+        pickle.dump((texts_edited, output_name, url, result, transcription, diarization), f)
 
     seqs_trg_dir = path.parent / "Seqs_trg"
     all_paths_es = sorted(seqs_trg_dir.glob("*.wav"))
     if not all_paths_es:
-        raise HTTPException(
-            status_code=500, detail="No se encontraron segmentos de audio"
-        )
+        raise HTTPException(status_code=500, detail="No se encontraron segmentos de audio")
 
     _, freq = torchaudio.load(str(all_paths_es[0]))
     all_times = [int(t["start"] * freq) for t in texts_edited]
 
     vocals_es_path = path.with_name("vocals_es.wav")
-    merged = merge_cloned_audio(
-        path.with_name("vocals.wav"), all_paths_es, all_times, freq
-    )
+    merged = merge_cloned_audio(path.with_name("vocals.wav"), all_paths_es, all_times, freq)
     torchaudio.save(str(vocals_es_path), merged, freq)
 
     no_vocals_path = path.with_name("no_vocals.wav")
     if not no_vocals_path.exists():
         raise HTTPException(status_code=404, detail="no_vocals.wav no encontrado")
 
-    output_path = render_video(
-        path, output_name, vocals_es_path, no_vocals_path, output_dir=path.parent
-    )
+    output_path = render_video(path, output_name, vocals_es_path, no_vocals_path, output_dir=path.parent)
 
     return {"output_path": str(output_path), "filename": output_path.name}
