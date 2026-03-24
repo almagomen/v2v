@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, History, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import {
   getTranscriptionService,
   initializeTranscriptionService,
@@ -26,12 +26,6 @@ type V2VParsedSegment = {
   segIdx: number;
 };
 
-type TextVersion = {
-  text: string;
-  speaker: string;
-  timestamp: number;
-  isCurrent: boolean;
-};
 
 function parseV2VSegmentFromName(name: string): V2VParsedSegment | null {
   const normalized = name.replace(/\\/g, "/");
@@ -81,28 +75,6 @@ function saveToLocalStorage(filename: string, data: { text: string; speaker: str
   }
 }
 
-function loadHistoryFromLocalStorage(filename: string): TextVersion[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const key = `v2v_cloned_history_${filename}`;
-    const raw = localStorage.getItem(key);
-    if (!raw) return [];
-    const history = JSON.parse(raw) as TextVersion[];
-    return history.filter(v => !v.isCurrent);
-  } catch {
-    return [];
-  }
-}
-
-function saveHistoryToLocalStorage(filename: string, history: TextVersion[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    const key = `v2v_cloned_history_${filename}`;
-    localStorage.setItem(key, JSON.stringify(history));
-  } catch {
-    // ignore
-  }
-}
 
 async function getAudioDuration(blob: Blob): Promise<number> {
   const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -150,7 +122,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const [regenError, setRegenError] = useState<string | null>(null);
   const [regenStatus, setRegenStatus] = useState<string | null>(null);
 
-  const [textVersions, setTextVersions] = useState<TextVersion[]>([]);
 
   useEffect(() => {
     if (!initialized && defaultSpeaker) {
@@ -163,12 +134,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     v2vApi.getSpeakers().then(setSpeakers).catch(() => setSpeakers([]));
   }, []);
 
-  useEffect(() => {
-    if (mediaItem?.name) {
-      const history = loadHistoryFromLocalStorage(mediaItem.name);
-      setTextVersions(history);
-    }
-  }, [mediaItem?.name]);
 
   useEffect(() => {
     let cancelled = false;
@@ -203,6 +168,9 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           setSelectedVoice(localData.speaker);
         } else {
           setSegmentText(seg?.text ?? "");
+          if (parsed.speakerToken) {
+            setSelectedVoice(parsed.speakerToken);
+          }
         }
       } catch (e) {
         if (cancelled) return;
@@ -317,10 +285,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     }
   }, [mediaItem]);
 
-  const handleRestoreVersion = useCallback((version: TextVersion) => {
-    setSegmentText(version.text);
-    setSelectedVoice(version.speaker);
-  }, []);
 
   const handleRegenerate = useCallback(async () => {
     if (!folderRef || !parsed || !clip || !mediaItem) return;
@@ -391,16 +355,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         timestamp,
       });
 
-      const newVersion: TextVersion = {
-        text: currentText,
-        speaker: currentSpeaker,
-        timestamp,
-        isCurrent: true,
-      };
-      const updatedHistory = [newVersion, ...textVersions.slice(0, 9)];
-      setTextVersions(updatedHistory);
-      saveHistoryToLocalStorage(mediaItem.name, updatedHistory);
-
       setRegenStatus("Segmento regenerado");
     } catch (e) {
       setRegenError(e instanceof Error ? e.message : "Error al regenerar");
@@ -418,7 +372,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     normalizeTranslateLang,
     selectedVoice,
     replaceMediaAsset,
-    textVersions,
     segmentTimes,
   ]);
 
@@ -504,39 +457,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         />
       </div>
 
-      {textVersions.length > 0 && (
-        <div className="space-y-2">
-          <label className="text-[10px] text-text-secondary block mb-1 flex items-center gap-1">
-            <History size={10} />
-            Versiones anteriores
-          </label>
-          <Select
-            onValueChange={(value) => {
-              const version = textVersions.find((v) => v.timestamp.toString() === value);
-              if (version) {
-                handleRestoreVersion(version);
-              }
-            }}
-            value=""
-            disabled={regenLoading}
-          >
-            <SelectTrigger className="w-full bg-background-secondary border-border text-text-primary text-[11px]">
-              <SelectValue placeholder="Restaurar versión anterior..." />
-            </SelectTrigger>
-            <SelectContent className="bg-background-secondary border-border max-h-[200px]">
-              {textVersions.map((version) => (
-                <SelectItem key={version.timestamp} value={version.timestamp.toString()}>
-                  <span className="text-[10px]">
-                    {version.text.slice(0, 30)}
-                    {version.text.length > 30 ? "..." : ""}
-                    {" "}({version.speaker}) - {new Date(version.timestamp).toLocaleTimeString()}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
 
       <div className="space-y-2">
         {sttError && (
