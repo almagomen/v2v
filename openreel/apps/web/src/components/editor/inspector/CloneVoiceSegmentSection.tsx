@@ -107,6 +107,8 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
   const [speakers, setSpeakers] = useState<SpeakerOption[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<string>("");
+  // Ref que siempre apunta a la lista actual de speakers (evita stale closure en efectos async)
+  const speakersRef = React.useRef<SpeakerOption[]>([]);
   // Token pendiente de resolver cuando speakers aún no ha cargado
   const pendingToken = React.useRef<string | null>(null);
 
@@ -144,6 +146,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
   useEffect(() => {
     v2vApi.getSpeakers().then((list) => {
+      speakersRef.current = list;
       setSpeakers(list);
       // Si había un token pendiente de resolver, resolverlo ahora que tenemos la lista
       if (pendingToken.current && list.length > 0) {
@@ -184,10 +187,10 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         
         if (localData) {
           setSegmentText(localData.text);
-          // localData.speaker ya es el value correcto (guardado correctamente al regenerar)
-          const resolved = resolveSpeakerValue(localData.speaker, speakers);
-          if (speakers.length > 0) {
-            setSelectedVoice(resolved);
+          // Usar speakersRef.current para evitar stale closure
+          const currentSpeakers = speakersRef.current;
+          if (currentSpeakers.length > 0) {
+            setSelectedVoice(resolveSpeakerValue(localData.speaker, currentSpeakers));
           } else {
             pendingToken.current = localData.speaker;
           }
@@ -195,8 +198,9 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           setSegmentText(seg?.text ?? "");
           // speakerToken es el label (key del dict Python), hay que resolver al value
           if (parsed.speakerToken) {
-            if (speakers.length > 0) {
-              setSelectedVoice(resolveSpeakerValue(parsed.speakerToken, speakers));
+            const currentSpeakers = speakersRef.current;
+            if (currentSpeakers.length > 0) {
+              setSelectedVoice(resolveSpeakerValue(parsed.speakerToken, currentSpeakers));
             } else {
               pendingToken.current = parsed.speakerToken;
             }
