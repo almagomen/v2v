@@ -96,7 +96,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             if output_video_path.exists():
                 output_paths.append(output_video_path)
                 segments = [
-                    {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": t.get("speaker")}
+                    {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
                     for i, t in enumerate(texts)
                 ]
                 videos_data.append({
@@ -139,7 +139,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             output_paths.append(output_path)
 
             segments = [
-                {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": t.get("speaker")}
+                {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
                 for i, t in enumerate(texts)
             ]
             videos_data.append({

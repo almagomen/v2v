@@ -79,7 +79,8 @@ def _do_regenerate_segment(
         "start": start,
         "end": end,
         "text": text,
-        "speaker": texts_original[seg_idx - 1].get("speaker", "SPEAKER_00"),
+        # Si el usuario mandó un speaker explícito, lo usamos, si no mantenemos el original
+        "speaker": speaker if speaker else texts_original[seg_idx - 1].get("speaker", "SPEAKER_00"),
     }
     texts_edited = list(texts_original)
     texts_edited[seg_idx - 1] = t_edit
@@ -132,10 +133,11 @@ async def regenerate_video(req: RegenerateVideoRequest):
         seg_num = idx + 1
         s = seg_by_num.get(seg_num, {})
         t_edit = {
-            "start": float(s.get("start", t_orig["start"])),
-            "end": float(s.get("end", t_orig["end"])),
-            "text": str(s.get("text", t_orig["text"])),
-            "speaker": t_orig.get("speaker", "SPEAKER_00"),
+            "start": float(s.get("start", t_orig.get("start"))),
+            "end": float(s.get("end", t_orig.get("end"))),
+            "text": str(s.get("text", t_orig.get("text"))),
+            # Si el frontend envió el speaker modificado, lo mantenemos; sino fallback al original
+            "speaker": s.get("speaker", t_orig.get("speaker", "SPEAKER_00")),
         }
         texts_edited.append(t_edit)
         if str(t_orig) != str(t_edit):
