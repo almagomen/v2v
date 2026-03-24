@@ -611,6 +611,38 @@ export const AssetsPanel: React.FC = () => {
     [handleFileImport, project.mediaLibrary.items, renameMedia]
   );
 
+  const handleRootDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDraggedOverFolder(null);
+
+      const dataStr = e.dataTransfer.getData("application/json");
+      if (!dataStr) return;
+      
+      try {
+        const { mediaId } = JSON.parse(dataStr);
+        if (mediaId && mediaId.length > 0) {
+          const mediaItem = project.mediaLibrary.items.find(m => m.id === mediaId);
+          if (!mediaItem) return;
+          
+          const currentName = mediaItem.name;
+          const nameWithoutPrefix = currentName.includes("/") 
+            ? currentName.substring(currentName.lastIndexOf("/") + 1) 
+            : currentName;
+            
+          const newName = nameWithoutPrefix;
+          if (currentName !== newName) {
+            await renameMedia(mediaId, newName);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to parse dragged media", err);
+      }
+    },
+    [project.mediaLibrary.items, renameMedia]
+  );
+
   const handleFolderDragOver = useCallback((e: React.DragEvent, folder: string) => {
     e.preventDefault();
     e.stopPropagation();
@@ -634,6 +666,24 @@ export const AssetsPanel: React.FC = () => {
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(true);
+
+    const container = e.currentTarget as HTMLElement;
+    const viewport = container.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement || container;
+    
+    const rect = container.getBoundingClientRect();
+    const threshold = 60;
+    const maxSpeed = 15;
+
+    const distTop = e.clientY - rect.top;
+    const distBottom = rect.bottom - e.clientY;
+
+    if (distTop < threshold && distTop > 0) {
+      const speed = maxSpeed * (1 - distTop / threshold);
+      viewport.scrollTop -= speed;
+    } else if (distBottom < threshold && distBottom > 0) {
+      const speed = maxSpeed * (1 - distBottom / threshold);
+      viewport.scrollTop += speed;
+    }
   }, []);
 
   const handleDragLeave = useCallback(() => {
@@ -1231,7 +1281,19 @@ export const AssetsPanel: React.FC = () => {
               <div className="flex items-center gap-2 mb-3">
                 <button
                   onClick={() => setActiveFolder(null)}
-                  className="p-1 rounded hover:bg-background-tertiary text-text-muted"
+                  onDrop={handleRootDrop}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setDraggedOverFolder("__root__");
+                  }}
+                  onDragLeave={() => setDraggedOverFolder(null)}
+                  className={`p-1 rounded transition-colors border ${
+                    draggedOverFolder === "__root__"
+                      ? "bg-primary/10 border-primary text-primary"
+                      : "hover:bg-background-tertiary border-transparent text-text-muted"
+                  }`}
+                  title="Volver a la raíz (Suelta archivos aquí para sacarlos)"
                 >
                   <ArrowLeft size={14} />
                 </button>
