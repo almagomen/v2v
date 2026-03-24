@@ -541,7 +541,12 @@ export const AssetsPanel: React.FC = () => {
 
       try {
         for (let i = 0; i < fileArray.length; i++) {
-          const file = fileArray[i];
+          let file = fileArray[i];
+          
+          if (activeFolder) {
+            file = new File([file], `${activeFolder}/${file.name}`, { type: file.type });
+          }
+          
           setImportProgress(
             `Importing ${file.name} (${i + 1}/${fileArray.length})...`,
           );
@@ -562,7 +567,7 @@ export const AssetsPanel: React.FC = () => {
         setImportProgress("");
       }
     },
-    [importMedia],
+    [importMedia, activeFolder],
   );
 
   // Handle drag and drop import
