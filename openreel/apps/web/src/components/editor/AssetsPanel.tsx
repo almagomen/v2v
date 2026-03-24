@@ -104,6 +104,97 @@ function renameTimelineTrack(trackId: string, name: string) {
   }));
 }
 
+/** === Folder Timeline Snapshot Helpers === */
+
+type FolderClipSnapshot = {
+  mediaName: string; // nombre relativo (sin prefijo de carpeta) p.ej. "tts_voice_0001.wav"
+  startTime: number;
+  inPoint: number;
+  outPoint: number;
+  volume: number;
+};
+
+type FolderTrackSnapshot = {
+  type: string;
+  name: string;
+  clips: FolderClipSnapshot[];
+};
+
+type FolderTimelineSnapshot = {
+  folderName: string;
+  tracks: FolderTrackSnapshot[];
+  savedAt: number;
+};
+
+const SNAPSHOT_PREFIX = "or_folder_snapshot_";
+
+function getFolderSnapshotKey(folder: string) {
+  return `${SNAPSHOT_PREFIX}${folder.replace(/[^a-zA-Z0-9]/g, "_")}`;
+}
+
+function saveFolderSnapshot(snapshot: FolderTimelineSnapshot) {
+  try {
+    localStorage.setItem(
+      getFolderSnapshotKey(snapshot.folderName),
+      JSON.stringify(snapshot),
+    );
+  } catch (_) {}
+}
+
+function loadFolderSnapshot(folder: string): FolderTimelineSnapshot | null {
+  try {
+    const raw = localStorage.getItem(getFolderSnapshotKey(folder));
+    return raw ? (JSON.parse(raw) as FolderTimelineSnapshot) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Extrae los Tracks y Clips del proyecto actual que corresponden a archivos de la carpeta,
+ * mapeando mediaId -> nombre relativo para que sobreviva al proyecto destino.
+ */
+function extractFolderTimelineSnapshot(
+  folder: string,
+): FolderTimelineSnapshot {
+  const { project } = useProjectStore.getState();
+
+  // Conjunto de mediaIds que pertenecen a esta carpeta
+  const folderMediaMap = new Map<string, string>(); // id -> name relativo
+  for (const m of project.mediaLibrary.items) {
+    const idx = m.name.indexOf("/");
+    if (idx <= 0) continue;
+    if (m.name.slice(0, idx) !== folder) continue;
+    folderMediaMap.set(m.id, m.name.slice(idx + 1)); // nombre sin el prefijo carpeta
+  }
+
+  const tracks: FolderTrackSnapshot[] = [];
+
+  for (const track of project.timeline.tracks) {
+    const filteredClips: FolderClipSnapshot[] = [];
+    for (const clip of track.clips) {
+      const relName = folderMediaMap.get(clip.mediaId);
+      if (!relName) continue;
+      filteredClips.push({
+        mediaName: relName,
+        startTime: clip.startTime,
+        inPoint: clip.inPoint,
+        outPoint: clip.outPoint,
+        volume: clip.volume ?? 1,
+      });
+    }
+    if (filteredClips.length > 0) {
+      tracks.push({
+        type: track.type,
+        name: track.name,
+        clips: filteredClips,
+      });
+    }
+  }
+
+  return { folderName: folder, tracks, savedAt: Date.now() };
+}
+
 /**
  * Media Item Thumbnail Component
  * Shows thumbnail with metadata below (not overlaid)
@@ -871,6 +962,67 @@ export const AssetsPanel: React.FC = () => {
   const handleAddV2VFolderAsNewTracks = useCallback(async () => {
     if (!activeFolder) return;
     const ref = useV2VStore.getState().getFolderRef(activeFolder);
+
+    // Comprobar si existe un snapshot guardado para esta carpeta
+    const snapshot = loadFolderSnapshot(activeFolder);
+    if (snapshot && snapshot.tracks.length > 0) {
+      setIsImporting(true);
+      setImportProgress("Restaurando pistas desde snapshot guardado…");
+      try {
+        await ensureV2VMediaInProject(activeFolder, ref!);
+        const folder = activeFolder;
+
+        for (const trackSnap of snapshot.tracks) {
+          // Crear la pista
+          const beforeIds = new Set(
+            useProjectStore.getState().project.timeline.tracks.map((t) => t.id),
+          );
+          const rT = await addTrack(trackSnap.type as "video" | "audio" | "image");
+          if (!rT.success) continue;
+
+          const proj = useProjectStore.getState().project;
+          const newTrack = proj.timeline.tracks.find(
+            (t) => !beforeIds.has(t.id),
+          );
+          if (!newTrack) continue;
+
+          renameTimelineTrack(newTrack.id, trackSnap.name);
+
+          // Añadir clips
+          for (const clipSnap of trackSnap.clips) {
+            const mediaName = `${folder}/${clipSnap.mediaName}`;
+            const wm = useProjectStore
+              .getState()
+              .project.mediaLibrary.items.find((m) => m.name === mediaName);
+            if (!wm) continue;
+
+            const addR = await addClip(newTrack.id, wm.id, clipSnap.startTime);
+            if (!addR.success) continue;
+
+            // Restaurar recorte
+            const updatedClip = useProjectStore
+              .getState()
+              .project.timeline.tracks.find((t) => t.id === newTrack.id)
+              ?.clips.find(
+                (c) =>
+                  c.mediaId === wm.id &&
+                  Math.abs(c.startTime - clipSnap.startTime) < 0.05,
+              );
+            if (updatedClip) {
+              await trimClip(updatedClip.id, clipSnap.inPoint, clipSnap.outPoint);
+            }
+          }
+        }
+        await forceSave();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : "Error al restaurar snapshot");
+      } finally {
+        setIsImporting(false);
+        setImportProgress("");
+      }
+      return; // salir después de restaurar desde snapshot
+    }
+
     if (!ref) {
       window.alert(
         `No hay referencia V2V para "${activeFolder}". Procesa el video desde Video2Video (icono YouTube) o vuelve a ejecutar la inferencia.`,
@@ -1045,6 +1197,10 @@ export const AssetsPanel: React.FC = () => {
       if (!activeFolder) return;
       setCopyingTargetId(targetId);
       try {
+        // Guardar el snapshot de Timeline de la carpeta ANTES de cambiar de proyecto
+        const snapshot = extractFolderTimelineSnapshot(activeFolder);
+        saveFolderSnapshot(snapshot);
+
         const snapshotFiles = collectFolderMediaFiles(
           useProjectStore.getState().project.mediaLibrary.items,
           activeFolder,
