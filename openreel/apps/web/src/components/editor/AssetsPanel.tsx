@@ -872,14 +872,12 @@ export const AssetsPanel: React.FC = () => {
           );
           if (!clipOnTrack) continue;
 
-          const span = Math.max(0, seg.end - seg.start);
           const mediaDur =
             wm.metadata?.duration && wm.metadata.duration > 0
               ? wm.metadata.duration
               : clipOnTrack.duration;
-          if (span > 0) {
-            const trimOut = Math.min(span, mediaDur);
-            await trimClip(clipOnTrack.id, 0, trimOut);
+          if (mediaDur > 0) {
+            await trimClip(clipOnTrack.id, 0, mediaDur);
           }
         }
       }
