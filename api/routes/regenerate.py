@@ -100,8 +100,6 @@ def _do_regenerate_segment(
         speaker_audio,
         model_tts,
         only_indices=[seg_idx],
-        # slowdown_range=(0.5, 0.8),
-        # stretch_target_ratio=0.85,
     )
 
     if not paths_es:

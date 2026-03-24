@@ -88,18 +88,17 @@ def clone_voice_segments(
         #     print(f"Stay: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
         if slowdown_range and stretch_target_ratio != 1.0:
             if duration_ratio > 1.0:
-                print(f"Fast: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ", flush=True)
+                print(f"Fast: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
                 target_samples = int(dur_en * rate)
                 arr = adjust_audio_duration(arr, target_samples, rate)
             elif slowdown_range[0] < duration_ratio < slowdown_range[1]:
                 target_dur_sec = dur_es + (dur_en - dur_es) * stretch_target_ratio
-                print(f"Slow: {dur_es:5.2f}s → {target_dur_sec:5.2f}s", end=" ", flush=True)
+                print(f"Slow: {dur_es:5.2f}s → {target_dur_sec:5.2f}s", end=" ")
                 target_samples = int(target_dur_sec * rate)
                 arr = adjust_audio_duration(arr, target_samples, rate)
             else:
-                print(f"Stay: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ", flush=True)
-        else:
-            print(f"No adjust: {dur_es:5.2f}s", end=" ", flush=True)
+                print(f"Stay: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
+
         print(f" {text}")
 
         audio_es_path = seqs_trg_dir / f"{audio_en_path.stem}.wav"
