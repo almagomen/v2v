@@ -146,7 +146,7 @@ export const CropModeView: React.FC<CropModeViewProps> = ({
     const deltaX = (e.clientX - dragStart.x) / (videoSize.width * scale);
     const deltaY = (e.clientY - dragStart.y) / (videoSize.height * scale);
 
-    let newCrop = { ...cropStart };
+    const newCrop = { ...cropStart };
 
     if (dragHandle === "center") {
       newCrop.x = Math.max(

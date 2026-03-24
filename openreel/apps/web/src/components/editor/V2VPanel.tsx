@@ -789,7 +789,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                     
                     setIsProcessing(true);
                     try {
-                      let projectStore = useProjectStore.getState();
+                      const projectStore = useProjectStore.getState();
                       let targetProjectLoaded = false;
                       
                       if (projectStore.project.name === projectTitle) {

@@ -52,6 +52,7 @@ import {
 import {
   deleteMediaBlob,
   loadProjectMedia,
+  saveMediaBlob,
 } from "../services/media-storage";
 import { importMediaIntoProject } from "../utils/import-media-into-project";
 import { restoreMediaItem } from "../utils/media-recovery";
@@ -691,7 +692,7 @@ export const useProjectStore = create<ProjectState>()(
             isPlaceholder: false,
           };
 
-          const updatedItems = project.mediaLibrary.items.map((item) =>
+           const updatedItems = project.mediaLibrary.items.map((item) =>
             item.id === mediaId ? updatedItem : item,
           );
 
@@ -704,6 +705,26 @@ export const useProjectStore = create<ProjectState>()(
               modifiedAt: Date.now(),
             },
           });
+
+          try {
+            await saveMediaBlob(
+              project.id,
+              mediaId,
+              file,
+              {
+                duration: processedMedia.metadata.duration || 0,
+                width: processedMedia.metadata.width || 0,
+                height: processedMedia.metadata.height || 0,
+                frameRate: processedMedia.metadata.frameRate || 0,
+                codec: processedMedia.metadata.codec || "",
+                sampleRate: processedMedia.metadata.sampleRate || 0,
+                channels: processedMedia.metadata.channels || 0,
+                fileSize: file.size,
+              },
+            );
+          } catch (saveError) {
+            console.warn("Failed to save media blob to storage:", saveError);
+          }
 
           return {
             success: true,
