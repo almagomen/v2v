@@ -96,7 +96,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const clip = getClip(clipId);
   const mediaItem = clip ? getMediaItem(clip.mediaId) : undefined;
 
-  const { translateLang, speaker: defaultSpeaker, getFolderRef } = useV2VStore();
+  const { translateLang, getFolderRef } = useV2VStore();
 
   const parsed = useMemo(() => {
     if (!mediaItem?.name) return null;
@@ -107,7 +107,26 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
   const [speakers, setSpeakers] = useState<SpeakerOption[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<string>("");
-  const [initialized, setInitialized] = useState(false);
+  // Token pendiente de resolver cuando speakers aún no ha cargado
+  const pendingToken = React.useRef<string | null>(null);
+
+  // Resuelve un token (key del backend) al value correcto del Select.
+  // Busca por value exacto, luego por label exacto, luego por coincidencia parcial.
+  function resolveSpeakerValue(token: string, speakerList: SpeakerOption[]): string {
+    if (!token || speakerList.length === 0) return token;
+    const byValue = speakerList.find((s) => s.value === token);
+    if (byValue) return byValue.value;
+    const byLabel = speakerList.find((s) => s.label === token);
+    if (byLabel) return byLabel.value;
+    // Búsqueda parcial (por si el token está contenido en el label o viceversa)
+    const byPartial = speakerList.find(
+      (s) => s.label.toLowerCase().includes(token.toLowerCase()) ||
+             token.toLowerCase().includes(s.label.toLowerCase())
+    );
+    if (byPartial) return byPartial.value;
+    return token;
+  }
+
 
   const [jobLoading, setJobLoading] = useState(false);
   const [jobError, setJobError] = useState<string | null>(null);
@@ -124,14 +143,14 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
 
   useEffect(() => {
-    if (!initialized && defaultSpeaker) {
-      setSelectedVoice(defaultSpeaker);
-      setInitialized(true);
-    }
-  }, [defaultSpeaker, initialized]);
-
-  useEffect(() => {
-    v2vApi.getSpeakers().then(setSpeakers).catch(() => setSpeakers([]));
+    v2vApi.getSpeakers().then((list) => {
+      setSpeakers(list);
+      // Si había un token pendiente de resolver, resolverlo ahora que tenemos la lista
+      if (pendingToken.current && list.length > 0) {
+        setSelectedVoice(resolveSpeakerValue(pendingToken.current, list));
+        pendingToken.current = null;
+      }
+    }).catch(() => setSpeakers([]));
   }, []);
 
 
@@ -165,11 +184,22 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         
         if (localData) {
           setSegmentText(localData.text);
-          setSelectedVoice(localData.speaker);
+          // localData.speaker ya es el value correcto (guardado correctamente al regenerar)
+          const resolved = resolveSpeakerValue(localData.speaker, speakers);
+          if (speakers.length > 0) {
+            setSelectedVoice(resolved);
+          } else {
+            pendingToken.current = localData.speaker;
+          }
         } else {
           setSegmentText(seg?.text ?? "");
+          // speakerToken es el label (key del dict Python), hay que resolver al value
           if (parsed.speakerToken) {
-            setSelectedVoice(parsed.speakerToken);
+            if (speakers.length > 0) {
+              setSelectedVoice(resolveSpeakerValue(parsed.speakerToken, speakers));
+            } else {
+              pendingToken.current = parsed.speakerToken;
+            }
           }
         }
       } catch (e) {
