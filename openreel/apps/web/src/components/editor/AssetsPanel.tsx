@@ -25,6 +25,7 @@ import {
   LayoutGrid,
   Grid2x2,
   List,
+  Settings,
 } from "lucide-react";
 import {
   BACKGROUND_PRESETS,
@@ -911,13 +912,6 @@ export const AssetsPanel: React.FC = () => {
       const currentProjectId = useProjectStore.getState().project.id;
       const targets: Array<{ id: string; name: string; subtitle: string; isCurrent: boolean }> = [];
 
-      targets.push({
-        id: "__current__",
-        name: useProjectStore.getState().project.name,
-        subtitle: "Proyecto actual",
-        isCurrent: true,
-      });
-
       for (const p of ordered) {
         if (p.projectId === currentProjectId) continue;
         targets.push({
@@ -1205,19 +1199,11 @@ export const AssetsPanel: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={handleAddV2VFolderAsNewTracks}
-                    className="p-1 rounded bg-background-tertiary border border-border hover:border-primary/50 text-text-muted hover:text-primary"
-                    title="Añadir al timeline en nuevas pistas (video y segmentos según start/end del job; pistas de audio nombradas por speaker)"
-                  >
-                    <RefreshCw size={14} />
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => handleCopyFolderTtsToAnotherProject()}
                     className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary"
-                    title="Copiar carpeta a otro proyecto (Media)"
+                    title="Opciones de carpeta"
                   >
-                    <Plus size={14} />
+                    <Settings size={14} />
                   </button>
                 </div>
               </div>
@@ -1650,14 +1636,33 @@ export const AssetsPanel: React.FC = () => {
         <DialogContent className="max-w-md p-0 gap-0 bg-background-secondary border-border overflow-hidden">
           <DialogHeader className="p-4 border-b border-border space-y-1">
             <DialogTitle className="text-base font-semibold text-text-primary">
-              Copiar carpeta a proyecto
+              Opciones de carpeta
             </DialogTitle>
             <DialogDescription className="text-xs text-text-muted">
-              Selecciona un proyecto destino. Solo se copiaran assets a Media (sin timeline).
+              Añadir al timeline o copiar a otro proyecto.
             </DialogDescription>
           </DialogHeader>
 
           <div className="p-3 space-y-2 max-h-[320px] overflow-y-auto">
+            <button
+              onClick={() => {
+                setShowCopyProjectModal(false);
+                handleAddV2VFolderAsNewTracks();
+              }}
+              className="w-full text-left p-3 mb-2 rounded-lg border border-primary/40 bg-primary/10 hover:border-primary transition-colors flex items-center justify-between"
+            >
+              <div>
+                <div className="text-sm font-medium text-primary">Añadir al timeline</div>
+                <div className="text-[11px] text-text-muted mt-0.5">En nuevas pistas sincronizadas con job V2V</div>
+              </div>
+              <Plus size={18} className="text-primary" />
+            </button>
+            
+            {copyTargets.length > 0 && (
+              <div className="text-[10px] font-bold text-text-muted uppercase mb-1 tracking-wider mt-4 px-1">
+                Copiar a otro proyecto
+              </div>
+            )}
             {copyTargets.map((t) => (
               <button
                 key={t.id}
