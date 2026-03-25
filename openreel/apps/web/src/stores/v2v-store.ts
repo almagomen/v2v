@@ -422,6 +422,18 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     workingProject = batchRes.project;
                     const vMedia = workingProject.mediaLibrary.items.find(m => m.name === videoMediaName);
                     if (vMedia) {
+                      // Ajustar dimensiones del proyecto para que coincidan con el video
+                      if (vMedia.metadata.width && vMedia.metadata.height) {
+                        workingProject = {
+                          ...workingProject,
+                          settings: {
+                            ...workingProject.settings,
+                            width: vMedia.metadata.width,
+                            height: vMedia.metadata.height,
+                          },
+                        };
+                      }
+
                       const rv = (await addTrackToDetachedProject(workingProject, "video")) as any;
                       workingProject = rv.project!;
                       const vtId = workingProject.timeline.tracks.find(t => t.type === 'video' && (rv.trackId ? t.id === rv.trackId : true))?.id;
