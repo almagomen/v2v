@@ -65,20 +65,23 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             update_job(job_id, url_states=updated)
 
         speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
-        results = process_video_queue(
-            urls,
-            translate_lang=translate_lang,
-            on_stage=lambda u, st, msg: set_url_state(u, st, msg),
-        )
-
-        if not results:
-            update_job(job_id, status="error", message="No se pudo procesar ningún video.", error="No results")
-            return
-
         output_paths: list[Path] = []
         videos_data = []
 
-        for idx, r in enumerate(results):
+        for idx, u in enumerate(urls):
+            # Procesa un video a la vez para permitir flujo secuencial URL por URL
+            res_list = process_video_queue(
+                [u],
+                translate_lang=translate_lang,
+                on_stage=lambda u, st, msg: set_url_state(u, st, msg),
+            )
+            
+            if not res_list:
+                # Si falla una URL, continuamos con la siguiente
+                set_url_state(u, "error", "Error en descarga/transcripción")
+                continue
+
+            r = res_list[0]
             path = r["path"]
             texts = r["texts"]
             output_name = r["output_name"]
@@ -93,6 +96,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
 
             # Marca inicio de TTS para la UI (los segmentos se verán en el log general).
             set_url_state(r.get("url", ""), "tts", "⚡ TTS:", index=idx, output_name=output_name)
+            
             if output_video_path.exists():
                 output_paths.append(output_video_path)
                 segments = [
@@ -109,10 +113,12 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                     "segments": segments,
                     "url": r.get("url", ""),
                 })
+                # Actualizar job con resultados parciales para que el frontend los vea
+                update_job(job_id, videos=videos_data, progress=(idx + 0.5) / len(urls))
                 set_url_state(r.get("url", ""), "done", f"Listo (cache): {output_name}", index=idx, output_name=output_name)
                 continue
 
-            update_job(job_id, status="tts", message=f"Clonando voz: {path.stem} [{idx + 1}/{len(results)}]")
+            update_job(job_id, status="tts", message=f"Clonando voz: {path.stem} [{idx + 1}/{len(urls)}]")
             split_all_sequences([path])
 
             paths_es, times, freq = clone_voice_segments(
@@ -121,6 +127,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             )
 
             if not paths_es:
+                set_url_state(r.get("url", ""), "error", "Error en TTS")
                 continue
 
             vocals_es_path = path.with_name("vocals_es.wav")
@@ -129,6 +136,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
 
             no_vocals_path = path.with_name("no_vocals.wav")
             if not no_vocals_path.exists():
+                set_url_state(r.get("url", ""), "error", "Error: no_vocals.wav no encontrado")
                 continue
 
             # En este punto ya existen Seqs_trg/vocals_XXXX.wav, así que el frontend puede importar audios.
@@ -152,7 +160,13 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 "segments": segments,
                 "url": r.get("url", ""),
             })
+            # Actualizar job con resultados parciales tras el render
+            update_job(job_id, videos=videos_data, progress=(idx + 1.0) / len(urls))
             set_url_state(r.get("url", ""), "done", f"Listo: {output_name}", index=idx, output_name=output_name)
+
+        if not videos_data:
+            update_job(job_id, status="error", message="No se pudo procesar ningún video.", error="No results")
+            return
 
         update_job(
             job_id,
