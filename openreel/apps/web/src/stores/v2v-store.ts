@@ -9,6 +9,7 @@ import {
   addTrackToDetachedProject,
   renameTrackInProject,
 } from "../utils/detached-project-actions";
+import { autoSaveManager } from "../services/auto-save";
 
 const FOLDER_REFS_STORAGE_KEY = "openreel.v2v.folderRefs";
 const JOB_STATE_STORAGE_KEY = "openreel.v2v.jobState";
@@ -437,7 +438,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                       }
                     }
 
-                    await useProjectStore.getState().forceSave(workingProject);
+                    await autoSaveManager.forceSave(workingProject);
                     get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index });
                     get().setImportStatus(key, "done");
                     if (urlForLog) get().appendUrlLog(urlForLog, `✅ Importación completada en segundo plano.`);
