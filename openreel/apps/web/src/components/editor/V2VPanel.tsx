@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback } from "react";
-import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2, FolderDown } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Download, Share2, FolderDown } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
 import { v2vApi } from "../../lib/v2v-api";
@@ -81,17 +81,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     error,
     setError,
     videos,
-    setVideos,
     selectedVideoIndex,
     setSelectedVideoIndex,
-    segments,
-    setSegments,
-    selectedRowIndex,
-    setSelectedRowIndex,
     isProcessing,
     setIsProcessing,
-    regenStatus,
-    setRegenStatus,
     shareUrl,
     setShareUrl,
     importStatusByKey,
@@ -129,20 +122,29 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       setError("Introduce al menos una URL de YouTube");
       return;
     }
-    const signature = normalized.map((u: string) => encodeURIComponent(u)).join("|");
-    const prevSignature = useV2VStore.getState().lastUrlsSignature;
-    const keepImports = Boolean(prevSignature && prevSignature === signature);
 
-    useV2VStore.getState().clearJobRunState({ keepImports });
+    // Identificar URLs nuevas que no estén ya en urlItems
+    const currentUrls = new Set(urlItems.map(it => it.url));
+    const newUrls = normalized.filter(u => !currentUrls.has(u));
+
+    if (newUrls.length === 0) {
+      toast.info("Sin URLs nuevas", "Todas las URLs ya han sido procesadas o están en cola.");
+      return;
+    }
+
+    const signature = normalized.map((u: string) => encodeURIComponent(u)).join("|");
+    // Si la firma es igual, es probable que solo estemos re-arrancando o recuperando
+    const keepItems = true; 
+
+    useV2VStore.getState().clearJobRunState({ keepImports: true, keepItems });
     useV2VStore.setState({ lastUrlsSignature: signature });
     setError(null);
     setLog("");
-    setVideos([]);
     setIsProcessing(true);
     setJobPhase("downloading");
     try {
       const res = await v2vApi.processUrls(
-        normalized,
+        newUrls,
         translateLang === "None" ? null : translateLang,
         speaker
       );
@@ -152,100 +154,43 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       setError(e instanceof Error ? e.message : "Error al iniciar");
       setIsProcessing(false);
     }
-  }, [urls, translateLang, speaker]);
+  }, [urls, translateLang, speaker, urlItems, startPolling, setJobId, setError, setLog, setIsProcessing, setJobPhase]);
 
   const handleVideoSelect = useCallback(
     (idx: number) => {
       setSelectedVideoIndex(idx);
-      if (videos[idx]) setSegments(videos[idx].segments);
+      // Actualizamos segments en el store para que Clone Voice lo vea
+      if (videos[idx]) {
+        useV2VStore.getState().setSegments(videos[idx].segments);
+      }
       setShareUrl(null);
     },
-    [videos]
+    [videos, setSelectedVideoIndex, setShareUrl]
   );
 
-  const handleSegmentEdit = useCallback(
-    (
-      rowIdx: number,
-      field: "start" | "end" | "text",
-      value: string | number
-    ) => {
-      setSegments((prev: any[]) =>
-        prev.map((s: any, i: number) =>
-          i === rowIdx
-            ? { ...s, [field]: typeof value === "number" ? value : value }
-            : s
-        )
-      );
-    },
-    []
-  );
-
-  const handleRegenerateSegment = useCallback(async () => {
-    if (selectedRowIndex == null || !jobId || !segments[selectedRowIndex]) return;
-    const seg = segments[selectedRowIndex];
-    setRegenStatus("Regenerando...");
-    try {
-      await v2vApi.regenerateSegment(
-        jobId,
-        selectedVideoIndex,
-        seg.seg,
-        seg.text,
-        seg.start,
-        seg.end,
-        translateLang === "None" ? null : translateLang,
-        speaker
-      );
-      setRegenStatus("Segmento regenerado");
-    } catch (e) {
-      setRegenStatus(e instanceof Error ? e.message : "Error");
-    }
-  }, [jobId, selectedVideoIndex, selectedRowIndex, segments, translateLang, speaker]);
-
-  const handleRegenerateVideo = useCallback(async () => {
-    if (!jobId) return;
-    setRegenStatus("Aplicando cambios y renderizando...");
-    try {
-      await v2vApi.regenerateVideo(
-        jobId,
-        selectedVideoIndex,
-        segments,
-        translateLang === "None" ? null : translateLang,
-        speaker
-      );
-      const result = await v2vApi.getJobResult(jobId);
-      setVideos(result.videos);
-      if (result.videos[selectedVideoIndex]) {
-        setSegments(result.videos[selectedVideoIndex].segments);
-      }
-      setRegenStatus("Video regenerado");
-    } catch (e) {
-      setRegenStatus(e instanceof Error ? e.message : "Error");
-    }
-  }, [jobId, selectedVideoIndex, segments, translateLang, speaker]);
+  // Cargar en editor eliminado: ahora se importa automáticamente a Media durante el proceso.
 
   // Cargar en editor eliminado: ahora se importa automáticamente a Media durante el proceso.
 
   const handleShare = useCallback(async () => {
     if (!jobId) return;
-    setRegenStatus("Subiendo a Catbox...");
     try {
+      toast.info("Compartiendo", "Subiendo a Catbox...");
       const u = await v2vApi.shareToCatbox(jobId, selectedVideoIndex);
       setShareUrl(u);
-      setRegenStatus("Enlace listo");
+      toast.success("Enlace listo", "El video se ha subido correctamente.");
     } catch (e) {
-      setRegenStatus(e instanceof Error ? e.message : "Error al compartir");
+      toast.error("Error al compartir", e instanceof Error ? e.message : "Error desconocido");
     }
-  }, [jobId, selectedVideoIndex]);
+  }, [jobId, selectedVideoIndex, setShareUrl]);
 
   const handleDownloadZip = useCallback(async () => {
     if (!jobId) return;
-    setRegenStatus("Preparando ZIP...");
     try {
       const blob = await v2vApi.downloadZipBlob(jobId);
       downloadBlob(blob, "videos_inferidos.zip");
-      setRegenStatus("ZIP descargado");
     } catch (e) {
-      setRegenStatus(e instanceof Error ? e.message : "Error al descargar ZIP");
+      toast.error("Error", e instanceof Error ? e.message : "Error al descargar ZIP");
     }
   }, [jobId]);
 
@@ -603,92 +548,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
               </div>
             )}
 
-            <div>
-              <p className="text-[10px] text-text-muted mb-2">Segmentos (edita y regenera)</p>
-              <div className="max-h-48 overflow-y-auto border border-border rounded-lg">
-                <table className="w-full text-[10px]">
-                  <thead className="bg-background-tertiary sticky top-0">
-                    <tr>
-                      <th className="px-2 py-1 text-left">#</th>
-                      <th className="px-2 py-1 text-left">Inicio</th>
-                      <th className="px-2 py-1 text-left">Final</th>
-                      <th className="px-2 py-1 text-left">Texto</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {segments.map((seg: any, i: number) => (
-                      <tr
-                        key={i}
-                        onClick={() => setSelectedRowIndex(i)}
-                        className={`cursor-pointer border-t border-border hover:bg-background-tertiary ${
-                          selectedRowIndex === i ? "bg-primary/10" : ""
-                        }`}
-                      >
-                        <td className="px-2 py-1">{seg.seg}</td>
-                        <td className="px-2 py-1">
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={seg.start}
-                            onChange={(e) =>
-                              handleSegmentEdit(i, "start", parseFloat(e.target.value) || 0)
-                            }
-                            className="w-14 bg-transparent border-none p-0 text-inherit"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        </td>
-                        <td className="px-2 py-1">
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={seg.end}
-                            onChange={(e) =>
-                              handleSegmentEdit(i, "end", parseFloat(e.target.value) || 0)
-                            }
-                            className="w-14 bg-transparent border-none p-0 text-inherit"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        </td>
-                        <td className="px-2 py-1 max-w-[120px] truncate">
-                          <input
-                            type="text"
-                            value={seg.text}
-                            onChange={(e) => handleSegmentEdit(i, "text", e.target.value)}
-                            className="w-full bg-transparent border-none p-0 text-inherit truncate"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={handleRegenerateSegment}
-                disabled={selectedRowIndex == null}
-              >
-                <RefreshCw size={12} className="mr-1" />
-                Regenerar segmento
-              </Button>
-              <Button size="sm" onClick={handleRegenerateVideo}>
-                Aplicar cambios y renderizar
-              </Button>
-            </div>
-
-            {regenStatus && (
-              <p
-                className={`text-[10px] ${
-                  regenStatus.toLowerCase().includes("error") ? "text-red-500" : "text-text-muted"
-                }`}
-              >
-                {regenStatus}
-              </p>
-            )}
           </>
         )}
       </div>

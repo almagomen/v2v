@@ -44,6 +44,7 @@ import { HistoryPanel } from "./inspector/HistoryPanel";
 import { V2VPanel } from "./V2VPanel";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { autoSaveManager } from "../../services/auto-save";
+import { useV2VStore } from "../../stores/v2v-store";
 import { toast } from "../../stores/notification-store";
 import { useAnalytics, AnalyticsEvents } from "../../hooks/useAnalytics";
 import { startTour, ONBOARDING_KEY, startMoGraphTour, MOGRAPH_TOUR_KEY } from "./tour";
@@ -81,6 +82,7 @@ interface ExportState {
 
 export const Toolbar: React.FC = () => {
   const { project, forceSave } = useProjectStore();
+  const v2vStore = useV2VStore();
   const {
     openModal,
     selectedItems,
@@ -864,7 +866,7 @@ export const Toolbar: React.FC = () => {
                   : "hover:bg-background-elevated text-text-secondary hover:text-text-primary"
               }`}
             >
-              <Youtube size={16} />
+              <Youtube size={16} className={v2vStore.isProcessing ? "animate-spin" : ""} />
             </button>
           </TooltipTrigger>
           <TooltipContent>

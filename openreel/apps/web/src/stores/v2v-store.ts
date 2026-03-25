@@ -134,7 +134,7 @@ export interface V2VState {
   removeFolderRef: (folder: string) => void;
   renameFolderRef: (oldFolder: string, newFolder: string) => void;
 
-  clearJobRunState: (opts?: { keepImports?: boolean }) => void;
+  clearJobRunState: (opts?: { keepImports?: boolean; keepItems?: boolean }) => void;
 
   setLastUrlsSignature: (sig: string | null) => void;
 
@@ -261,23 +261,24 @@ export const useV2VStore = create<V2VState>((set, get) => {
     clearJobRunState: (opts) =>
       set((state) => {
         const keepImports = opts?.keepImports ?? false;
-        localStorage.removeItem(JOB_STATE_STORAGE_KEY);
+        const keepItems = opts?.keepItems ?? false;
+        if (!keepItems) localStorage.removeItem(JOB_STATE_STORAGE_KEY);
         return {
           jobId: null,
           progress: 0,
           error: null,
-          videos: [],
+          videos: keepItems ? state.videos : [],
           selectedVideoIndex: 0,
-          segments: [],
+          segments: keepItems ? state.segments : [],
           selectedRowIndex: null,
           isProcessing: false,
           regenStatus: "",
           shareUrl: null,
           log: "",
           importStatusByKey: keepImports ? state.importStatusByKey : {},
-          urlItems: [],
+          urlItems: keepItems ? state.urlItems : [],
           selectedUrlForLogs: null,
-          urlLogs: {},
+          urlLogs: keepItems ? state.urlLogs : {},
           jobPhase: "idle",
           folderRefs: state.folderRefs,
           lastUrlsSignature: state.lastUrlsSignature,
@@ -312,18 +313,34 @@ export const useV2VStore = create<V2VState>((set, get) => {
 
           const items = await v2vApi.getJobItems(jobId);
           if (items.length) {
-            set({ urlItems: items });
-            saveJobStateToStorage({ urlItems: items });
+            set((state) => {
+              // Merge items: overwriting existing ones for THIS jobId, keeping others.
+              // Note: current implementation of JobUrlItem doesn't have jobId. 
+              // We'll match by index/url but actually, if we start a new job, 
+              // the indices might overlap. 
+              // Simple approach: if jobId is different, append. 
+              // If jobId is same, refresh.
+              const otherItems = state.urlItems.filter(it => (it as any).jobId && (it as any).jobId !== jobId);
+              const jobItems = items.map(it => ({ ...it, jobId }));
+              const nextItems = [...otherItems, ...jobItems];
+              saveJobStateToStorage({ urlItems: nextItems });
+              return { urlItems: nextItems };
+            });
           }
 
           try {
             const partial = await v2vApi.getJobResult(jobId);
             if (partial.videos?.length) {
-              set({ videos: partial.videos });
-              saveJobStateToStorage({ videos: partial.videos });
-              if (partial.videos[state.selectedVideoIndex]) {
-                set({ segments: partial.videos[state.selectedVideoIndex].segments });
-              }
+              set((state) => {
+                const otherVideos = state.videos.filter(v => (v as any).jobId && (v as any).jobId !== jobId);
+                const jobVideos = partial.videos.map(v => ({ ...v, jobId }));
+                const nextVideos = [...otherVideos, ...jobVideos];
+                saveJobStateToStorage({ videos: nextVideos });
+                if (jobVideos[state.selectedVideoIndex]) {
+                  return { videos: nextVideos, segments: jobVideos[state.selectedVideoIndex].segments };
+                }
+                return { videos: nextVideos };
+              });
             }
           } catch { /* ignore */ }
 
