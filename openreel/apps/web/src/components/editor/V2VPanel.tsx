@@ -858,6 +858,9 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       
                       await freshStore.forceSave();
                       
+                      // 3) Vincular carpeta al Job para que AssetsPanel la reconozca
+                      useV2VStore.getState().setFolderRef(folder, { jobId: jobId!, videoIndex: v.index });
+
                       toast.success("Re-importación completa", `Archivos en proyecto "${projectTitle}".`);
                     } catch (e) {
                       toast.error("Error al re-importar", String(e));

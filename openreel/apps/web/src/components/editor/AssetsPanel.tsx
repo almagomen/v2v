@@ -969,7 +969,9 @@ export const AssetsPanel: React.FC = () => {
       setIsImporting(true);
       setImportProgress("Restaurando pistas desde snapshot guardado…");
       try {
-        await ensureV2VMediaInProject(activeFolder, ref!);
+        if (ref) {
+          await ensureV2VMediaInProject(activeFolder, ref);
+        }
         const folder = activeFolder;
 
         for (const trackSnap of snapshot.tracks) {
