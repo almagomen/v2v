@@ -1,19 +1,17 @@
-import React, { useEffect, useCallback, useRef } from "react";
+import React, { useEffect, useCallback } from "react";
 import { Youtube, Loader2, AlertCircle, RefreshCw, Download, Share2, FolderDown } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
-import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
+import { v2vApi } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
 import { useV2VStore } from "../../stores/v2v-store";
 import { autoSaveManager } from "../../services/auto-save";
-import { projectManager } from "../../services/project-manager";
-import { createEmptyProject } from "../../stores/project";
-import { importMultipleMediaIntoProject } from "../../utils/import-media-into-project";
 import {
-  addClipToDetachedProject,
-  addTrackToDetachedProject,
-  renameTrackInProject,
-} from "../../utils/detached-project-actions";
+  toSafeToken,
+  sanitizeFolderName,
+  shortProjectToken,
+  importKeyFor,
+} from "../../utils/v2v-utils";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -25,7 +23,16 @@ const TRANSLATE_OPTIONS = [
   { value: "it", label: "Italiano" },
 ];
 
-const POLL_INTERVAL = 1500;
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "En cola",
@@ -57,54 +64,9 @@ function statusToBadgeClass(status: string): string {
   }
 }
 
-function toSafeToken(s: string): string {
-  const ascii = s
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Za-z0-9._-]+/g, "_")
-    .replace(/^[\_\.\-\\]+|[\_\.\-\\]+$/g, "")
-    .slice(0, 40);
-  return ascii || "speaker";
-}
-
-function importKeyFor(url: string, index: number): string {
-  return `${encodeURIComponent(url)}|${index}`;
-}
-
-function sanitizeFolderName(name: string): string {
-  // El folder se infiere por `Carpeta/archivo`, así que evitamos `/`.
-  const cleaned = (name || "Video").replaceAll("/", "_").replaceAll("\\", "_").trim();
-  return cleaned || "Video";
-}
-
-function shortProjectToken(name: string): string {
-  const s = (name || "video")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Za-z0-9._ -]+/g, " ")
-    .trim();
-  const firstWords = s.split(/\s+/).filter(Boolean).slice(0, 2).join(" ");
-  const compact = firstWords.replace(/\s+/g, "_").slice(0, 16);
-  return compact || "video";
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
 export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   embedInDrawer = false,
 }) => {
-  // Lock para evitar ejecuciones concurrentes del bloque de auto-import/creación de proyectos.
-  const importingRef = useRef(false);
-
   const {
     urls,
     setUrls,
@@ -116,7 +78,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     setJobId,
     log,
     setLog,
-    setProgress,
     error,
     setError,
     videos,
@@ -134,15 +95,13 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     shareUrl,
     setShareUrl,
     importStatusByKey,
-    setImportStatus,
     urlItems,
-    setUrlItems,
     urlLogs,
-    appendUrlLog,
     jobPhase,
     setJobPhase,
     speakers,
     fetchSpeakers,
+    startPolling,
   } = useV2VStore();
 
   useEffect(() => {
@@ -151,254 +110,12 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     }
   }, [speakers.length, fetchSpeakers]);
 
+  // Si ya hay un jobId activo al montar, iniciamos polling por si acaso (recuperación tras refresh)
   useEffect(() => {
-    if (!jobId || !isProcessing) return;
-    const t = setInterval(async () => {
-      try {
-        const s = await v2vApi.getJobStatus(jobId);
-        setProgress(s.progress * 100);
-        setJobPhase(s.status);
-
-        // Log en tiempo real (sin esperar a done/error)
-        const jobLog = await v2vApi.getJobLog(jobId);
-        if (jobLog && jobLog.length > log.length) setLog(jobLog);
-
-        const items = await v2vApi.getJobItems(jobId);
-        if (items.length) setUrlItems(items);
-
-        // Mientras procesa, intentamos leer resultado parcial (videos ya listos)
-        try {
-          const partial = await v2vApi.getJobResult(jobId);
-          if (partial.videos?.length) {
-            setVideos(partial.videos);
-            if (partial.videos[selectedVideoIndex]) setSegments(partial.videos[selectedVideoIndex].segments);
-          }
-        } catch {
-          // ignore (puede fallar si aún no hay videos)
-        }
-
-        // Auto-import incremental: por cada video aparecido en `videos`, importar video+audios a Media.
-        // Usamos importingRef como lock para evitar que ticks concurrentes procesen imports en paralelo.
-        if (!importingRef.current) {
-          const currentVideos = useV2VStore.getState().videos;
-          const pendingVideos = currentVideos.filter(
-            (v) => !useV2VStore.getState().importStatusByKey[importKeyFor(v.url, v.index)],
-          );
-          if (pendingVideos.length > 0) {
-            importingRef.current = true;
-          try {
-        const baseProjectSettings = useProjectStore.getState().project.settings;
-        for (const v of pendingVideos) {
-          const key = importKeyFor(v.url, v.index);
-          // Re-check por si otro tick lo marcó mientras esperábamos
-          if (useV2VStore.getState().importStatusByKey[key]) continue;
-          // Marcamos INMEDIATO como in_progress para evitar duplicación
-          setImportStatus(key, "in_progress");
-
-          // Sólo importamos cuando el backend ya tiene WAVs en Seqs_trg (si no, esperamos al siguiente tick)
-          let audioSegs: AudioSegmentItem[] = [];
-          try {
-            audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
-          } catch {
-            setImportStatus(key, "error");
-            continue;
-          }
-          if (!audioSegs.length) {
-            // Audios aún no listos; re-poner como pendiente y esperar al siguiente tick
-            useV2VStore.setState((st) => {
-              const next = { ...st.importStatusByKey };
-              delete next[key];
-              return { importStatusByKey: next };
-            });
-            continue;
-          }
-
-          const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
-          const urlForLog = v.url || "";
-          const currentItems = useV2VStore.getState().urlItems;
-          const pos = currentItems.findIndex(
-            (it) => it.url === v.url && it.index === v.index,
-          );
-          const seq = pos >= 0 ? pos + 1 : v.index + 1;
-          const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
-
-          // Proyecto nuevo por URL en memoria: no sustituye el proyecto activo del editor (importación en segundo plano).
-          let workingProject = createEmptyProject(projectTitle, {
-            width: baseProjectSettings.width,
-            height: baseProjectSettings.height,
-            frameRate: baseProjectSettings.frameRate,
-          });
-
-          setRegenStatus(`Importando a Media (${projectTitle}): ${folder}...`);
-          if (urlForLog) appendUrlLog(urlForLog, `🚀 Importando a Media...`);
-
-          const videoMediaName = `${folder}/video.mp4`;
-          const existingNames = new Set(workingProject.mediaLibrary.items.map((m) => m.name));
-          
-          setRegenStatus(`Importando a Media (${projectTitle}): descargando archivos...`);
-          if (urlForLog) appendUrlLog(urlForLog, `🚀 Descargando archivos en paralelo...`);
-
-          // 1) Descarga de Video y Audios en paralelo
-          const downloadTasks = [
-            v2vApi.fetchOutputVideoBlob(jobId, v.index).then(blob => ({ type: 'video' as const, blob, name: videoMediaName })),
-            ...audioSegs.map(seg => {
-              const speakerToken = toSafeToken(seg.speaker || "speaker");
-              const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
-              return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg).then(blob => ({ type: 'audio' as const, blob, name: wavName }));
-            })
-          ];
-
-          const downloadedFiles = await Promise.all(downloadTasks);
-          
-          // 2) Filtrar archivos que ya existen para no re-importar (opcional, pero profesional)
-          const filesToImport = downloadedFiles
-            .filter(f => !existingNames.has(f.name))
-            .map(f => new File([f.blob], f.name, { type: f.type === 'video' ? 'video/mp4' : 'audio/wav' }));
-
-          if (filesToImport.length > 0) {
-            setRegenStatus(`Procesando ${filesToImport.length} archivos para ${folder}...`);
-            const batchRes = await importMultipleMediaIntoProject(workingProject, filesToImport, { quick: true });
-            
-            if (batchRes.errors.length > 0) {
-               console.warn("Algunos archivos fallaron al importar:", batchRes.errors);
-            }
-            workingProject = batchRes.project;
-          }
-
-          if (urlForLog) appendUrlLog(urlForLog, `✅ Media importada (${downloadedFiles.length} archivos)`);
-
-          if (useV2VStore.getState().importStatusByKey[key] !== "error") {
-            setImportStatus(key, "done");
-            // Auto-import al timeline en el proyecto recién creado (en memoria).
-            const videoMediaName = `${folder}/video.mp4`;
-            const videoMedia = workingProject.mediaLibrary.items.find(
-              (m) => m.name === videoMediaName,
-            );
-
-            // Video track
-            const beforeVideoTrackIds = new Set(
-              workingProject.timeline.tracks.map((t) => t.id),
-            );
-            const videoAddRes = await addTrackToDetachedProject(workingProject, "video");
-            if (!videoAddRes.success || !videoAddRes.project) {
-              setRegenStatus(`Importado en Media, pero falló crear video track: ${folder}`);
-              useV2VStore.getState().setFolderRef(folder, {
-                jobId,
-                videoIndex: v.index,
-              });
-              continue;
-            }
-            workingProject = videoAddRes.project;
-
-            const videoTrack = workingProject.timeline.tracks.find(
-              (t) => t.type === "video" && !beforeVideoTrackIds.has(t.id),
-            );
-
-            if (videoTrack && videoMedia) {
-              const clipRes = await addClipToDetachedProject(
-                workingProject,
-                videoTrack.id,
-                videoMedia.id,
-                0,
-              );
-              if (clipRes.success && clipRes.project) {
-                workingProject = clipRes.project;
-              }
-            }
-
-            // Audio tracks (1 por speaker)
-            const bySpeaker: Record<string, AudioSegmentItem[]> = {};
-            for (const seg of audioSegs) {
-              const token = toSafeToken(seg.speaker || "speaker");
-              (bySpeaker[token] ||= []).push(seg);
-            }
-            for (const speakerToken of Object.keys(bySpeaker)) {
-              const beforeAudioTrackIds = new Set(
-                workingProject.timeline.tracks.map((t) => t.id),
-              );
-              const audioAddRes = await addTrackToDetachedProject(workingProject, "audio");
-              if (!audioAddRes.success || !audioAddRes.project) continue;
-              workingProject = audioAddRes.project;
-
-              const audioTrack = workingProject.timeline.tracks.find(
-                (t) =>
-                  t.type === "audio" && !beforeAudioTrackIds.has(t.id),
-              );
-              if (!audioTrack) continue;
-
-              workingProject = renameTrackInProject(
-                workingProject,
-                audioTrack.id,
-                `TTS_${speakerToken}`,
-              );
-
-              const orderedSegs = bySpeaker[speakerToken]
-                .slice()
-                .sort((a, b) => a.seg - b.seg);
-
-              for (const seg of orderedSegs) {
-                const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
-                  seg.seg,
-                ).padStart(4, "0")}.wav`;
-                const wavMedia = workingProject.mediaLibrary.items.find(
-                  (m) => m.name === wavName,
-                );
-                if (!wavMedia) continue;
-
-                const clipRes = await addClipToDetachedProject(
-                  workingProject,
-                  audioTrack.id,
-                  wavMedia.id,
-                  seg.start,
-                );
-                if (clipRes.success && clipRes.project) {
-                  workingProject = clipRes.project;
-                }
-              }
-            }
-
-            await autoSaveManager.forceSave(workingProject);
-            await projectManager.addToRecent(workingProject);
-
-            useV2VStore.getState().setFolderRef(folder, {
-              jobId,
-              videoIndex: v.index,
-            });
-
-            setRegenStatus(`Importado y pegado al timeline: ${folder}`);
-            if (urlForLog) appendUrlLog(urlForLog, `✅ Audios importados`);
-            // Referencia para copiar carpeta / restaurar timeline desde Media.
-            } // end if importStatus !== "error"
-          } // end for
-        } finally {
-          importingRef.current = false;
-        }
-        } // cierra if pendingVideos
-        } // cierra if !importingRef.current
-        
-        if (s.status === "done") {
-          setIsProcessing(false);
-          setJobPhase("done");
-          const result = await v2vApi.getJobResult(jobId);
-          setVideos(result.videos);
-          if (result.videos.length > 0) {
-            setSegments(result.videos[0].segments);
-            setSelectedVideoIndex(0);
-          }
-          if (result.log) setLog(result.log);
-        } else if (s.status === "error") {
-          setIsProcessing(false);
-          setJobPhase("error");
-          setError(s.message || "Error en el procesamiento");
-          const finalLog = await v2vApi.getJobLog(jobId);
-          if (finalLog) setLog(finalLog);
-        }
-      } catch {
-        // ignore
-      }
-    }, POLL_INTERVAL);
-    return () => clearInterval(t);
-  }, [jobId, isProcessing, log.length, selectedVideoIndex]);
+    if (jobId && isProcessing) {
+      startPolling(jobId);
+    }
+  }, []);
 
   const handleProcess = useCallback(async () => {
     const urlList = urls
@@ -406,13 +123,13 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       .map((u) => u.trim())
       .filter(Boolean);
     const normalized = urlList
-      .map((u) => (/^https?:\/\//i.test(u) ? u : `https://${u}`))
-      .filter((u) => /^https?:\/\/(www\.)?(youtube\.com\/|youtu\.be\/)/i.test(u));
+      .map((u: string) => (/^https?:\/\//i.test(u) ? u : `https://${u}`))
+      .filter((u: string) => /^https?:\/\/(www\.)?(youtube\.com\/|youtu\.be\/)/i.test(u));
     if (normalized.length === 0) {
       setError("Introduce al menos una URL de YouTube");
       return;
     }
-    const signature = normalized.map((u) => encodeURIComponent(u)).join("|");
+    const signature = normalized.map((u: string) => encodeURIComponent(u)).join("|");
     const prevSignature = useV2VStore.getState().lastUrlsSignature;
     const keepImports = Boolean(prevSignature && prevSignature === signature);
 
@@ -430,6 +147,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         speaker
       );
       setJobId(res.job_id);
+      startPolling(res.job_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al iniciar");
       setIsProcessing(false);
@@ -451,8 +169,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       field: "start" | "end" | "text",
       value: string | number
     ) => {
-      setSegments((prev) =>
-        prev.map((s, i) =>
+      setSegments((prev: any[]) =>
+        prev.map((s: any, i: number) =>
           i === rowIdx
             ? { ...s, [field]: typeof value === "number" ? value : value }
             : s
@@ -621,11 +339,11 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             // Si hay varias URLs, mostramos el "estado más activo" (menor prioridad)
             // entre las que no estén done/error/pending.
             const activeCandidates = urlItems
-              .filter((it) => it.status && it.status !== "done" && it.status !== "error" && it.status !== "pending");
+              .filter((it: any) => it.status && it.status !== "done" && it.status !== "error" && it.status !== "pending");
 
             const importingCandidates = hasImportsInFlight
               ? urlItems.filter(
-                  (it) =>
+                  (it: any) =>
                     typeof it.index === "number" &&
                     importStatusByKey[importKeyFor(it.url, it.index)] === "in_progress",
                 )
@@ -636,7 +354,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 ? importingCandidates[0]
                 : activeCandidates.length > 0
                   ? activeCandidates.sort(
-                      (a, b) => (order[a.status] ?? 999) - (order[b.status] ?? 999),
+                      (a: any, b: any) => (order[a.status] ?? 999) - (order[b.status] ?? 999),
                     )[0]
                   : null;
 
@@ -650,7 +368,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
             const activePos = activeUrlState
               ? urlItems.findIndex(
-                  (it) => it.url === activeUrlState.url && it.index === activeUrlState.index,
+                  (it: any) => it.url === activeUrlState.url && it.index === activeUrlState.index,
                 )
               : -1;
             const x = urlItems.length || 1;
@@ -687,7 +405,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {urlItems.map((it, i) => (
+                  {urlItems.map((it: any, i: number) => (
                     <tr key={it.url} className="border-t border-border">
                       <td className="px-2 py-1 tabular-nums">{i + 1}</td>
                       <td className="px-2 py-1 max-w-[220px] truncate" title={it.url}>
@@ -725,7 +443,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
                 // Import-only: mostramos lo que se registra en `urlLogs` (sin [STATE:...]).
                 const importText = urlItems
-                  .map((it) => (it.url ? urlLogs[it.url] || "" : ""))
+                  .map((it: any) => (it.url ? urlLogs[it.url] || "" : ""))
                   .filter(Boolean)
                   .join("\n");
 
@@ -745,7 +463,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                   value={selectedVideoIndex}
                   onChange={(e) => handleVideoSelect(parseInt(e.target.value, 10))}
                 >
-                  {videos.map((v, i) => (
+                  {videos.map((v: any, i: number) => (
                     <option key={i} value={i}>
                       {v.output_name}
                     </option>
@@ -777,15 +495,15 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       } else {
                         await autoSaveManager.initialize();
                         const saves = await autoSaveManager.checkForRecovery();
-                        const uniqueProjects = saves.reduce((acc, save) => {
-                          const existing = acc.find((s) => s.projectId === save.projectId);
+                        const uniqueProjects = saves.reduce((acc: any[], save: any) => {
+                          const existing = acc.find((s: any) => s.projectId === save.projectId);
                           if (!existing || save.timestamp > existing.timestamp) {
-                            return [...acc.filter((s) => s.projectId !== save.projectId), save];
+                            return [...acc.filter((s: any) => s.projectId !== save.projectId), save];
                           }
                           return acc;
-                        }, [] as typeof saves);
+                        }, [] as any[]);
                         
-                        const targetSave = uniqueProjects.find((s) => s.projectName === projectTitle);
+                        const targetSave = uniqueProjects.find((s: any) => s.projectName === projectTitle);
                         if (targetSave) {
                           await projectStore.recoverFromAutoSave(targetSave.id);
                           targetProjectLoaded = true;
@@ -810,10 +528,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       
                       // 1) Video
                       const videoMediaName = `${folder}/video.mp4`;
-                      const videoExists = freshStore.project.mediaLibrary.items.some(m => m.name === videoMediaName);
+                      const videoExists = freshStore.project.mediaLibrary.items.some((m: any) => m.name === videoMediaName);
                       
                       if (!videoExists) {
-                        const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
+                        const vblob = await v2vApi.fetchOutputVideoBlob(jobId!, v.index);
                         const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
                         await freshStore.importMedia(vfile);
                         // Refresh store reference after import
@@ -821,14 +539,14 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       }
                       
                       // 2) Audios por segmento
-                      const audioSegs = v.segments.filter((s) => s.text?.trim().length > 0);
+                      const audioSegs = v.segments.filter((s: any) => s.text?.trim().length > 0);
                       for (const seg of audioSegs) {
                         const speakerToken = toSafeToken(seg.speaker || "speaker");
                         const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
                         
                         // Solo importamos si no existe ya
-                        if (!freshStore.project.mediaLibrary.items.some(m => m.name === wavName)) {
-                          const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
+                        if (!freshStore.project.mediaLibrary.items.some((m: any) => m.name === wavName)) {
+                          const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId!, v.index, seg.seg);
                           const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
                           await freshStore.importMedia(wavFile);
                           // Refresh store reference after each import to see new items
@@ -898,7 +616,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                     </tr>
                   </thead>
                   <tbody>
-                    {segments.map((seg, i) => (
+                    {segments.map((seg: any, i: number) => (
                       <tr
                         key={i}
                         onClick={() => setSelectedRowIndex(i)}

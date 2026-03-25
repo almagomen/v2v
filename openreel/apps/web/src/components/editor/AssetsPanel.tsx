@@ -40,6 +40,7 @@ import type { MediaItem } from "@openreel/core";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
 import { autoSaveManager } from "../../services/auto-save";
 import { importMultipleMediaIntoProject } from "../../utils/import-media-into-project";
+import { toSafeToken } from "../../utils/v2v-utils";
 import { AspectRatioMatchDialog } from "./dialogs/AspectRatioMatchDialog";
 import { AIGenTab } from "./AIGenTab";
 import {
@@ -62,17 +63,6 @@ const formatDuration = (seconds: number): string => {
     .padStart(2, "0")}`;
 };
 
-function toSafeToken(s: string): string {
-  const ascii = s
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Za-z0-9._-]+/g, "_")
-    // Recorta prefijos/sufijos raros en tokens de speaker.
-    // Nota: el '-' dentro del character class va escapado para evitar errores de rango.
-    .replace(/^[\_\.\-\\]+|[\_\.\-\\]+$/g, "")
-    .slice(0, 40);
-  return ascii || "speaker";
-}
 
 /** Copia blobs de Media de una carpeta `folder/…` a archivos para importar en otro proyecto. */
 function collectFolderMediaFiles(items: MediaItem[], folder: string): File[] {

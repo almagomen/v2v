@@ -1,8 +1,20 @@
 import { create } from "zustand";
-import { v2vApi, type Segment, type VideoResult, type JobUrlItem } from "../lib/v2v-api";
+import { v2vApi, type Segment, type VideoResult, type JobUrlItem, type AudioSegmentItem } from "../lib/v2v-api";
+import { useProjectStore } from "./project-store";
+import { createEmptyProject } from "./project";
+import { importMultipleMediaIntoProject } from "../utils/import-media-into-project";
+import { toSafeToken, sanitizeFolderName, shortProjectToken, importKeyFor } from "../utils/v2v-utils";
+import {
+  addClipToDetachedProject,
+  addTrackToDetachedProject,
+  renameTrackInProject,
+} from "../utils/detached-project-actions";
 
 const FOLDER_REFS_STORAGE_KEY = "openreel.v2v.folderRefs";
 const JOB_STATE_STORAGE_KEY = "openreel.v2v.jobState";
+
+let pollingTimer: ReturnType<typeof setInterval> | null = null;
+let isImportingBusy = false;
 
 export type V2VFolderRef = { jobId: string; videoIndex: number };
 
@@ -125,8 +137,13 @@ export interface V2VState {
 
   setLastUrlsSignature: (sig: string | null) => void;
 
+  startPolling: (jobId: string) => void;
+  stopPolling: () => void;
+
   reset: () => void;
 }
+
+const POLL_INTERVAL = 1500;
 
 export const useV2VStore = create<V2VState>((set, get) => {
   const saved = loadJobStateFromStorage();
@@ -135,115 +152,326 @@ export const useV2VStore = create<V2VState>((set, get) => {
     translateLang: saved.translateLang ?? "None",
     speaker: saved.speaker ?? "mrbeast_lmnt",
 
-  jobId: saved.jobId ?? null,
-  progress: saved.progress ?? 0,
-  error: null,
-  videos: saved.videos ?? [],
-  selectedVideoIndex: saved.selectedVideoIndex ?? 0,
-  segments: saved.segments ?? [],
-  selectedRowIndex: null,
-  isProcessing: false,               // no puede estar procesando si se recargó
-  regenStatus: "",
-  shareUrl: saved.shareUrl ?? null,
-  log: saved.log ?? "",
-  importStatusByKey: saved.importStatusByKey ?? {},
-  urlItems: saved.urlItems ?? [],
-  folderRefs: loadFolderRefsFromStorage(),
-  selectedUrlForLogs: null,
-  urlLogs: saved.urlLogs ?? {},
-  jobPhase: saved.jobPhase ?? "idle",
-  lastUrlsSignature: saved.lastUrlsSignature ?? null,
+    jobId: saved.jobId ?? null,
+    progress: saved.progress ?? 0,
+    error: null,
+    videos: saved.videos ?? [],
+    selectedVideoIndex: saved.selectedVideoIndex ?? 0,
+    segments: saved.segments ?? [],
+    selectedRowIndex: null,
+    isProcessing: false,
+    regenStatus: "",
+    shareUrl: saved.shareUrl ?? null,
+    log: saved.log ?? "",
+    importStatusByKey: saved.importStatusByKey ?? {},
+    urlItems: saved.urlItems ?? [],
+    folderRefs: loadFolderRefsFromStorage(),
+    selectedUrlForLogs: null,
+    urlLogs: saved.urlLogs ?? {},
+    jobPhase: saved.jobPhase ?? "idle",
+    lastUrlsSignature: saved.lastUrlsSignature ?? null,
 
-  speakers: [],
+    speakers: [],
 
-  setUrls: (urls) => { set({ urls }); saveJobStateToStorage({ urls }); },
-  setTranslateLang: (translateLang) => { set({ translateLang }); saveJobStateToStorage({ translateLang }); },
-  setSpeaker: (speaker) => { set({ speaker }); saveJobStateToStorage({ speaker }); },
+    setUrls: (urls) => { set({ urls }); saveJobStateToStorage({ urls }); },
+    setTranslateLang: (translateLang) => { set({ translateLang }); saveJobStateToStorage({ translateLang }); },
+    setSpeaker: (speaker) => { set({ speaker }); saveJobStateToStorage({ speaker }); },
 
-  fetchSpeakers: async () => {
-    try {
-      const list = await v2vApi.getSpeakers();
-      set({ speakers: list });
-    } catch {
-      // log o ignorar
-    }
-  },
+    fetchSpeakers: async () => {
+      try {
+        const list = await v2vApi.getSpeakers();
+        set({ speakers: list });
+      } catch {
+        // log o ignorar
+      }
+    },
 
-  setJobId: (jobId) => { set({ jobId }); saveJobStateToStorage({ jobId }); },
-  setProgress: (progress) => { set({ progress }); saveJobStateToStorage({ progress }); },
-  setError: (error) => set({ error }),
+    setJobId: (jobId) => { set({ jobId }); saveJobStateToStorage({ jobId }); },
+    setProgress: (progress) => { set({ progress }); saveJobStateToStorage({ progress }); },
+    setError: (error) => set({ error }),
 
-  setVideos: (videos) => { set({ videos }); saveJobStateToStorage({ videos }); },
-  setSelectedVideoIndex: (selectedVideoIndex) => { set({ selectedVideoIndex }); saveJobStateToStorage({ selectedVideoIndex }); },
-  setSegments: (segments) =>
-    set((state) => {
-      const next = typeof segments === "function" ? (segments as (prev: Segment[]) => Segment[])(state.segments) : segments;
-      saveJobStateToStorage({ segments: next });
-      return { segments: next };
-    }),
-  setSelectedRowIndex: (selectedRowIndex) => set({ selectedRowIndex }),
+    setVideos: (videos) => { set({ videos }); saveJobStateToStorage({ videos }); },
+    setSelectedVideoIndex: (selectedVideoIndex) => { set({ selectedVideoIndex }); saveJobStateToStorage({ selectedVideoIndex }); },
+    setSegments: (segments) =>
+      set((state) => {
+        const next = typeof segments === "function" ? (segments as (prev: Segment[]) => Segment[])(state.segments) : segments;
+        saveJobStateToStorage({ segments: next });
+        return { segments: next };
+      }),
+    setSelectedRowIndex: (selectedRowIndex) => set({ selectedRowIndex }),
 
-  setIsProcessing: (isProcessing) => set({ isProcessing }),
-  setRegenStatus: (regenStatus) => set({ regenStatus }),
-  setShareUrl: (shareUrl) => { set({ shareUrl }); saveJobStateToStorage({ shareUrl }); },
-  setLog: (log) => { set({ log }); saveJobStateToStorage({ log }); },
-  setImportStatus: (key, status) =>
-    set((state) => {
-      const next = { ...state.importStatusByKey, [key]: status };
-      saveJobStateToStorage({ importStatusByKey: next });
-      return { importStatusByKey: next };
-    }),
-  setUrlItems: (urlItems) => { set({ urlItems }); saveJobStateToStorage({ urlItems }); },
-  setSelectedUrlForLogs: (selectedUrlForLogs) => set({ selectedUrlForLogs }),
-  appendUrlLog: (url, line) =>
-    set((state) => {
-      const prev = state.urlLogs[url] || "";
-      const next = prev ? `${prev}\n${line}` : line;
-      const updated = { ...state.urlLogs, [url]: next };
-      saveJobStateToStorage({ urlLogs: updated });
-      return { urlLogs: updated };
-    }),
-  setJobPhase: (jobPhase) => { set({ jobPhase }); saveJobStateToStorage({ jobPhase }); },
-  setFolderRef: (folder: string, ref: V2VFolderRef) =>
-    set((state) => {
-      const folderRefs = { ...state.folderRefs, [folder]: ref };
-      saveFolderRefsToStorage(folderRefs);
-      return { folderRefs };
-    }),
-  getFolderRef: (folder: string) => {
-    const mem = get().folderRefs[folder];
-    if (mem) return mem;
-    const disk = loadFolderRefsFromStorage()[folder];
-    if (disk) {
-      set((state) => ({
-        folderRefs: { ...state.folderRefs, [folder]: disk },
-      }));
-      return disk;
-    }
-    return undefined;
-  },
-  removeFolderRef: (folder: string) =>
-    set((state) => {
-      const next = { ...state.folderRefs };
-      delete next[folder];
-      saveFolderRefsToStorage(next);
-      return { folderRefs: next };
-    }),
-  renameFolderRef: (oldFolder: string, newFolder: string) =>
-    set((state) => {
-      if (!state.folderRefs[oldFolder]) return state;
-      const next = { ...state.folderRefs };
-      next[newFolder] = next[oldFolder];
-      delete next[oldFolder];
-      saveFolderRefsToStorage(next);
-      return { folderRefs: next };
-    }),
+    setIsProcessing: (isProcessing) => set({ isProcessing }),
+    setRegenStatus: (regenStatus) => set({ regenStatus }),
+    setShareUrl: (shareUrl) => { set({ shareUrl }); saveJobStateToStorage({ shareUrl }); },
+    setLog: (log) => { set({ log }); saveJobStateToStorage({ log }); },
+    setImportStatus: (key, status) =>
+      set((state) => {
+        const next = { ...state.importStatusByKey, [key]: status };
+        saveJobStateToStorage({ importStatusByKey: next });
+        return { importStatusByKey: next };
+      }),
+    setUrlItems: (urlItems) => { set({ urlItems }); saveJobStateToStorage({ urlItems }); },
+    setSelectedUrlForLogs: (selectedUrlForLogs) => set({ selectedUrlForLogs }),
+    appendUrlLog: (url, line) =>
+      set((state) => {
+        const prev = state.urlLogs[url] || "";
+        const next = prev ? `${prev}\n${line}` : line;
+        const updated = { ...state.urlLogs, [url]: next };
+        saveJobStateToStorage({ urlLogs: updated });
+        return { urlLogs: updated };
+      }),
+    setJobPhase: (jobPhase) => { set({ jobPhase }); saveJobStateToStorage({ jobPhase }); },
 
-  clearJobRunState: (opts) =>
-    set((state) => {
-      const keepImports = opts?.keepImports ?? false;
+    setFolderRef: (folder: string, ref: V2VFolderRef) =>
+      set((state) => {
+        const folderRefs = { ...state.folderRefs, [folder]: ref };
+        saveFolderRefsToStorage(folderRefs);
+        return { folderRefs };
+      }),
+    getFolderRef: (folder: string) => {
+      const mem = get().folderRefs[folder];
+      if (mem) return mem;
+      const disk = loadFolderRefsFromStorage()[folder];
+      if (disk) {
+        set((state) => ({
+          folderRefs: { ...state.folderRefs, [folder]: disk },
+        }));
+        return disk;
+      }
+      return undefined;
+    },
+    removeFolderRef: (folder: string) =>
+      set((state) => {
+        const next = { ...state.folderRefs };
+        delete next[folder];
+        saveFolderRefsToStorage(next);
+        return { folderRefs: next };
+      }),
+    renameFolderRef: (oldFolder: string, newFolder: string) =>
+      set((state) => {
+        if (!state.folderRefs[oldFolder]) return state;
+        const next = { ...state.folderRefs };
+        next[newFolder] = next[oldFolder];
+        delete next[oldFolder];
+        saveFolderRefsToStorage(next);
+        return { folderRefs: next };
+      }),
+
+    clearJobRunState: (opts) =>
+      set((state) => {
+        const keepImports = opts?.keepImports ?? false;
+        localStorage.removeItem(JOB_STATE_STORAGE_KEY);
+        return {
+          jobId: null,
+          progress: 0,
+          error: null,
+          videos: [],
+          selectedVideoIndex: 0,
+          segments: [],
+          selectedRowIndex: null,
+          isProcessing: false,
+          regenStatus: "",
+          shareUrl: null,
+          log: "",
+          importStatusByKey: keepImports ? state.importStatusByKey : {},
+          urlItems: [],
+          selectedUrlForLogs: null,
+          urlLogs: {},
+          jobPhase: "idle",
+          folderRefs: state.folderRefs,
+          lastUrlsSignature: state.lastUrlsSignature,
+        };
+      }),
+
+    setLastUrlsSignature: (lastUrlsSignature) => { set({ lastUrlsSignature }); saveJobStateToStorage({ lastUrlsSignature }); },
+
+    startPolling: (jobId) => {
+      if (pollingTimer) clearInterval(pollingTimer);
+      set({ jobId, isProcessing: true });
+      saveJobStateToStorage({ jobId });
+
+      pollingTimer = setInterval(async () => {
+        const state = get();
+        const { jobId } = state;
+        if (!jobId || !state.isProcessing) {
+          if (pollingTimer) clearInterval(pollingTimer);
+          return;
+        }
+
+        try {
+          const s = await v2vApi.getJobStatus(jobId);
+          set({ progress: s.progress * 100, jobPhase: s.status });
+          saveJobStateToStorage({ progress: s.progress * 100, jobPhase: s.status });
+
+          const jobLog = await v2vApi.getJobLog(jobId);
+          if (jobLog && jobLog.length > state.log.length) {
+            set({ log: jobLog });
+            saveJobStateToStorage({ log: jobLog });
+          }
+
+          const items = await v2vApi.getJobItems(jobId);
+          if (items.length) {
+            set({ urlItems: items });
+            saveJobStateToStorage({ urlItems: items });
+          }
+
+          try {
+            const partial = await v2vApi.getJobResult(jobId);
+            if (partial.videos?.length) {
+              set({ videos: partial.videos });
+              saveJobStateToStorage({ videos: partial.videos });
+              if (partial.videos[state.selectedVideoIndex]) {
+                set({ segments: partial.videos[state.selectedVideoIndex].segments });
+              }
+            }
+          } catch { /* ignore */ }
+
+          if (s.status === "done" || s.status === "error") {
+            const currentIsImporting = isImportingBusy;
+            if (!currentIsImporting) {
+               // Re-check pending imports one last time before stopping
+               const stillPending = get().videos.filter(v => !get().importStatusByKey[importKeyFor(v.url, v.index)]);
+               if (stillPending.length === 0) {
+                 get().stopPolling();
+                 if (s.status === "error") set({ isProcessing: false });
+               }
+            }
+          }
+
+          if (!isImportingBusy) {
+            const currentVideos = get().videos;
+            const pendingVideos = currentVideos.filter(
+              (v) => !get().importStatusByKey[importKeyFor(v.url, v.index)],
+            );
+
+            if (pendingVideos.length > 0) {
+              isImportingBusy = true;
+              try {
+                const baseProjectSettings = useProjectStore.getState().project.settings;
+                for (const v of pendingVideos) {
+                  const key = importKeyFor(v.url, v.index);
+                  if (get().importStatusByKey[key]) continue;
+
+                  set((st) => ({
+                    importStatusByKey: { ...st.importStatusByKey, [key]: "in_progress" }
+                  }));
+
+                  let audioSegs: AudioSegmentItem[] = [];
+                  try {
+                    audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
+                  } catch {
+                    get().setImportStatus(key, "error");
+                    continue;
+                  }
+                  if (!audioSegs.length) {
+                    set((st) => {
+                      const next = { ...st.importStatusByKey };
+                      delete next[key];
+                      return { importStatusByKey: next };
+                    });
+                    continue;
+                  }
+
+                  const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
+                  const urlForLog = v.url || "";
+                  const pos = get().urlItems.findIndex(it => it.url === v.url && it.index === v.index);
+                  const seq = pos >= 0 ? pos + 1 : v.index + 1;
+                  const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
+
+                  let workingProject = createEmptyProject(projectTitle, {
+                    width: baseProjectSettings.width,
+                    height: baseProjectSettings.height,
+                    frameRate: baseProjectSettings.frameRate,
+                  });
+
+                  const videoMediaName = `${folder}/video.mp4`;
+                  const downloadTasks = [
+                    v2vApi.fetchOutputVideoBlob(jobId, v.index).then(blob => ({ type: 'video' as const, blob, name: videoMediaName })),
+                    ...audioSegs.map(seg => {
+                      const speakerToken = toSafeToken(seg.speaker || "speaker");
+                      const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                      return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg).then(blob => ({ type: 'audio' as const, blob, name: wavName }));
+                    })
+                  ];
+
+                  const downloaded = await Promise.all(downloadTasks);
+                  const files = downloaded.map(d => new File([d.blob], d.name, { type: d.type === 'video' ? 'video/mp4' : 'audio/wav' }));
+
+                  const batchRes = await importMultipleMediaIntoProject(workingProject, files, { quick: true });
+                  if (batchRes.success && batchRes.project) {
+                    workingProject = batchRes.project;
+                    const vMedia = workingProject.mediaLibrary.items.find(m => m.name === videoMediaName);
+                    if (vMedia) {
+                      const rv = (await addTrackToDetachedProject(workingProject, "video")) as any;
+                      workingProject = rv.project!;
+                      const vtId = workingProject.timeline.tracks.find(t => t.type === 'video' && (rv.trackId ? t.id === rv.trackId : true))?.id;
+                      if (vtId) {
+                        workingProject = renameTrackInProject(workingProject, vtId, `V2V · ${folder}`);
+                        const cv = (await addClipToDetachedProject(workingProject, vtId, vMedia.id, 0)) as any;
+                        workingProject = cv.project!;
+                      }
+
+                      const bySpeaker: Record<string, AudioSegmentItem[]> = {};
+                      for (const seg of audioSegs) {
+                        const spk = (seg.speaker || "").trim();
+                        const k = spk || `Speaker_${seg.seg}`;
+                        (bySpeaker[k] ||= []).push(seg);
+                      }
+
+                      for (const sKey of Object.keys(bySpeaker)) {
+                        const segs = bySpeaker[sKey].sort((a,b) => a.seg - b.seg);
+                        const ra = (await addTrackToDetachedProject(workingProject, "audio")) as any;
+                        workingProject = ra.project!;
+                        const atId = workingProject.timeline.tracks.find(t => t.type === 'audio' && (ra.trackId ? t.id === ra.trackId : true))?.id;
+                        if (atId) {
+                          workingProject = renameTrackInProject(workingProject, atId, sKey);
+                          for (const seg of segs) {
+                            const wName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
+                            const wm = workingProject.mediaLibrary.items.find(m => m.name === wName);
+                            if (wm) {
+                              const cw = (await addClipToDetachedProject(workingProject, atId, wm.id, seg.start)) as any;
+                              workingProject = cw.project!;
+                            }
+                          }
+                        }
+                      }
+                    }
+
+                    await useProjectStore.getState().forceSave(workingProject);
+                    get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index });
+                    get().setImportStatus(key, "done");
+                    if (urlForLog) get().appendUrlLog(urlForLog, `✅ Importación completada en segundo plano.`);
+                  }
+                }
+              } catch (err) {
+                console.error("V2V Background import error:", err);
+              } finally {
+                isImportingBusy = false;
+              }
+            }
+          }
+        } catch (err) {
+          console.error("V2V Polling error:", err);
+        }
+      }, POLL_INTERVAL);
+    },
+
+    stopPolling: () => {
+      if (pollingTimer) {
+        clearInterval(pollingTimer);
+        pollingTimer = null;
+      }
+      set({ isProcessing: false });
+    },
+
+    reset: () => {
+      get().stopPolling();
+      saveFolderRefsToStorage({});
       localStorage.removeItem(JOB_STATE_STORAGE_KEY);
-      return {
+      set({
+        urls: "",
+        translateLang: "None",
+        speaker: "mrbeast_lmnt",
         jobId: null,
         progress: 0,
         error: null,
@@ -255,43 +483,15 @@ export const useV2VStore = create<V2VState>((set, get) => {
         regenStatus: "",
         shareUrl: null,
         log: "",
-        importStatusByKey: keepImports ? state.importStatusByKey : {},
+        importStatusByKey: {},
         urlItems: [],
+        folderRefs: {},
         selectedUrlForLogs: null,
         urlLogs: {},
         jobPhase: "idle",
-        folderRefs: state.folderRefs,
-      };
-    }),
-
-  setLastUrlsSignature: (lastUrlsSignature) => { set({ lastUrlsSignature }); saveJobStateToStorage({ lastUrlsSignature }); },
-
-  reset: () => {
-    saveFolderRefsToStorage({});
-    localStorage.removeItem(JOB_STATE_STORAGE_KEY);
-    set({
-      urls: "",
-      translateLang: "None",
-      speaker: "mrbeast_lmnt",
-      jobId: null,
-      progress: 0,
-      error: null,
-      videos: [],
-      selectedVideoIndex: 0,
-      segments: [],
-      selectedRowIndex: null,
-      isProcessing: false,
-      regenStatus: "",
-      shareUrl: null,
-      log: "",
-      importStatusByKey: {},
-      urlItems: [],
-      folderRefs: {},
-      selectedUrlForLogs: null,
-      urlLogs: {},
-      jobPhase: "idle",
-    });
-  },
+        lastUrlsSignature: null,
+      });
+    },
   };
 });
 
