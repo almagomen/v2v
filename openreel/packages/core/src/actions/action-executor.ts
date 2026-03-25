@@ -13,6 +13,7 @@ import type {
   MediaAction,
   ProjectAction,
 } from "../types/actions";
+import { v4 as uuidv4 } from "uuid";
 import type {
   Project,
   Track,
@@ -260,7 +261,7 @@ export class ActionExecutor {
       case "media/import": {
         const params = action.params as { file: File };
         const newMediaItem = {
-          id: `media-${Date.now()}`,
+          id: `media-${uuidv4()}`,
           name: params.file.name,
           type: this.inferMediaType(params.file),
           fileHandle: null,
@@ -338,7 +339,7 @@ export class ActionExecutor {
             (t: MutableTrack) => t.type === params.trackType,
           ).length + 1;
         const newTrack: MutableTrack = {
-          id: `track-${Date.now()}`,
+          id: `track-${uuidv4()}`,
           type: params.trackType as Track["type"],
           name: `${trackNames[params.trackType] || params.trackType} ${trackCount}`,
           clips: [],
@@ -459,7 +460,7 @@ export class ActionExecutor {
               ? mediaItem.metadata.duration
               : 5);
           const newClip = {
-            id: `clip-${Date.now()}`,
+            id: `clip-${uuidv4()}`,
             mediaId: params.mediaId,
             trackId: params.trackId,
             startTime: params.startTime,
@@ -579,7 +580,7 @@ export class ActionExecutor {
 
           const clip2 = {
             ...clip,
-            id: `clip-${Date.now()}`,
+            id: `clip-${uuidv4()}`,
             startTime: splitTime,
             duration: clip.duration - splitOffset,
             inPoint: clip.inPoint + splitOffset,
@@ -802,7 +803,7 @@ export class ActionExecutor {
           params?: Record<string, unknown>;
         };
         const newEffect = {
-          id: `effect-${Date.now()}`,
+          id: `effect-${uuidv4()}`,
           type: params.effectType,
           params: params.params || {},
           enabled: true,

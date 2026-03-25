@@ -360,6 +360,8 @@ export const useV2VStore = create<V2VState>((set, get) => {
                   let audioSegs: AudioSegmentItem[] = [];
                   try {
                     audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
+                    // Deduplicar por el campo 'seg' para evitar duplicados en el timeline
+                    audioSegs = audioSegs.filter((s, i, a) => a.findIndex(t => t.seg === s.seg) === i);
                   } catch {
                     get().setImportStatus(key, "error");
                     continue;
