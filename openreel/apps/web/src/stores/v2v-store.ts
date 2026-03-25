@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { v2vApi, type Segment, type VideoResult, type JobUrlItem } from "../lib/v2v-api";
 
 const FOLDER_REFS_STORAGE_KEY = "openreel.v2v.folderRefs";
+const JOB_STATE_STORAGE_KEY = "openreel.v2v.jobState";
 
 export type V2VFolderRef = { jobId: string; videoIndex: number };
 
@@ -19,6 +20,47 @@ function saveFolderRefsToStorage(refs: Record<string, V2VFolderRef>): void {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(FOLDER_REFS_STORAGE_KEY, JSON.stringify(refs));
+  } catch {
+    // ignore quota
+  }
+}
+
+type PersistedJobState = {
+  urls: string;
+  jobId: string | null;
+  progress: number;
+  videos: VideoResult[];
+  selectedVideoIndex: number;
+  segments: Segment[];
+  urlItems: JobUrlItem[];
+  urlLogs: Record<string, string>;
+  jobPhase: string;
+  importStatusByKey: Record<string, "in_progress" | "done" | "error">;
+  log: string;
+  shareUrl: string | null;
+  lastUrlsSignature: string | null;
+  translateLang: string;
+  speaker: string;
+};
+
+function loadJobStateFromStorage(): Partial<PersistedJobState> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(JOB_STATE_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as PersistedJobState) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveJobStateToStorage(state: Partial<PersistedJobState>): void {
+  if (typeof window === "undefined") return;
+  try {
+    const existing = loadJobStateFromStorage();
+    localStorage.setItem(
+      JOB_STATE_STORAGE_KEY,
+      JSON.stringify({ ...existing, ...state }),
+    );
   } catch {
     // ignore quota
   }
@@ -86,35 +128,37 @@ export interface V2VState {
   reset: () => void;
 }
 
-export const useV2VStore = create<V2VState>((set, get) => ({
-  urls: "",
-  translateLang: "None",
-  speaker: "mrbeast_lmnt",
+export const useV2VStore = create<V2VState>((set, get) => {
+  const saved = loadJobStateFromStorage();
+  return {
+    urls: saved.urls ?? "",
+    translateLang: saved.translateLang ?? "None",
+    speaker: saved.speaker ?? "mrbeast_lmnt",
 
-  jobId: null,
-  progress: 0,
+  jobId: saved.jobId ?? null,
+  progress: saved.progress ?? 0,
   error: null,
-  videos: [],
-  selectedVideoIndex: 0,
-  segments: [],
+  videos: saved.videos ?? [],
+  selectedVideoIndex: saved.selectedVideoIndex ?? 0,
+  segments: saved.segments ?? [],
   selectedRowIndex: null,
-  isProcessing: false,
+  isProcessing: false,               // no puede estar procesando si se recargó
   regenStatus: "",
-  shareUrl: null,
-  log: "",
-  importStatusByKey: {},
-  urlItems: [],
+  shareUrl: saved.shareUrl ?? null,
+  log: saved.log ?? "",
+  importStatusByKey: saved.importStatusByKey ?? {},
+  urlItems: saved.urlItems ?? [],
   folderRefs: loadFolderRefsFromStorage(),
   selectedUrlForLogs: null,
-  urlLogs: {},
-  jobPhase: "idle",
-  lastUrlsSignature: null,
+  urlLogs: saved.urlLogs ?? {},
+  jobPhase: saved.jobPhase ?? "idle",
+  lastUrlsSignature: saved.lastUrlsSignature ?? null,
 
   speakers: [],
 
-  setUrls: (urls) => set({ urls }),
-  setTranslateLang: (translateLang) => set({ translateLang }),
-  setSpeaker: (speaker) => set({ speaker }),
+  setUrls: (urls) => { set({ urls }); saveJobStateToStorage({ urls }); },
+  setTranslateLang: (translateLang) => { set({ translateLang }); saveJobStateToStorage({ translateLang }); },
+  setSpeaker: (speaker) => { set({ speaker }); saveJobStateToStorage({ speaker }); },
 
   fetchSpeakers: async () => {
     try {
@@ -125,36 +169,41 @@ export const useV2VStore = create<V2VState>((set, get) => ({
     }
   },
 
-  setJobId: (jobId) => set({ jobId }),
-  setProgress: (progress) => set({ progress }),
+  setJobId: (jobId) => { set({ jobId }); saveJobStateToStorage({ jobId }); },
+  setProgress: (progress) => { set({ progress }); saveJobStateToStorage({ progress }); },
   setError: (error) => set({ error }),
 
-  setVideos: (videos) => set({ videos }),
-  setSelectedVideoIndex: (selectedVideoIndex) => set({ selectedVideoIndex }),
+  setVideos: (videos) => { set({ videos }); saveJobStateToStorage({ videos }); },
+  setSelectedVideoIndex: (selectedVideoIndex) => { set({ selectedVideoIndex }); saveJobStateToStorage({ selectedVideoIndex }); },
   setSegments: (segments) =>
-    set((state) => ({
-      segments:
-        typeof segments === "function" ? (segments as (prev: Segment[]) => Segment[])(state.segments) : segments,
-    })),
+    set((state) => {
+      const next = typeof segments === "function" ? (segments as (prev: Segment[]) => Segment[])(state.segments) : segments;
+      saveJobStateToStorage({ segments: next });
+      return { segments: next };
+    }),
   setSelectedRowIndex: (selectedRowIndex) => set({ selectedRowIndex }),
 
   setIsProcessing: (isProcessing) => set({ isProcessing }),
   setRegenStatus: (regenStatus) => set({ regenStatus }),
-  setShareUrl: (shareUrl) => set({ shareUrl }),
-  setLog: (log) => set({ log }),
+  setShareUrl: (shareUrl) => { set({ shareUrl }); saveJobStateToStorage({ shareUrl }); },
+  setLog: (log) => { set({ log }); saveJobStateToStorage({ log }); },
   setImportStatus: (key, status) =>
-    set((state) => ({
-      importStatusByKey: { ...state.importStatusByKey, [key]: status },
-    })),
-  setUrlItems: (urlItems) => set({ urlItems }),
+    set((state) => {
+      const next = { ...state.importStatusByKey, [key]: status };
+      saveJobStateToStorage({ importStatusByKey: next });
+      return { importStatusByKey: next };
+    }),
+  setUrlItems: (urlItems) => { set({ urlItems }); saveJobStateToStorage({ urlItems }); },
   setSelectedUrlForLogs: (selectedUrlForLogs) => set({ selectedUrlForLogs }),
   appendUrlLog: (url, line) =>
     set((state) => {
       const prev = state.urlLogs[url] || "";
       const next = prev ? `${prev}\n${line}` : line;
-      return { urlLogs: { ...state.urlLogs, [url]: next } };
+      const updated = { ...state.urlLogs, [url]: next };
+      saveJobStateToStorage({ urlLogs: updated });
+      return { urlLogs: updated };
     }),
-  setJobPhase: (jobPhase) => set({ jobPhase }),
+  setJobPhase: (jobPhase) => { set({ jobPhase }); saveJobStateToStorage({ jobPhase }); },
   setFolderRef: (folder: string, ref: V2VFolderRef) =>
     set((state) => {
       const folderRefs = { ...state.folderRefs, [folder]: ref };
@@ -193,6 +242,7 @@ export const useV2VStore = create<V2VState>((set, get) => ({
   clearJobRunState: (opts) =>
     set((state) => {
       const keepImports = opts?.keepImports ?? false;
+      localStorage.removeItem(JOB_STATE_STORAGE_KEY);
       return {
         jobId: null,
         progress: 0,
@@ -214,10 +264,11 @@ export const useV2VStore = create<V2VState>((set, get) => ({
       };
     }),
 
-  setLastUrlsSignature: (lastUrlsSignature) => set({ lastUrlsSignature }),
+  setLastUrlsSignature: (lastUrlsSignature) => { set({ lastUrlsSignature }); saveJobStateToStorage({ lastUrlsSignature }); },
 
   reset: () => {
     saveFolderRefsToStorage({});
+    localStorage.removeItem(JOB_STATE_STORAGE_KEY);
     set({
       urls: "",
       translateLang: "None",
@@ -241,5 +292,6 @@ export const useV2VStore = create<V2VState>((set, get) => ({
       jobPhase: "idle",
     });
   },
-}));
+  };
+});
 
