@@ -8,7 +8,7 @@ import { useV2VStore } from "../../stores/v2v-store";
 import { autoSaveManager } from "../../services/auto-save";
 import { projectManager } from "../../services/project-manager";
 import { createEmptyProject } from "../../stores/project";
-import { importMediaIntoProject } from "../../utils/import-media-into-project";
+import { importMultipleMediaIntoProject } from "../../utils/import-media-into-project";
 import {
   addClipToDetachedProject,
   addTrackToDetachedProject,
@@ -232,60 +232,40 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           setRegenStatus(`Importando a Media (${projectTitle}): ${folder}...`);
           if (urlForLog) appendUrlLog(urlForLog, `🚀 Importando a Media...`);
 
-          // Evita duplicados: si ya existe el archivo con el mismo nombre en Media, no lo re-importamos.
-          const existingNames = new Set(
-            workingProject.mediaLibrary.items.map((m) => m.name),
-          );
-
-          // 1) Video (sin audio, servido por /files/{index})
-          const vblob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
           const videoMediaName = `${folder}/video.mp4`;
-          if (existingNames.has(videoMediaName)) {
-            if (urlForLog) appendUrlLog(urlForLog, `✅ Video importado`);
-          } else {
-            const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
-            const vimport = await importMediaIntoProject(workingProject, vfile);
-            if (!vimport.success) {
-              setRegenStatus(
-                vimport.error?.message || `Error importando video: ${folder}`,
-              );
-              if (urlForLog)
-                appendUrlLog(
-                  urlForLog,
-                  `❌ ${vimport.error?.message || "Error importando video"}`,
-                );
-              setImportStatus(key, "error");
-              continue;
+          const existingNames = new Set(workingProject.mediaLibrary.items.map((m) => m.name));
+          
+          setRegenStatus(`Importando a Media (${projectTitle}): descargando archivos...`);
+          if (urlForLog) appendUrlLog(urlForLog, `🚀 Descargando archivos en paralelo...`);
+
+          // 1) Descarga de Video y Audios en paralelo
+          const downloadTasks = [
+            v2vApi.fetchOutputVideoBlob(jobId, v.index).then(blob => ({ type: 'video' as const, blob, name: videoMediaName })),
+            ...audioSegs.map(seg => {
+              const speakerToken = toSafeToken(seg.speaker || "speaker");
+              const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+              return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg).then(blob => ({ type: 'audio' as const, blob, name: wavName }));
+            })
+          ];
+
+          const downloadedFiles = await Promise.all(downloadTasks);
+          
+          // 2) Filtrar archivos que ya existen para no re-importar (opcional, pero profesional)
+          const filesToImport = downloadedFiles
+            .filter(f => !existingNames.has(f.name))
+            .map(f => new File([f.blob], f.name, { type: f.type === 'video' ? 'video/mp4' : 'audio/wav' }));
+
+          if (filesToImport.length > 0) {
+            setRegenStatus(`Procesando ${filesToImport.length} archivos para ${folder}...`);
+            const batchRes = await importMultipleMediaIntoProject(workingProject, filesToImport, { quick: true });
+            
+            if (batchRes.errors.length > 0) {
+               console.warn("Algunos archivos fallaron al importar:", batchRes.errors);
             }
-            workingProject = vimport.project;
-            existingNames.add(videoMediaName);
-            if (urlForLog) appendUrlLog(urlForLog, `✅ Video importado`);
+            workingProject = batchRes.project;
           }
 
-          // 2) Audios por segmento
-          for (let i = 0; i < audioSegs.length; i++) {
-            const seg = audioSegs[i];
-            setRegenStatus(`Importando audio ${folder} (${i + 1}/${audioSegs.length})...`);
-            const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
-            const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
-            if (existingNames.has(wavName)) {
-              continue;
-            }
-
-            const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-            const wres = await importMediaIntoProject(workingProject, wavFile);
-            if (!wres.success) {
-              if (urlForLog)
-                appendUrlLog(
-                  urlForLog,
-                  `❌ WAV seg ${seg.seg}: ${wres.error?.message || "falló"}`,
-                );
-              setImportStatus(key, "error");
-              break;
-            }
-            workingProject = wres.project;
-            existingNames.add(wavName);
-          }
+          if (urlForLog) appendUrlLog(urlForLog, `✅ Media importada (${downloadedFiles.length} archivos)`);
 
           if (useV2VStore.getState().importStatusByKey[key] !== "error") {
             setImportStatus(key, "done");
