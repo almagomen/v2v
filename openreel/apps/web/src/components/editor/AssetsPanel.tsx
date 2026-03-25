@@ -39,6 +39,7 @@ import { useV2VStore } from "../../stores/v2v-store";
 import type { MediaItem } from "@openreel/core";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
 import { autoSaveManager } from "../../services/auto-save";
+import { importMultipleMediaIntoProject } from "../../utils/import-media-into-project";
 import { AspectRatioMatchDialog } from "./dialogs/AspectRatioMatchDialog";
 import { AIGenTab } from "./AIGenTab";
 import {
@@ -905,34 +906,48 @@ export const AssetsPanel: React.FC = () => {
 
       const videoMediaName = `${folder}/video.mp4`;
       const refreshState = () => useProjectStore.getState();
-      let mediaNames = new Set(refreshState().project.mediaLibrary.items.map((m) => m.name));
+      const currentItems = refreshState().project.mediaLibrary.items;
+      const mediaNames = new Set(currentItems.map((m) => m.name));
+
+      // 1) Identificamos qué archivos faltan
+      const missingFilesInfo: { type: 'video' | 'audio', name: string, seg?: number }[] = [];
       if (!mediaNames.has(videoMediaName)) {
-        const vblob = await v2vApi.fetchOutputVideoBlob(ref.jobId, ref.videoIndex);
-        const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
-        const vres = await importMedia(vfile);
-        if (!vres.success) {
-          throw new Error(vres.error?.message || "Error importando video");
-        }
+        missingFilesInfo.push({ type: 'video', name: videoMediaName });
       }
 
       for (const seg of segments) {
-        const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
-          seg.seg,
-        ).padStart(4, "0")}.wav`;
-
-        mediaNames = new Set(refreshState().project.mediaLibrary.items.map((m) => m.name));
-        if (mediaNames.has(wavName)) continue;
-
-        const wavBlob = await v2vApi.fetchAudioSegmentBlob(
-          ref.jobId,
-          ref.videoIndex,
-          seg.seg,
-        );
-        const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-        const wres = await importMedia(wavFile);
-        if (!wres.success) {
-          throw new Error(wres.error?.message || `Error importando WAV seg ${seg.seg}`);
+        const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
+        if (!mediaNames.has(wavName)) {
+          missingFilesInfo.push({ type: 'audio', name: wavName, seg: seg.seg });
         }
+      }
+
+      if (missingFilesInfo.length > 0) {
+        // 2) Descarga en paralelo
+        const downloadTasks = missingFilesInfo.map(info => {
+          if (info.type === 'video') {
+            return v2vApi.fetchOutputVideoBlob(ref.jobId, ref.videoIndex)
+              .then(blob => new File([blob], info.name, { type: "video/mp4" }));
+          } else {
+            return v2vApi.fetchAudioSegmentBlob(ref.jobId, ref.videoIndex, info.seg!)
+              .then(blob => new File([blob], info.name, { type: "audio/wav" }));
+          }
+        });
+
+        const filesToImport = await Promise.all(downloadTasks);
+        
+        // 3) Importación masiva
+        const batchRes = await importMultipleMediaIntoProject(refreshState().project, filesToImport, { quick: true });
+        if (!batchRes.success) {
+           throw new Error("Error en la importación masiva de la carpeta");
+        }
+        // Actualizamos el proyecto en el store (ya que importMultiple lo crea desconectado)
+        // NOTA: Como estamos en un callback de AssetsPanel, usamos importMedia o similar si queremos persistencia, 
+        // pero aquí el patrón es que importMultiple devuelve el nuevo proyecto y nosotros lo inyectamos.
+        // En AssetsPanel no tenemos un setProject directo, dependemos de importMedia. 
+        // Sin embargo, podemos usar el patrón de 'ProjectStore.setState({ project: batchRes.project })' o similar si es accesible.
+        // Revisando useProjectStore...
+        useProjectStore.setState({ project: batchRes.project });
       }
 
       return segments;
@@ -1222,14 +1237,15 @@ export const AssetsPanel: React.FC = () => {
             );
             return;
           }
-          for (const file of snapshotFiles) {
-            const exists = useProjectStore
-              .getState()
-              .project.mediaLibrary.items.some((m) => m.name === file.name);
-            if (exists) continue;
-            const r = await useProjectStore.getState().importMedia(file);
-            if (!r.success) {
-              throw new Error(r.error?.message || "Error importando archivo");
+          
+          const filesToImport = snapshotFiles.filter(file => {
+            return !useProjectStore.getState().project.mediaLibrary.items.some(m => m.name === file.name);
+          });
+
+          if (filesToImport.length > 0) {
+            const batchRes = await importMultipleMediaIntoProject(useProjectStore.getState().project, filesToImport, { quick: true });
+            if (batchRes.success) {
+              useProjectStore.setState({ project: batchRes.project });
             }
           }
         }
