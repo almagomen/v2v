@@ -54,7 +54,26 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
                 if v_path and Path(v_path).exists():
                     return Path(v_path)
 
-    # Try relative to folder directly (e.g. 'video.mp4')
+    # Fallback to the original TTS segments if frontend requests renamed "tts_..._XXXX.wav"
+    import re
+    match = re.search(r'tts_.*_(\d{4})\.wav$', p.name)
+    if match:
+        seg_num = match.group(1)
+        seg_path = folder / "Seqs_trg" / f"vocals_{seg_num}.wav"
+        if seg_path.exists():
+            return seg_path
+
+    # Try to strip the leading folder name if it matches the job folder name
+    if p.parts and p.parts[0] == folder.name:
+        rel_path = Path(*p.parts[1:])
+    else:
+        rel_path = p
+
+    candidate3 = folder / rel_path
+    if candidate3.exists():
+        return candidate3
+
+    # Fallback to pure filename just in case
     candidate = folder / p.name
     if candidate.exists():
         return candidate
