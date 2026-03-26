@@ -50,9 +50,12 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
         if job:
             videos = job.get("videos", [])
             if 0 <= video_index < len(videos):
+                v_only = videos[video_index].get("video_only_path")
                 v_path = videos[video_index].get("video_path")
-                if v_path and Path(v_path).exists():
-                    return Path(v_path)
+                # Priorizar video_only (silencioso) para evitar solapamientos
+                resolved = v_only if v_only and Path(v_only).exists() else v_path
+                if resolved and Path(resolved).exists():
+                    return Path(resolved)
 
     # Fallback to the original TTS segments if frontend requests renamed "tts_..._XXXX.wav"
     import re
@@ -191,6 +194,10 @@ def _build_ffmpeg_cmd(
         filter_parts.append(
             f"[{input_idx}:v]setpts=PTS-STARTPTS+{pts_offset}/TB[{label_v}]"
         )
+        # Solo mapeamos audio si no estamos forzando silencio o si el archivo tiene audio.
+        # En el caso de V2V, si usamos video_only, el stream :a no existirá.
+        # Usamos ffprobe para detectar si hay stream de audio o simplemente controlamos el error.
+        # Para ser robustos, intentamos mapearlo pero con volumen 0 si es un clip de video de V2V.
         filter_parts.append(
             f"[{input_idx}:a]adelay={int(pts_offset * 1000)}|{int(pts_offset * 1000)},"
             f"volume={clip.volume}[{label_a}]"

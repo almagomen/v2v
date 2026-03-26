@@ -47,6 +47,7 @@ def get_job_result(job_id: str):
             index=v["index"],
             output_name=v["output_name"],
             video_path=v["video_path"],
+            video_only_path=v.get("video_only_path"),
             output_video_path=v["output_video_path"],
             output_filename=output_filename,
             segments=[SegmentSchema(**s) for s in v["segments"]],

@@ -406,6 +406,9 @@ export const useV2VStore = create<V2VState>((set, get) => {
 
                   const videoMediaName = `${folder}/video.mp4`;
                   const downloadTasks = [
+                    // v2vApi.fetchOutputVideoBlob ya intenta servir video_only_path si existe en el backend.
+                    // Pero para ser explícitos, si el videoResult lo tiene, podríamos pedirlo por nombre.
+                    // Por ahora confiamos en el endpoint por índice que ya está corregido para priorizar.
                     v2vApi.fetchOutputVideoBlob(jobId, v.index).then(blob => ({ type: 'video' as const, blob, name: videoMediaName })),
                     ...audioSegs.map(seg => {
                       const speakerToken = toSafeToken(seg.speaker || "speaker");

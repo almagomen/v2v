@@ -67,6 +67,7 @@ export interface VideoResult {
   index: number;
   output_name: string;
   video_path: string;
+  video_only_path?: string;
   output_video_path: string;
   output_filename?: string;
   segments: Segment[];
