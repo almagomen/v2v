@@ -101,6 +101,35 @@ export interface JobUrlItem {
   index?: number;
 }
 
+// --- Colab Render ---
+export interface TimelineClipPayload {
+  type: "video" | "audio";
+  media_name: string;
+  start: number;
+  end: number;
+  track_start: number;
+  volume?: number;
+}
+
+export interface RenderTimelinePayload {
+  job_id: string;
+  video_index: number;
+  clips: TimelineClipPayload[];
+  output_name: string;
+}
+
+export interface BatchRenderItemPayload {
+  job_id: string;
+  video_index: number;
+  clips: TimelineClipPayload[];
+  output_name: string;
+}
+
+export interface RenderBatchPayload {
+  renders: BatchRenderItemPayload[];
+  zip_name?: string;
+}
+
 export const v2vApi = {
   async processUrls(
     urls: string[],
@@ -289,5 +318,62 @@ export const v2vApi = {
   getZipUrl(jobId: string): string {
     return url(`/api/job/${jobId}/zip`);
   },
-};
 
+  /**
+   * Upload a local file to the Colab server before rendering.
+   * Returns the media_name to use in the render payload.
+   */
+  async uploadMediaForRender(
+    jobId: string,
+    videoIndex: number,
+    file: File,
+    subfolder?: string,
+  ): Promise<{ media_name: string }> {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    if (subfolder) form.append("subfolder", subfolder);
+    const res = await fetch(
+      url(`/api/render/upload-media/${jobId}/${videoIndex}`),
+      { method: "POST", body: form },
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al subir media");
+    }
+    return readJsonOrThrow<{ media_name: string }>(res);
+  },
+
+  /**
+   * Render a single project timeline on Colab via FFmpeg.
+   * Returns a Blob (MP4) for direct download.
+   */
+  async renderTimeline(payload: RenderTimelinePayload): Promise<Blob> {
+    const res = await fetch(url("/api/render/timeline"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al renderizar en Colab");
+    }
+    return res.blob();
+  },
+
+  /**
+   * Render multiple projects on Colab via FFmpeg.
+   * Returns a Blob (ZIP) for direct download.
+   */
+  async renderBatch(payload: RenderBatchPayload): Promise<Blob> {
+    const res = await fetch(url("/api/render/batch"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al renderizar batch en Colab");
+    }
+    return res.blob();
+  },
+};
