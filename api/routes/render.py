@@ -243,7 +243,8 @@ def _build_ffmpeg_cmd(
 
     if video_map:
         cmd += ["-map", video_map]
-        cmd += ["-c:v", "copy"]  # no re-encode if source is already h264
+        # Cannot use streamcopy (-c:v copy) on outputs of a complex filter
+        cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
     if audio_map:
         cmd += ["-map", audio_map]
         cmd += ["-c:a", "aac", "-b:a", "256k"]
