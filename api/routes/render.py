@@ -21,6 +21,19 @@ router = APIRouter(prefix="/api", tags=["render"])
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _has_audio(path: Path) -> bool:
+    """Check if a media file has at least one audio stream using ffprobe."""
+    import subprocess
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "a",
+            "-show_entries", "stream=index", "-of", "csv=p=0", str(path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
+
 def _job_folder(job_id: str, video_index: int) -> Path:
     """Resolve the folder for a given job/video_index."""
     job = get_job(job_id)
@@ -194,21 +207,22 @@ def _build_ffmpeg_cmd(
         filter_parts.append(
             f"[{input_idx}:v]setpts=PTS-STARTPTS+{pts_offset}/TB[{label_v}]"
         )
-        # Solo mapeamos audio si no estamos forzando silencio o si el archivo tiene audio.
-        # En el caso de V2V, si usamos video_only, el stream :a no existirá.
-        # Usamos ffprobe para detectar si hay stream de audio o simplemente controlamos el error.
-        # Para ser robustos, intentamos mapearlo pero con volumen 0 si es un clip de video de V2V.
-        filter_parts.append(
-            f"[{input_idx}:a]adelay={int(pts_offset * 1000)}|{int(pts_offset * 1000)},"
-            f"volume={clip.volume}[{label_a}]"
-        )
+        if _has_audio(path):
+            filter_parts.append(
+                f"[{input_idx}:a]adelay={int(pts_offset * 1000)}|{int(pts_offset * 1000)},"
+                f"volume={clip.volume}[{label_a}]"
+            )
+            audio_labels.append(f"[{label_a}]")
         video_labels.append(f"[{label_v}]")
-        audio_labels.append(f"[{label_a}]")
         input_idx += 1
 
     # Add audio clips
     for i, clip in enumerate(audio_clips):
         path = _resolve_media_path(folder, clip.media_name, job_id, video_index)
+        if not _has_audio(path):
+            # No podemos añadir un clip de audio que no tiene audio... skip or error?
+            # En este contexto de timeline, lo ignoramos para no romper el render.
+            continue
         duration = clip.end - clip.start
         delay_ms = int(clip.track_start * 1000)
         inputs += ["-ss", str(clip.start), "-t", str(duration), "-i", str(path)]
