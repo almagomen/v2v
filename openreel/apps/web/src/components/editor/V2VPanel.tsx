@@ -12,6 +12,7 @@ import {
   shortProjectToken,
   importKeyFor,
 } from "../../utils/v2v-utils";
+import { ColabExportTab } from "./ColabExportTab";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -550,6 +551,11 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
           </>
         )}
+
+        {/* Exportación Colab */}
+        <div className="pt-4 mt-4 border-t border-border">
+          <ColabExportTab />
+        </div>
       </div>
     </ScrollArea>
   );

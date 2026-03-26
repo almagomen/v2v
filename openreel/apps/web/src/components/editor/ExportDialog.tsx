@@ -17,9 +17,7 @@ import {
   Zap,
   CheckCircle,
   Info,
-  Server,
 } from "lucide-react";
-import { ColabExportTab } from "./ColabExportTab";
 import {
   Dialog,
   DialogContent,
@@ -127,7 +125,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   projectWidth = 1920,
   projectHeight = 1080,
 }) => {
-  const [activeTab, setActiveTab] = useState<"presets" | "custom" | "colab">("presets");
+  const [activeTab, setActiveTab] = useState<"presets" | "custom">("presets");
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(
     "recommended",
   );
@@ -304,13 +302,6 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
             >
               <Settings size={16} />
               Custom
-            </TabsTrigger>
-            <TabsTrigger
-              value="colab"
-              className="flex-1 flex items-center justify-center gap-2 p-3 text-sm font-medium rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:text-primary text-text-secondary hover:text-text-primary"
-            >
-              <Server size={16} />
-              Colab
             </TabsTrigger>
           </TabsList>
 
@@ -735,10 +726,6 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                 </div>
               </div>
           </TabsContent>
-
-          <TabsContent value="colab" className="flex-1 overflow-y-auto mt-0">
-            <ColabExportTab onClose={onClose} />
-          </TabsContent>
         </Tabs>
 
         {deviceProfile && (
@@ -835,7 +822,6 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
           </div>
         )}
 
-        {activeTab !== "colab" && (
           <div className="flex items-center justify-between p-4 border-t border-border bg-background-tertiary">
             <div className="flex items-center gap-4 text-xs text-text-muted">
               {duration > 0 && (
@@ -864,7 +850,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
               )}
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={onClose}>
+               <Button variant="ghost" onClick={onClose}>
                 Cancel
               </Button>
               <Button
@@ -874,9 +860,8 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                 <Play size={16} />
                 Start Export
               </Button>
-            </div>
+             </div>
           </div>
-        )}
       </DialogContent>
     </Dialog>
   );
