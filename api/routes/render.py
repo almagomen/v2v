@@ -32,7 +32,7 @@ def _job_folder(job_id: str, video_index: int) -> Path:
     return Path(videos[video_index]["video_path"]).parent
 
 
-def _resolve_media_path(folder: Path, media_name: str) -> Path:
+def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video_index: int = None) -> Path:
     """
     Resolves a media_name (e.g. 'folder/video.mp4' or 'folder/tts_spk_0001.wav')
     to an absolute path inside the job folder.
@@ -43,6 +43,16 @@ def _resolve_media_path(folder: Path, media_name: str) -> Path:
     p = Path(media_name)
     if p.is_absolute() and p.exists():
         return p
+
+    # Fallback to the original source video if frontend requests "video.mp4"
+    if p.name == "video.mp4" and job_id is not None and video_index is not None:
+        job = get_job(job_id)
+        if job:
+            videos = job.get("videos", [])
+            if 0 <= video_index < len(videos):
+                v_path = videos[video_index].get("video_path")
+                if v_path and Path(v_path).exists():
+                    return Path(v_path)
 
     # Try relative to folder directly (e.g. 'video.mp4')
     candidate = folder / p.name
@@ -123,6 +133,8 @@ def _build_ffmpeg_cmd(
     clips: list[TimelineClip],
     folder: Path,
     output_path: Path,
+    job_id: str = None,
+    video_index: int = None,
 ) -> list[str]:
     """
     Build an ffmpeg command that renders the timeline clips into a single MP4.
@@ -147,7 +159,7 @@ def _build_ffmpeg_cmd(
 
     # Add video clips
     for i, clip in enumerate(video_clips):
-        path = _resolve_media_path(folder, clip.media_name)
+        path = _resolve_media_path(folder, clip.media_name, job_id, video_index)
         duration = clip.end - clip.start
         # For video we trim source and then pad to place at track_start
         # We use -ss before -i for fast seek
@@ -170,7 +182,7 @@ def _build_ffmpeg_cmd(
 
     # Add audio clips
     for i, clip in enumerate(audio_clips):
-        path = _resolve_media_path(folder, clip.media_name)
+        path = _resolve_media_path(folder, clip.media_name, job_id, video_index)
         duration = clip.end - clip.start
         delay_ms = int(clip.track_start * 1000)
         inputs += ["-ss", str(clip.start), "-t", str(duration), "-i", str(path)]
@@ -230,7 +242,7 @@ async def render_timeline(req: RenderTimelineRequest):
     safe_name = req.output_name.replace("/", "_").replace("\\", "_")
     output_path = folder / f"_export_{safe_name}.mp4"
 
-    cmd = _build_ffmpeg_cmd(req.clips, folder, output_path)
+    cmd = _build_ffmpeg_cmd(req.clips, folder, output_path, req.job_id, req.video_index)
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -264,7 +276,7 @@ async def render_batch(req: RenderBatchRequest):
             safe_name = item.output_name.replace("/", "_").replace("\\", "_")
             output_path = folder / f"_export_{safe_name}.mp4"
 
-            cmd = _build_ffmpeg_cmd(item.clips, folder, output_path)
+            cmd = _build_ffmpeg_cmd(item.clips, folder, output_path, item.job_id, item.video_index)
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 errors.append(f"{item.output_name}: ffmpeg error – {result.stderr[-300:]}")
