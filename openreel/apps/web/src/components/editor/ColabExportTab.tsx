@@ -186,14 +186,14 @@ export const ColabExportTab: React.FC = () => {
   const needUpload = analyzed.filter((c) => c.status === "upload_needed");
   const totalClips = analyzed.filter((c) => c.status !== "not_allowed").length;
 
-  // Get job/video context from folderRefs matching media names
+  // Get job/video context and a descriptive name from folderRefs matching media names
   const jobContext = React.useMemo(() => {
     for (const clip of analyzed) {
       if (clip.status !== "not_allowed") {
         const norm = clip.mediaName.replace(/\\/g, "/");
         const folder = norm.split("/")[0];
         const ref = (folderRefs as Record<string, { jobId: string; videoIndex: number }>)[folder];
-        if (ref) return ref;
+        if (ref) return { ...ref, longName: folder };
       }
     }
     return null;
@@ -247,14 +247,15 @@ export const ColabExportTab: React.FC = () => {
       setStatusMsg("Renderizando en Colab…");
 
       const clips = buildPayloadClips(analyzed, uploadedMap);
+      const outName = jobContext.longName || project.name || "export";
       const blob = await v2vApi.renderTimeline({
         job_id: jobContext.jobId,
         video_index: jobContext.videoIndex,
         clips,
-        output_name: project.name || "export",
+        output_name: outName,
       });
 
-      downloadBlob(blob, `${project.name || "export"}.mp4`);
+      downloadBlob(blob, `${outName}.mp4`);
       setStatus("done");
       setStatusMsg("¡Exportación completada!");
     } catch (e) {
@@ -308,7 +309,7 @@ export const ColabExportTab: React.FC = () => {
           job_id: ctx.jobId,
           video_index: ctx.videoIndex,
           clips: buildPayloadClips(clips, uploadedMap),
-          output_name: fullProject.name || sp.meta.projectName,
+          output_name: (ctx as any).longName || fullProject.name || sp.meta.projectName,
         });
       }
 
