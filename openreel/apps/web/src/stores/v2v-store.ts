@@ -145,7 +145,7 @@ export interface V2VState {
   reset: () => void;
 }
 
-const POLL_INTERVAL = 1500;
+const POLL_INTERVAL = 3000;
 
 export const useV2VStore = create<V2VState>((set, get) => {
   const saved = loadJobStateFromStorage();
