@@ -53,19 +53,29 @@ interface SavedProject {
 
 /** Determine if a media_name belongs to a V2V folder (already in Colab). */
 function isInV2VFolder(name: string, folderRefs: Record<string, unknown>): boolean {
+  // Manejamos tanto el formato antiguo "folder/file" como el nuevo "folder__file"
   const norm = name.replace(/\\/g, "/");
-  const parts = norm.split("/");
-  if (parts.length < 2) return false;
-  const folder = parts[0];
-  if (!(folder in folderRefs)) return false;
+  let folder = "";
+  let filename = "";
+
+  if (norm.includes("__")) {
+    const parts = norm.split("__");
+    folder = parts[0];
+    filename = parts[parts.length - 1];
+  } else if (norm.includes("/")) {
+    const parts = norm.split("/");
+    folder = parts[0];
+    filename = parts[parts.length - 1];
+  }
+
+  if (!folder || !(folder in folderRefs)) return false;
 
   // Solo consideramos "en el servidor" los archivos estándar generados por V2V.
-  // Cualquier otro archivo (ej. una canción subida por el usuario) debe subirse.
-  const filename = parts[parts.length - 1];
   const isStandardV2V =
     filename === "video.mp4" ||
     filename.startsWith("tts_") ||
     filename === "no_vocals.wav" ||
+    filename === "original_audio.wav" ||
     filename === "vocals_only.wav";
 
   return isStandardV2V;
@@ -201,7 +211,13 @@ export const ColabExportTab: React.FC = () => {
     for (const clip of analyzed) {
       if (clip.status !== "not_allowed") {
         const norm = clip.mediaName.replace(/\\/g, "/");
-        const folder = norm.split("/")[0];
+        let folder = "";
+        if (norm.includes("__")) {
+          folder = norm.split("__")[0];
+        } else if (norm.includes("/")) {
+          folder = norm.split("/")[0];
+        }
+        
         const ref = (folderRefs as Record<string, { jobId: string; videoIndex: number }>)[folder];
         if (ref) return { ...ref, longName: folder };
       }

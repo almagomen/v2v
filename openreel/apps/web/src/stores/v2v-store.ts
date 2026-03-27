@@ -8,6 +8,7 @@ import {
   addClipToDetachedProject,
   addTrackToDetachedProject,
   renameTrackInProject,
+  muteTrackInProject,
 } from "../utils/detached-project-actions";
 import { autoSaveManager } from "../services/auto-save";
 
@@ -401,14 +402,17 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     frameRate: baseProjectSettings.frameRate,
                   });
 
-                    const videoMediaName = `${folder}/video.mp4`;
-                    const instrumentalMediaName = `${folder}/no_vocals.wav`;
+                    const videoMediaName = `${folder}__video.mp4`;
+                    const instrumentalMediaName = `${folder}__no_vocals.wav`;
+                    const originalAudioMediaName = `${folder}__original_audio.wav`;
+                    
                     const downloadTasks = [
                       v2vApi.fetchOutputVideoBlob(jobId, v.index).then(blob => ({ type: 'video' as const, blob, name: videoMediaName })),
                       ...(v.instrumental_path ? [v2vApi.fetchFileBlob(jobId, v.index, "no_vocals.wav").then(blob => ({ type: 'audio' as const, blob, name: instrumentalMediaName }))] : []),
+                      ...(v.original_audio_path ? [v2vApi.fetchFileBlob(jobId, v.index, v.original_audio_path.split(/[\\/]/).pop() || "audio").then(blob => ({ type: 'audio' as const, blob, name: originalAudioMediaName }))] : []),
                       ...audioSegs.map(seg => {
                         const speakerToken = toSafeToken(seg.speaker || "speaker");
-                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                        const wavName = `${folder}__tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
                         return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg).then(blob => ({ type: 'audio' as const, blob, name: wavName }));
                       })
                     ];
@@ -449,9 +453,24 @@ export const useV2VStore = create<V2VState>((set, get) => {
                         workingProject = ri.project!;
                         const itId = workingProject.timeline.tracks.find(t => t.type === 'audio' && (ri.trackId ? t.id === ri.trackId : true))?.id;
                         if (itId) {
-                          workingProject = renameTrackInProject(workingProject, itId, `Instrumental · ${folder}`);
+                          workingProject = renameTrackInProject(workingProject, itId, `INST · ${folder}`);
                           const ci = (await addClipToDetachedProject(workingProject, itId, iMedia.id, 0)) as any;
                           workingProject = ci.project!;
+                        }
+                      }
+
+                      // Import original audio if exists (muted by default)
+                      const oMedia = workingProject.mediaLibrary.items.find(m => m.name === originalAudioMediaName);
+                      if (oMedia) {
+                        const ro = (await addTrackToDetachedProject(workingProject, "audio")) as any;
+                        workingProject = ro.project!;
+                        const otId = workingProject.timeline.tracks.find(t => t.type === 'audio' && (ro.trackId ? t.id === ro.trackId : true))?.id;
+                        if (otId) {
+                          workingProject = renameTrackInProject(workingProject, otId, `ORG · ${folder}`);
+                          // Mute the original audio track to avoid interference with translated audio
+                          workingProject = muteTrackInProject(workingProject, otId, true);
+                          const co = (await addClipToDetachedProject(workingProject, otId, oMedia.id, 0)) as any;
+                          workingProject = co.project!;
                         }
                       }
 
@@ -470,7 +489,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                         if (atId) {
                           workingProject = renameTrackInProject(workingProject, atId, sKey);
                           for (const seg of segs) {
-                            const wName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
+                            const wName = `${folder}__tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
                             const wm = workingProject.mediaLibrary.items.find(m => m.name === wName);
                             if (wm) {
                               const cw = (await addClipToDetachedProject(workingProject, atId, wm.id, seg.start)) as any;

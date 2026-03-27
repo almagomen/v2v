@@ -103,6 +103,14 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                     {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
                     for i, t in enumerate(texts)
                 ]
+                # Buscar audio original en info o en disco
+                audio_only_path = (v2v_paths or {}).get("audio_only")
+                if not audio_only_path or not Path(audio_only_path).exists():
+                    # Fallback: buscar webm/m4a en la carpeta
+                    audios = list(path.parent.glob("*.f*.webm")) + list(path.parent.glob("*.f*.m4a")) + list(path.parent.glob("*_audio.m4a"))
+                    if audios:
+                        audio_only_path = str(audios[0])
+
                 videos_data.append({
                     "index": idx,
                     "output_name": output_name,
@@ -110,6 +118,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                     "output_video_path": str(output_video_path),
                     "video_only_path": str(video_only_path) if video_only_path.exists() else "",
                     "instrumental_path": str(path.with_name("no_vocals.wav")) if path.with_name("no_vocals.wav").exists() else "",
+                    "original_audio_path": str(audio_only_path) if audio_only_path else "",
                     "output_filename": output_video_path.name,
                     "segments": segments,
                     "url": r.get("url", ""),
@@ -151,6 +160,13 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
                 for i, t in enumerate(texts)
             ]
+            # Buscar audio original
+            audio_only_path = (v2v_paths or {}).get("audio_only")
+            if not audio_only_path or not Path(audio_only_path).exists():
+                audios = list(path.parent.glob("*.f*.webm")) + list(path.parent.glob("*.f*.m4a")) + list(path.parent.glob("*_audio.m4a"))
+                if audios:
+                    audio_only_path = str(audios[0])
+
             videos_data.append({
                 "index": idx,
                 "output_name": output_name,
@@ -158,6 +174,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 "output_video_path": str(output_path),
                 "video_only_path": str(video_only_path) if video_only_path.exists() else "",
                 "instrumental_path": str(no_vocals_path) if no_vocals_path.exists() else "",
+                "original_audio_path": str(audio_only_path) if audio_only_path else "",
                 "output_filename": output_path.name,
                 "segments": segments,
                 "url": r.get("url", ""),

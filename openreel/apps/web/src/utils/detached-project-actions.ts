@@ -69,3 +69,20 @@ export function renameTrackInProject(
     },
   };
 }
+
+export function muteTrackInProject(
+  project: Project,
+  trackId: string,
+  muted: boolean,
+): Project {
+  return {
+    ...project,
+    modifiedAt: Date.now(),
+    timeline: {
+      ...project.timeline,
+      tracks: project.timeline.tracks.map((t) =>
+        t.id === trackId ? { ...t, muted } : t,
+      ),
+    },
+  };
+}
