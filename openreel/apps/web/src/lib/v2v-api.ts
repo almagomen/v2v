@@ -81,6 +81,14 @@ export interface JobResultResponse {
   log?: string;
 }
 
+export interface PollResponse {
+  job_id: string;
+  status: JobStatusResponse;
+  log: string;
+  items: any[];
+  result?: JobResultResponse;
+}
+
 export interface SpeakerOption {
   label: string;
   value: string;
@@ -376,5 +384,14 @@ export const v2vApi = {
       throw new Error(err.detail || "Error al renderizar batch en Colab");
     }
     return res.blob();
+  },
+
+  async poll(jobId: string): Promise<PollResponse> {
+    const res = await fetch(url(`/api/job/${jobId}/poll`));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al sincronizar estado del job");
+    }
+    return readJsonOrThrow<PollResponse>(res);
   },
 };

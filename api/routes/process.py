@@ -1,7 +1,10 @@
 """Process and job status endpoints."""
 from fastapi import APIRouter, HTTPException
 
-from api.schemas import ProcessUrlsRequest, ProcessUrlsResponse, JobStatusResponse, JobResultResponse, VideoResult, SegmentSchema
+from api.schemas import (
+    ProcessUrlsRequest, ProcessUrlsResponse, JobStatusResponse,
+    JobResultResponse, VideoResult, SegmentSchema, JobPollResponse
+)
 from api.job_store import get_job
 from api.service import start_process
 
@@ -69,10 +72,46 @@ def get_job_log(job_id: str):
     return {"job_id": job_id, "log": job.get("log", "")}
 
 
-@router.get("/job/{job_id}/items")
-def get_job_items(job_id: str):
-    """Estados por URL dentro del job."""
+@router.get("/job/{job_id}/poll", response_model=JobPollResponse)
+def get_job_poll(job_id: str):
+    """Endpoint consolidado para polling."""
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job no encontrado")
-    return {"job_id": job_id, "items": job.get("url_states", [])}
+
+    # 1. Status
+    status_resp = JobStatusResponse(
+        job_id=job_id,
+        status=job.get("status", "pending"),
+        message=job.get("message"),
+        progress=job.get("progress", 0),
+    )
+
+    # 2. Result (videos)
+    videos = []
+    for v in job.get("videos", []):
+        output_filename = v.get("output_filename") or f"{v['output_name']}.mp4"
+        videos.append(VideoResult(
+            index=v["index"],
+            output_name=v["output_name"],
+            video_path=v["video_path"],
+            video_only_path=v.get("video_only_path"),
+            output_video_path=v["output_video_path"],
+            output_filename=output_filename,
+            segments=[SegmentSchema(**s) for s in v["segments"]],
+            url=v.get("url", ""),
+        ))
+    result_resp = JobResultResponse(
+        job_id=job_id,
+        status=job.get("status", "done"),
+        videos=videos,
+        log=job.get("log"),
+    )
+
+    return JobPollResponse(
+        job_id=job_id,
+        status=status_resp,
+        log=job.get("log", ""),
+        items=job.get("url_states", []),
+        result=result_resp
+    )

@@ -306,25 +306,19 @@ export const useV2VStore = create<V2VState>((set, get) => {
         }
 
         try {
-          const s = await v2vApi.getJobStatus(jobId);
+          const pollResult = await v2vApi.poll(jobId);
+          const { status: s, log: jobLog, items, result: partial } = pollResult;
+
           set({ progress: s.progress * 100, jobPhase: s.status });
           saveJobStateToStorage({ progress: s.progress * 100, jobPhase: s.status });
 
-          const jobLog = await v2vApi.getJobLog(jobId);
           if (jobLog && jobLog.length > state.log.length) {
             set({ log: jobLog });
             saveJobStateToStorage({ log: jobLog });
           }
 
-          const items = await v2vApi.getJobItems(jobId);
-          if (items.length) {
+          if (items && items.length) {
             set((state) => {
-              // Merge items: overwriting existing ones for THIS jobId, keeping others.
-              // Note: current implementation of JobUrlItem doesn't have jobId. 
-              // We'll match by index/url but actually, if we start a new job, 
-              // the indices might overlap. 
-              // Simple approach: if jobId is different, append. 
-              // If jobId is same, refresh.
               const otherItems = state.urlItems.filter(it => (it as any).jobId && (it as any).jobId !== jobId);
               const jobItems = items.map(it => ({ ...it, jobId }));
               const nextItems = [...otherItems, ...jobItems];
@@ -333,21 +327,18 @@ export const useV2VStore = create<V2VState>((set, get) => {
             });
           }
 
-          try {
-            const partial = await v2vApi.getJobResult(jobId);
-            if (partial.videos?.length) {
-              set((state) => {
-                const otherVideos = state.videos.filter(v => (v as any).jobId && (v as any).jobId !== jobId);
-                const jobVideos = partial.videos.map(v => ({ ...v, jobId }));
-                const nextVideos = [...otherVideos, ...jobVideos];
-                saveJobStateToStorage({ videos: nextVideos });
-                if (jobVideos[state.selectedVideoIndex]) {
-                  return { videos: nextVideos, segments: jobVideos[state.selectedVideoIndex].segments };
-                }
-                return { videos: nextVideos };
-              });
-            }
-          } catch { /* ignore */ }
+          if (partial?.videos?.length) {
+            set((state) => {
+              const otherVideos = state.videos.filter(v => (v as any).jobId && (v as any).jobId !== jobId);
+              const jobVideos = partial.videos.map(v => ({ ...v, jobId }));
+              const nextVideos = [...otherVideos, ...jobVideos];
+              saveJobStateToStorage({ videos: nextVideos });
+              if (jobVideos[state.selectedVideoIndex]) {
+                return { videos: nextVideos, segments: jobVideos[state.selectedVideoIndex].segments };
+              }
+              return { videos: nextVideos };
+            });
+          }
 
           if (s.status === "done" || s.status === "error") {
             const currentIsImporting = isImportingBusy;
@@ -361,8 +352,9 @@ export const useV2VStore = create<V2VState>((set, get) => {
             }
           }
 
+          // --- Import Logic (Same as before but using poll data) ---
           if (!isImportingBusy) {
-            const currentVideos = get().videos;
+            const currentVideos = partial?.videos || []; // Corrected: use partial.videos
             const pendingVideos = currentVideos.filter(
               (v) => !get().importStatusByKey[importKeyFor(v.url, v.index)],
             );

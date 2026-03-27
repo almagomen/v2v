@@ -101,3 +101,11 @@ class TranscribeSegmentSchema(BaseModel):
 class TranscribeAudioResponse(BaseModel):
     segments: list[TranscribeSegmentSchema]
     language: Optional[str] = None
+
+
+class JobPollResponse(BaseModel):
+    job_id: str
+    status: JobStatusResponse
+    log: str = ""
+    items: list[dict] = []
+    result: Optional[JobResultResponse] = None
