@@ -401,18 +401,17 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     frameRate: baseProjectSettings.frameRate,
                   });
 
-                  const videoMediaName = `${folder}/video.mp4`;
-                  const downloadTasks = [
-                    // v2vApi.fetchOutputVideoBlob ya intenta servir video_only_path si existe en el backend.
-                    // Pero para ser explícitos, si el videoResult lo tiene, podríamos pedirlo por nombre.
-                    // Por ahora confiamos en el endpoint por índice que ya está corregido para priorizar.
-                    v2vApi.fetchOutputVideoBlob(jobId, v.index).then(blob => ({ type: 'video' as const, blob, name: videoMediaName })),
-                    ...audioSegs.map(seg => {
-                      const speakerToken = toSafeToken(seg.speaker || "speaker");
-                      const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
-                      return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg).then(blob => ({ type: 'audio' as const, blob, name: wavName }));
-                    })
-                  ];
+                    const videoMediaName = `${folder}/video.mp4`;
+                    const instrumentalMediaName = `${folder}/no_vocals.wav`;
+                    const downloadTasks = [
+                      v2vApi.fetchOutputVideoBlob(jobId, v.index).then(blob => ({ type: 'video' as const, blob, name: videoMediaName })),
+                      ...(v.instrumental_path ? [v2vApi.fetchFileBlob(jobId, v.index, "no_vocals.wav").then(blob => ({ type: 'audio' as const, blob, name: instrumentalMediaName }))] : []),
+                      ...audioSegs.map(seg => {
+                        const speakerToken = toSafeToken(seg.speaker || "speaker");
+                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                        return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg).then(blob => ({ type: 'audio' as const, blob, name: wavName }));
+                      })
+                    ];
 
                   const downloaded = await Promise.all(downloadTasks);
                   const files = downloaded.map(d => new File([d.blob], d.name, { type: d.type === 'video' ? 'video/mp4' : 'audio/wav' }));
@@ -441,6 +440,19 @@ export const useV2VStore = create<V2VState>((set, get) => {
                         workingProject = renameTrackInProject(workingProject, vtId, `V2V · ${folder}`);
                         const cv = (await addClipToDetachedProject(workingProject, vtId, vMedia.id, 0)) as any;
                         workingProject = cv.project!;
+                      }
+
+                      // Import instrumental if exists
+                      const iMedia = workingProject.mediaLibrary.items.find(m => m.name === instrumentalMediaName);
+                      if (iMedia) {
+                        const ri = (await addTrackToDetachedProject(workingProject, "audio")) as any;
+                        workingProject = ri.project!;
+                        const itId = workingProject.timeline.tracks.find(t => t.type === 'audio' && (ri.trackId ? t.id === ri.trackId : true))?.id;
+                        if (itId) {
+                          workingProject = renameTrackInProject(workingProject, itId, `Instrumental · ${folder}`);
+                          const ci = (await addClipToDetachedProject(workingProject, itId, iMedia.id, 0)) as any;
+                          workingProject = ci.project!;
+                        }
                       }
 
                       const bySpeaker: Record<string, AudioSegmentItem[]> = {};

@@ -65,7 +65,8 @@ function isInV2VFolder(name: string, folderRefs: Record<string, unknown>): boole
   const isStandardV2V =
     filename === "video.mp4" ||
     filename.startsWith("tts_") ||
-    filename === "vocals_only.wav"; // por si acaso
+    filename === "no_vocals.wav" ||
+    filename === "vocals_only.wav";
 
   return isStandardV2V;
 }
