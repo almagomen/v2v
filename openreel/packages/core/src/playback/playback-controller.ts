@@ -122,6 +122,7 @@ export class PlaybackController {
 
   private handleClockStateChange(clockState: ClockState): void {
     const previousState = this.state;
+    const currentTime = this.masterClock.currentTime;
 
     if (clockState === "stopped") {
       this.state = "stopped";
@@ -130,12 +131,12 @@ export class PlaybackController {
       if (previousState !== "stopped") {
         this.emitEvent({
           type: "stop",
-          time: 0,
+          time: currentTime,
           state: this.state,
         });
         this.emitEvent({
           type: "statechange",
-          time: 0,
+          time: currentTime,
           state: this.state,
         });
       }
