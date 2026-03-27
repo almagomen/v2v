@@ -213,8 +213,17 @@ export const ColabExportTab: React.FC = () => {
     if (!isBatch) return;
     setLoadingSaved(true);
     autoSaveManager.checkForRecovery().then((metas) => {
+      // Filtrar para mantener solo el autoguardado más reciente de cada proyecto único.
+      // checkForRecovery() ya devuelve los metadatos ordenados por timestamp desc.
+      const uniqueProjects = new Map<string, AutoSaveMetadata>();
+      for (const meta of metas) {
+        if (!uniqueProjects.has(meta.projectId)) {
+          uniqueProjects.set(meta.projectId, meta);
+        }
+      }
+
       setSavedProjects(
-        metas.map((meta) => ({ meta, selected: true })),
+        Array.from(uniqueProjects.values()).map((meta) => ({ meta, selected: true })),
       );
       setLoadingSaved(false);
     });

@@ -123,7 +123,7 @@ def process_video_queue(
                 )
             
             print(f"✅ {output_name}  🚩  {len(translated_result)} segmentos")
-            print("=" * 60 + "\n")
+
             if on_stage:
                 try:
                     on_stage(u, "ready", f"Listo: {output_name}")
