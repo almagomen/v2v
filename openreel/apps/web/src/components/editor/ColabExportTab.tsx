@@ -66,8 +66,7 @@ function isInV2VFolder(name: string, folderRefs: Record<string, unknown>): boole
     filename === "video.mp4" ||
     filename.startsWith("tts_") ||
     filename === "no_vocals.wav" ||
-    filename === "vocals_only.wav" ||
-    /\.f\d+/.test(filename); // yt-dlp artifacts (e.g. .f251.webm, .f140.m4a)
+    filename === "vocals_only.wav";
 
   return isStandardV2V;
 }

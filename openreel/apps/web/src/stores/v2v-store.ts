@@ -403,12 +403,9 @@ export const useV2VStore = create<V2VState>((set, get) => {
 
                     const videoMediaName = `${folder}/video.mp4`;
                     const instrumentalMediaName = `${folder}/no_vocals.wav`;
-                    const originalAudioMediaName = v.original_audio_path ? `${folder}/${v.original_audio_path}` : "";
-
                     const downloadTasks = [
                       v2vApi.fetchOutputVideoBlob(jobId, v.index).then(blob => ({ type: 'video' as const, blob, name: videoMediaName })),
                       ...(v.instrumental_path ? [v2vApi.fetchFileBlob(jobId, v.index, "no_vocals.wav").then(blob => ({ type: 'audio' as const, blob, name: instrumentalMediaName }))] : []),
-                      ...(v.original_audio_path ? [v2vApi.fetchFileBlob(jobId, v.index, v.original_audio_path).then(blob => ({ type: 'audio' as const, blob, name: originalAudioMediaName }))] : []),
                       ...audioSegs.map(seg => {
                         const speakerToken = toSafeToken(seg.speaker || "speaker");
                         const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;

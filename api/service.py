@@ -103,9 +103,6 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                     {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
                     for i, t in enumerate(texts)
                 ]
-                v2v_paths = r.get("info", {}).get("_v2v_paths", {})
-                a_only = v2v_paths.get("audio_only")
-                
                 videos_data.append({
                     "index": idx,
                     "output_name": output_name,
@@ -113,7 +110,6 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                     "output_video_path": str(output_video_path),
                     "video_only_path": str(video_only_path) if video_only_path.exists() else "",
                     "instrumental_path": str(path.with_name("no_vocals.wav")) if path.with_name("no_vocals.wav").exists() else "",
-                    "original_audio_path": Path(a_only).name if a_only and Path(a_only).exists() else "",
                     "output_filename": output_video_path.name,
                     "segments": segments,
                     "url": r.get("url", ""),
@@ -155,9 +151,6 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
                 for i, t in enumerate(texts)
             ]
-            v2v_paths = r.get("info", {}).get("_v2v_paths", {})
-            a_only = v2v_paths.get("audio_only")
-
             videos_data.append({
                 "index": idx,
                 "output_name": output_name,
@@ -165,7 +158,6 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 "output_video_path": str(output_path),
                 "video_only_path": str(video_only_path) if video_only_path.exists() else "",
                 "instrumental_path": str(no_vocals_path) if no_vocals_path.exists() else "",
-                "original_audio_path": Path(a_only).name if a_only and Path(a_only).exists() else "",
                 "output_filename": output_path.name,
                 "segments": segments,
                 "url": r.get("url", ""),

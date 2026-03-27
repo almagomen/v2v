@@ -180,8 +180,8 @@ def download_video(
 
                 # Buscar archivos intermedios de yt-dlp que coincidan con el patrón
                 # yt-dlp nombra: titulo.f137.mp4 (video), titulo.f251.webm (audio)
-                video_pattern = f"{media_path.stem}.f*"
-                audio_pattern = f"{media_path.stem}.f*"
+                video_pattern = f"{media_path.stem}.f*.mp4"
+                audio_pattern = f"{media_path.stem}.f*.webm"
 
                 yt_video_files = list(media_path.parent.glob(video_pattern))
                 yt_audio_files = list(media_path.parent.glob(audio_pattern))
