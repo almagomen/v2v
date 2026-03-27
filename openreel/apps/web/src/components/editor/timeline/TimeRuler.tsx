@@ -99,9 +99,10 @@ export const TimeRuler: React.FC<TimeRulerProps> = ({
 
   const getTimeFromEvent = useCallback(
     (e: MouseEvent | React.MouseEvent) => {
-      if (!rulerRef.current) return 0;
-      const rect = rulerRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
+      const grandparent = rulerRef.current?.parentElement?.parentElement;
+      if (!grandparent) return 0;
+      const rect = grandparent.getBoundingClientRect();
+      const x = e.clientX - rect.left + scrollXRef.current;
       return Math.max(0, x / safePixelsPerSecond);
     },
     [safePixelsPerSecond],
