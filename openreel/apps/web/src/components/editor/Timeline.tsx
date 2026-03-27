@@ -809,21 +809,45 @@ export const Timeline: React.FC = () => {
       const clip = tracks.flatMap((t) => t.clips).find((c) => c.id === clipId);
       if (!clip) return;
 
-      const oldDuration = clip.duration;
-      const newDuration =
-        edge === "left"
-          ? Math.max(0.1, clip.startTime + clip.duration - newTime)
-          : Math.max(0.1, newTime - clip.startTime);
+      const mediaItem = project.mediaLibrary.items.find((m) => m.id === clip.mediaId);
+      const mediaDuration = mediaItem?.metadata.duration || clip.duration;
 
-      const updates =
-        edge === "left"
-          ? {
-              startTime: newTime,
-              duration: newDuration,
-            }
-          : {
-              duration: newDuration,
-            };
+      let updates: any = {};
+
+      if (edge === "left") {
+        // Delta between original startTime and new handle position
+        const deltaTime = newTime - clip.startTime;
+        
+        // Target inPoint based on delta
+        const targetInPoint = clip.inPoint + deltaTime;
+        
+        // Clamp inPoint to [0, clip.outPoint - 0.1]
+        const newInPoint = Math.max(0, Math.min(targetInPoint, clip.outPoint - 0.1));
+        
+        // Recalculate actual delta based on clamped inPoint
+        const actualDelta = newInPoint - clip.inPoint;
+        
+        updates = {
+          startTime: clip.startTime + actualDelta,
+          inPoint: newInPoint,
+          duration: clip.outPoint - newInPoint,
+        };
+      } else {
+        // Right edge (trimming end)
+        const newDuration = Math.max(0.1, newTime - clip.startTime);
+        const targetOutPoint = clip.inPoint + newDuration;
+        
+        // Clamp outPoint to [clip.inPoint + 0.1, mediaDuration]
+        const newOutPoint = Math.max(clip.inPoint + 0.1, Math.min(targetOutPoint, mediaDuration));
+        
+        updates = {
+          outPoint: newOutPoint,
+          duration: newOutPoint - clip.inPoint,
+        };
+      }
+
+      const oldDuration = clip.duration;
+      const newDuration = updates.duration;
 
       const adjustedKeyframes = clip.keyframes.map((kf) => {
         if (kf.id.startsWith("kf-exit-")) {
@@ -851,7 +875,7 @@ export const Timeline: React.FC = () => {
         },
       }));
     },
-    [tracks],
+    [tracks, project.mediaLibrary.items],
   );
 
   const visualOrderTracks = useMemo(() => tracks, [tracks]);

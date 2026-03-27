@@ -544,22 +544,32 @@ export class ActionExecutor {
           inPoint?: number;
           outPoint?: number;
         };
+        const clip = this.findClip(timeline, params.clipId);
+        if (!clip) break;
+
+        const mediaItem = project.mediaLibrary.items.find((m) => m.id === clip.mediaId);
+        const mediaDuration = mediaItem?.metadata.duration || clip.duration;
+
         timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
           ...track,
-          clips: track.clips.map((clip: MutableClip) => {
-            if (clip.id === params.clipId) {
+          clips: track.clips.map((c: MutableClip) => {
+            if (c.id === params.clipId) {
               const updates: Partial<MutableClip> = {};
               if (params.inPoint !== undefined) {
-                updates.inPoint = params.inPoint;
-                updates.duration = clip.outPoint - params.inPoint;
+                // Clamp inPoint to [0, outPoint - 0.1]
+                const newInPoint = Math.max(0, Math.min(params.inPoint, c.outPoint - 0.1));
+                updates.inPoint = newInPoint;
+                updates.duration = c.outPoint - newInPoint;
               }
               if (params.outPoint !== undefined) {
-                updates.outPoint = params.outPoint;
-                updates.duration = params.outPoint - clip.inPoint;
+                // Clamp outPoint to [inPoint + 0.1, mediaDuration]
+                const newOutPoint = Math.max(c.inPoint + 0.1, Math.min(params.outPoint, mediaDuration));
+                updates.outPoint = newOutPoint;
+                updates.duration = newOutPoint - c.inPoint;
               }
-              return { ...clip, ...updates };
+              return { ...c, ...updates };
             }
-            return clip;
+            return c;
           }),
         }));
         break;
