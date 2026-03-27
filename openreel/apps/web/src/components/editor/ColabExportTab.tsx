@@ -54,11 +54,20 @@ interface SavedProject {
 /** Determine if a media_name belongs to a V2V folder (already in Colab). */
 function isInV2VFolder(name: string, folderRefs: Record<string, unknown>): boolean {
   const norm = name.replace(/\\/g, "/");
-  // Check if the first path component matches a known folder
   const parts = norm.split("/");
   if (parts.length < 2) return false;
   const folder = parts[0];
-  return folder in folderRefs;
+  if (!(folder in folderRefs)) return false;
+
+  // Solo consideramos "en el servidor" los archivos estándar generados por V2V.
+  // Cualquier otro archivo (ej. una canción subida por el usuario) debe subirse.
+  const filename = parts[parts.length - 1];
+  const isStandardV2V =
+    filename === "video.mp4" ||
+    filename.startsWith("tts_") ||
+    filename === "vocals_only.wav"; // por si acaso
+
+  return isStandardV2V;
 }
 
 function analyzeProject(
