@@ -73,9 +73,12 @@ function isInV2VFolder(name: string, folderRefs: Record<string, unknown>): boole
   // Solo consideramos "en el servidor" los archivos estándar generados por V2V.
   const isStandardV2V =
     filename === "video.mp4" ||
+    filename === "video_only.mp4" ||
+    filename === "video_final.mp4" ||
     filename.startsWith("tts_") ||
     filename === "no_vocals.wav" ||
     filename === "original_audio.wav" ||
+    filename === "vocals_original.wav" ||
     filename === "vocals_only.wav";
 
   return isStandardV2V;

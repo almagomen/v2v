@@ -187,7 +187,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
         const list = await v2vApi.getSpeakers();
         set({ speakers: list });
       } catch {
-        // log o ignorar
+        // ignore
       } finally {
         isFetchingSpeakers = false;
       }
@@ -300,9 +300,11 @@ export const useV2VStore = create<V2VState>((set, get) => {
 
       pollingTimer = setInterval(async () => {
         const state = get();
-        const { jobId } = state;
         if (!jobId || !state.isProcessing) {
-          if (pollingTimer) clearInterval(pollingTimer);
+          if (pollingTimer) {
+            clearInterval(pollingTimer);
+            pollingTimer = null;
+          }
           return;
         }
 
@@ -319,8 +321,8 @@ export const useV2VStore = create<V2VState>((set, get) => {
           }
 
           if (items && items.length) {
-            set((state) => {
-              const otherItems = state.urlItems.filter(it => (it as any).jobId && (it as any).jobId !== jobId);
+            set((st) => {
+              const otherItems = st.urlItems.filter(it => (it as any).jobId && (it as any).jobId !== jobId);
               const jobItems = items.map(it => ({ ...it, jobId }));
               const nextItems = [...otherItems, ...jobItems];
               saveJobStateToStorage({ urlItems: nextItems });
@@ -329,22 +331,17 @@ export const useV2VStore = create<V2VState>((set, get) => {
           }
 
           if (partial?.videos?.length) {
-            set((state) => {
-              const otherVideos = state.videos.filter(v => (v as any).jobId && (v as any).jobId !== jobId);
+            set((st) => {
+              const otherVideos = st.videos.filter(v => (v as any).jobId && (v as any).jobId !== jobId);
               const jobVideos = partial.videos.map(v => ({ ...v, jobId }));
               const nextVideos = [...otherVideos, ...jobVideos];
               saveJobStateToStorage({ videos: nextVideos });
-              if (jobVideos[state.selectedVideoIndex]) {
-                return { videos: nextVideos, segments: jobVideos[state.selectedVideoIndex].segments };
-              }
               return { videos: nextVideos };
             });
           }
 
           if (s.status === "done" || s.status === "error") {
-            const currentIsImporting = isImportingBusy;
-            if (!currentIsImporting) {
-               // Re-check pending imports one last time before stopping
+            if (!isImportingBusy) {
                const stillPending = get().videos.filter(v => !get().importStatusByKey[importKeyFor(v.url, v.index)]);
                if (stillPending.length === 0) {
                  get().stopPolling();
@@ -353,9 +350,8 @@ export const useV2VStore = create<V2VState>((set, get) => {
             }
           }
 
-          // --- Import Logic (Same as before but using poll data) ---
           if (!isImportingBusy) {
-            const currentVideos = partial?.videos || []; // Corrected: use partial.videos
+            const currentVideos = partial?.videos || [];
             const pendingVideos = currentVideos.filter(
               (v) => !get().importStatusByKey[importKeyFor(v.url, v.index)],
             );
@@ -375,126 +371,155 @@ export const useV2VStore = create<V2VState>((set, get) => {
                   let audioSegs: AudioSegmentItem[] = [];
                   try {
                     audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
-                    // Deduplicar por el campo 'seg' para evitar duplicados en el timeline
-                    audioSegs = audioSegs.filter((s, i, a) => a.findIndex(t => t.seg === s.seg) === i);
+                    audioSegs = audioSegs.filter((as, i, a) => a.findIndex(t => t.seg === as.seg) === i);
                   } catch {
                     get().setImportStatus(key, "error");
-                    continue;
-                  }
-                  if (!audioSegs.length) {
-                    set((st) => {
-                      const next = { ...st.importStatusByKey };
-                      delete next[key];
-                      return { importStatusByKey: next };
-                    });
                     continue;
                   }
 
                   const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
                   const urlForLog = v.url || "";
-                  const pos = get().urlItems.findIndex(it => it.url === v.url && it.index === v.index);
-                  const seq = pos >= 0 ? pos + 1 : v.index + 1;
-                  const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
-
-                  let workingProject = createEmptyProject(projectTitle, {
+                  let workingProject = createEmptyProject(folder, {
                     width: baseProjectSettings.width,
                     height: baseProjectSettings.height,
                     frameRate: baseProjectSettings.frameRate,
                   });
 
-                    const videoMediaName = `${folder}__video.mp4`;
-                    const instrumentalMediaName = `${folder}__no_vocals.wav`;
-                    const originalAudioMediaName = `${folder}__original_audio.wav`;
-                    
-                    const downloadTasks = [
-                      v2vApi.fetchOutputVideoBlob(jobId, v.index).then(blob => ({ type: 'video' as const, blob, name: videoMediaName })),
-                      ...(v.instrumental_path ? [v2vApi.fetchFileBlob(jobId, v.index, "no_vocals.wav").then(blob => ({ type: 'audio' as const, blob, name: instrumentalMediaName }))] : []),
-                      ...(v.original_audio_path ? [v2vApi.fetchFileBlob(jobId, v.index, v.original_audio_path.split(/[\\/]/).pop() || "audio").then(blob => ({ type: 'audio' as const, blob, name: originalAudioMediaName }))] : []),
-                      ...audioSegs.map(seg => {
-                        const speakerToken = toSafeToken(seg.speaker || "speaker");
-                        const wavName = `${folder}__tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
-                        return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg).then(blob => ({ type: 'audio' as const, blob, name: wavName }));
-                      })
-                    ];
+                  interface V2VAssetDef {
+                    id: string;
+                    serverFn: string;
+                    logicalName: string;
+                    type: 'video' | 'audio';
+                    toTimeline: boolean;
+                    trackPrefix?: string;
+                    muted?: boolean;
+                    enabled: boolean;
+                  }
 
-                  const downloaded = await Promise.all(downloadTasks);
-                  const files = downloaded.map(d => new File([d.blob], d.name, { type: d.type === 'video' ? 'video/mp4' : 'audio/wav' }));
+                  const assets: V2VAssetDef[] = [
+                    { 
+                      id: 'video_only', 
+                      serverFn: v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4", 
+                      logicalName: `${folder}__video_only.mp4`, 
+                      type: 'video', 
+                      toTimeline: true, 
+                      trackPrefix: 'V2V',
+                      enabled: !!v.video_only_path 
+                    },
+                    { 
+                      id: 'instrumental', 
+                      serverFn: 'no_vocals.wav', 
+                      logicalName: `${folder}__no_vocals.wav`, 
+                      type: 'audio', 
+                      toTimeline: true, 
+                      trackPrefix: 'INST',
+                      enabled: true 
+                    },
+                    { 
+                      id: 'original_audio', 
+                      serverFn: v.original_audio_path?.split(/[\\/]/).pop() || "", 
+                      logicalName: `${folder}__original_audio.wav`, 
+                      type: 'audio', 
+                      toTimeline: false, 
+                      enabled: !!v.original_audio_path 
+                    },
+                    { 
+                      id: 'vocals_original', 
+                      serverFn: 'vocals.wav', 
+                      logicalName: `${folder}__vocals_original.wav`, 
+                      type: 'audio', 
+                      toTimeline: false, 
+                      enabled: true 
+                    },
+                    { 
+                      id: 'video_final', 
+                      serverFn: v.output_filename || v.output_video_path?.split(/[\\/]/).pop() || "video.mp4", 
+                      logicalName: `${folder}__video_final.mp4`, 
+                      type: 'video', 
+                      toTimeline: false, 
+                      enabled: true 
+                    }
+                  ];
 
-                  const batchRes = await importMultipleMediaIntoProject(workingProject, files, { quick: true });
+                  const fetchAssetBlob = async (asset: V2VAssetDef) => {
+                    if (!asset.enabled) return null;
+                    try {
+                      const blob = await v2vApi.fetchFileBlob(jobId, v.index, asset.serverFn);
+                      return { asset, blob };
+                    } catch (e) {
+                      console.warn(`[V2V] Asset opcional no disponible: ${asset.serverFn}`, e);
+                      return null;
+                    }
+                  };
+
+                  const assetTasks = assets.map(fetchAssetBlob);
+                  const segmentTasks = audioSegs.map(seg => {
+                    const speakerToken = toSafeToken(seg.speaker || "speaker");
+                    const logicalName = `${folder}__tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                    return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg)
+                      .then(blob => ({ isSegment: true as const, seg, logicalName, blob }))
+                      .catch(() => null);
+                  });
+
+                  const [downloadedAssetsRaw, downloadedSegsRaw] = await Promise.all([
+                    Promise.all(assetTasks),
+                    Promise.all(segmentTasks)
+                  ]);
+
+                  const downloadedAssets = downloadedAssetsRaw.filter((d): d is { asset: V2VAssetDef, blob: Blob } => d !== null);
+                  const downloadedSegs = downloadedSegsRaw.filter((d): d is { isSegment: true, seg: AudioSegmentItem, logicalName: string, blob: Blob } => d !== null);
+
+                  const filesToImport = [
+                    ...downloadedAssets.map(d => new File([d.blob], d.asset.logicalName, { type: d.asset.type === 'video' ? 'video/mp4' : 'audio/wav' })),
+                    ...downloadedSegs.map(d => new File([d.blob], d.logicalName, { type: 'audio/wav' }))
+                  ];
+
+                  const batchRes = await importMultipleMediaIntoProject(workingProject, filesToImport, { quick: true });
                   if (batchRes.success && batchRes.project) {
                     workingProject = batchRes.project;
-                    const vMedia = workingProject.mediaLibrary.items.find(m => m.name === videoMediaName);
-                    if (vMedia) {
-                      // Ajustar dimensiones del proyecto para que coincidan con el video
-                      if (vMedia.metadata.width && vMedia.metadata.height) {
-                        workingProject = {
-                          ...workingProject,
-                          settings: {
-                            ...workingProject.settings,
-                            width: vMedia.metadata.width,
-                            height: vMedia.metadata.height,
-                          },
-                        };
-                      }
 
-                      const rv = (await addTrackToDetachedProject(workingProject, "video")) as any;
-                      workingProject = rv.project!;
-                      const vtId = workingProject.timeline.tracks.find(t => t.type === 'video' && (rv.trackId ? t.id === rv.trackId : true))?.id;
-                      if (vtId) {
-                        workingProject = renameTrackInProject(workingProject, vtId, `V2V · ${folder}`);
-                        const cv = (await addClipToDetachedProject(workingProject, vtId, vMedia.id, 0)) as any;
-                        workingProject = cv.project!;
-                      }
+                    const vMedia = workingProject.mediaLibrary.items.find(m => m.name === `${folder}__video_only.mp4`);
+                    if (vMedia?.metadata.width && vMedia?.metadata.height) {
+                      workingProject = {
+                        ...workingProject,
+                        settings: { ...workingProject.settings, width: vMedia.metadata.width, height: vMedia.metadata.height },
+                      };
+                    }
 
-                      // Import instrumental if exists
-                      const iMedia = workingProject.mediaLibrary.items.find(m => m.name === instrumentalMediaName);
-                      if (iMedia) {
-                        const ri = (await addTrackToDetachedProject(workingProject, "audio")) as any;
-                        workingProject = ri.project!;
-                        const itId = workingProject.timeline.tracks.find(t => t.type === 'audio' && (ri.trackId ? t.id === ri.trackId : true))?.id;
-                        if (itId) {
-                          workingProject = renameTrackInProject(workingProject, itId, `INST · ${folder}`);
-                          const ci = (await addClipToDetachedProject(workingProject, itId, iMedia.id, 0)) as any;
-                          workingProject = ci.project!;
+                    for (const { asset } of downloadedAssets) {
+                      if (!asset.toTimeline) continue;
+                      const media = workingProject.mediaLibrary.items.find(m => m.name === asset.logicalName);
+                      if (media) {
+                        const trackRes = (await addTrackToDetachedProject(workingProject, asset.type)) as any;
+                        workingProject = trackRes.project!;
+                        const trackId = workingProject.timeline.tracks.find(t => t.type === asset.type && (trackRes.trackId ? t.id === trackRes.trackId : true))?.id;
+                        if (trackId) {
+                          workingProject = renameTrackInProject(workingProject, trackId, asset.trackPrefix ? `${asset.trackPrefix} · ${folder}` : asset.id);
+                          if (asset.trackPrefix === 'ORG') workingProject = muteTrackInProject(workingProject, trackId, true);
+                          const clipRes = (await addClipToDetachedProject(workingProject, trackId, media.id, 0)) as any;
+                          workingProject = clipRes.project!;
                         }
                       }
+                    }
 
-                      // Import original audio if exists (muted by default)
-                      const oMedia = workingProject.mediaLibrary.items.find(m => m.name === originalAudioMediaName);
-                      if (oMedia) {
-                        const ro = (await addTrackToDetachedProject(workingProject, "audio")) as any;
-                        workingProject = ro.project!;
-                        const otId = workingProject.timeline.tracks.find(t => t.type === 'audio' && (ro.trackId ? t.id === ro.trackId : true))?.id;
-                        if (otId) {
-                          workingProject = renameTrackInProject(workingProject, otId, `ORG · ${folder}`);
-                          // Mute the original audio track to avoid interference with translated audio
-                          workingProject = muteTrackInProject(workingProject, otId, true);
-                          const co = (await addClipToDetachedProject(workingProject, otId, oMedia.id, 0)) as any;
-                          workingProject = co.project!;
-                        }
-                      }
+                    const bySpeaker: Record<string, typeof downloadedSegs> = {};
+                    for (const d of downloadedSegs) {
+                      const spk = (d.seg.speaker || "").trim() || `Speaker_${d.seg.seg}`;
+                      (bySpeaker[spk] ||= []).push(d);
+                    }
 
-                      const bySpeaker: Record<string, AudioSegmentItem[]> = {};
-                      for (const seg of audioSegs) {
-                        const spk = (seg.speaker || "").trim();
-                        const k = spk || `Speaker_${seg.seg}`;
-                        (bySpeaker[k] ||= []).push(seg);
-                      }
-
-                      for (const sKey of Object.keys(bySpeaker)) {
-                        const segs = bySpeaker[sKey].sort((a,b) => a.seg - b.seg);
-                        const ra = (await addTrackToDetachedProject(workingProject, "audio")) as any;
-                        workingProject = ra.project!;
-                        const atId = workingProject.timeline.tracks.find(t => t.type === 'audio' && (ra.trackId ? t.id === ra.trackId : true))?.id;
-                        if (atId) {
-                          workingProject = renameTrackInProject(workingProject, atId, sKey);
-                          for (const seg of segs) {
-                            const wName = `${folder}__tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
-                            const wm = workingProject.mediaLibrary.items.find(m => m.name === wName);
-                            if (wm) {
-                              const cw = (await addClipToDetachedProject(workingProject, atId, wm.id, seg.start)) as any;
-                              workingProject = cw.project!;
-                            }
+                    for (const sKey of Object.keys(bySpeaker)) {
+                      const segs = bySpeaker[sKey].sort((a,b) => a.seg.seg - b.seg.seg);
+                      const trackRes = (await addTrackToDetachedProject(workingProject, "audio")) as any;
+                      workingProject = trackRes.project!;
+                      const trackId = workingProject.timeline.tracks.find(t => t.type === 'audio' && (trackRes.trackId ? t.id === trackRes.trackId : true))?.id;
+                      if (trackId) {
+                        workingProject = renameTrackInProject(workingProject, trackId, sKey);
+                        for (const d of segs) {
+                          const media = workingProject.mediaLibrary.items.find(m => m.name === d.logicalName);
+                          if (media) {
+                            const clipRes = (await addClipToDetachedProject(workingProject, trackId, media.id, d.seg.start)) as any;
+                            workingProject = clipRes.project!;
                           }
                         }
                       }
@@ -503,7 +528,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     await autoSaveManager.forceSave(workingProject);
                     get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index });
                     get().setImportStatus(key, "done");
-                    if (urlForLog) get().appendUrlLog(urlForLog, `✅ Importación completada en segundo plano.`);
+                    if (urlForLog) get().appendUrlLog(urlForLog, `✅ Importación completada por activos.`);
                   }
                 }
               } catch (err) {
@@ -557,4 +582,3 @@ export const useV2VStore = create<V2VState>((set, get) => {
     },
   };
 });
-

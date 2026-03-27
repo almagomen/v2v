@@ -49,7 +49,8 @@ def process_video_queue(
                                         on_stage(u, "cached", f"En caché: {folder.name}")
                                     except Exception:
                                         pass
-                                translated_result, output_name, url, result, transcription, diarization = cached_data
+                                translated_result, output_name, url, result, transcription, diarization, *rest = cached_data
+                                info = rest[0] if rest else {}
                                 
                                 # Encontrar el archivo de video original (.mp4) dentro de la carpeta
                                 # yt-dlp lo guarda como folder_name.mp4 dentro de folder_name/
@@ -85,8 +86,8 @@ def process_video_queue(
                 print(f"♻️ Cargando caché: {path.name}")
                 with open(output_file, "rb") as f:
                     cached_data = pickle.load(f)
-                    # El pkl guarda: (translated_result, output_name, url, result, transcription, diarization)
-                    translated_result, output_name, url, result, transcription, diarization = cached_data
+                    translated_result, output_name, url, result, transcription, diarization, *rest = cached_data
+                    info = rest[0] if rest else {}
                 
                 results.append({
                     "path": path,
@@ -118,7 +119,7 @@ def process_video_queue(
             
             with open(output_file, "wb") as f:
                 pickle.dump(
-                    (translated_result, output_name, u, result, transcription, diarization),
+                    (translated_result, output_name, u, result, transcription, diarization, info),
                     f,
                 )
             
@@ -193,7 +194,7 @@ def split_all_sequences(video_paths: list[Path]) -> None:
             print(f"⚠️ Saltando {path.stem}: no hay archivo de textos")
             continue
         with open(texts_file, "rb") as f:
-            texts, output_name, url, result, transcription, diarization = pickle.load(f)
+            texts, output_name, url, result, transcription, diarization, *rest = pickle.load(f)
         split_audio_sequences(
             audio_path=path.with_name("vocals.wav"),
             texts=texts,

@@ -70,6 +70,7 @@ export interface VideoResult {
   video_only_path?: string;
   instrumental_path?: string;
   original_audio_path?: string;
+  vocals_path?: string;
   output_video_path: string;
   output_filename?: string;
   segments: Segment[];

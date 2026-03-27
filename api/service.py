@@ -103,22 +103,26 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                     {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
                     for i, t in enumerate(texts)
                 ]
-                # Buscar audio original en info o en disco
-                audio_only_path = (v2v_paths or {}).get("audio_only")
-                if not audio_only_path or not Path(audio_only_path).exists():
-                    # Fallback: buscar webm/m4a en la carpeta
-                    audios = list(path.parent.glob("*.f*.webm")) + list(path.parent.glob("*.f*.m4a")) + list(path.parent.glob("*_audio.m4a"))
-                    if audios:
-                        audio_only_path = str(audios[0])
+
+                # Detección determinista de activos desde el pipeline
+                info = r.get("info") or {}
+                v2v_paths = info.get("_v2v_paths") or {}
+                
+                parent = path.parent
+                instrumental = v2v_paths.get("instrumental") or str(parent / "no_vocals.wav")
+                vocals = v2v_paths.get("vocals") or str(parent / "vocals.wav")
+                audio_only = v2v_paths.get("audio_only") or ""
+                v_only = v2v_paths.get("video_only") or ""
 
                 videos_data.append({
                     "index": idx,
                     "output_name": output_name,
                     "video_path": str(path),
                     "output_video_path": str(output_video_path),
-                    "video_only_path": str(video_only_path) if video_only_path.exists() else "",
-                    "instrumental_path": str(path.with_name("no_vocals.wav")) if path.with_name("no_vocals.wav").exists() else "",
-                    "original_audio_path": str(audio_only_path) if audio_only_path else "",
+                    "video_only_path": v_only,
+                    "instrumental_path": instrumental if Path(instrumental).exists() else "",
+                    "original_audio_path": audio_only,
+                    "vocals_path": vocals if Path(vocals).exists() else "",
                     "output_filename": output_video_path.name,
                     "segments": segments,
                     "url": r.get("url", ""),
@@ -160,12 +164,12 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
                 for i, t in enumerate(texts)
             ]
-            # Buscar audio original
-            audio_only_path = (v2v_paths or {}).get("audio_only")
-            if not audio_only_path or not Path(audio_only_path).exists():
-                audios = list(path.parent.glob("*.f*.webm")) + list(path.parent.glob("*.f*.m4a")) + list(path.parent.glob("*_audio.m4a"))
-                if audios:
-                    audio_only_path = str(audios[0])
+            # Detección robusta de audios
+            parent = path.parent
+            instrumental = parent / "no_vocals.wav"
+            vocals = parent / "vocals.wav"
+            audios = list(parent.glob("*.f*.webm")) + list(parent.glob("*.f*.m4a")) + list(parent.glob("*_audio.m4a"))
+            audio_only = str(audios[0]) if audios else ""
 
             videos_data.append({
                 "index": idx,
@@ -173,8 +177,9 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 "video_path": str(path),
                 "output_video_path": str(output_path),
                 "video_only_path": str(video_only_path) if video_only_path.exists() else "",
-                "instrumental_path": str(no_vocals_path) if no_vocals_path.exists() else "",
-                "original_audio_path": str(audio_only_path) if audio_only_path else "",
+                "instrumental_path": str(instrumental) if instrumental.exists() else "",
+                "original_audio_path": audio_only,
+                "vocals_path": str(vocals) if vocals.exists() else "",
                 "output_filename": output_path.name,
                 "segments": segments,
                 "url": r.get("url", ""),

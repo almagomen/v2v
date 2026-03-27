@@ -142,115 +142,46 @@ def download_video(
             media_path = Path(media)
 
             # Guardar paths útiles en info para el resto del pipeline:
-            # - merged (media_path)
-            # - video-only descargado por yt-dlp (requested_formats[0])
             try:
                 info["_v2v_paths"] = info.get("_v2v_paths") or {}
                 info["_v2v_paths"]["merged"] = str(media_path)
 
                 requested = info.get("requested_formats") or []
+                # yt-dlp descarga video y audio por separado y luego los une (si keepvideo=True).
+                # Registramos las rutas de los archivos intermedios reales.
                 if len(requested) >= 1:
                     v = requested[0] or {}
-                    # yt-dlp suele dejar `filepath` tras la descarga; si no, intentamos `filename`.
                     vpath = v.get("filepath") or v.get("filename")
-                    if vpath:
+                    if vpath and Path(vpath).exists():
                         info["_v2v_paths"]["video_only"] = str(Path(vpath))
                 if len(requested) >= 2:
                     a = requested[1] or {}
                     apath = a.get("filepath") or a.get("filename")
-                    if apath:
+                    if apath and Path(apath).exists():
                         info["_v2v_paths"]["audio_only"] = str(Path(apath))
             except Exception as e:
                 print(f"⚠️ No se pudieron registrar paths de descarga: {e}")
 
-            # Fallback: buscar archivos intermedios de yt-dlp (f137.mp4, f251.webm, etc.)
-            # o generar *_video.mp4 / *_audio.m4a solo si faltan.
+            return media_path, info
+
+            # Solo generar fallbacks si NO hay archivos de yt-dlp ni paths registrados
+            existing_vonly = Path(info["_v2v_paths"].get("video_only", "")) if info["_v2v_paths"].get("video_only") else None
+            existing_aonly = Path(info["_v2v_paths"].get("audio_only", "")) if info["_v2v_paths"].get("audio_only") else None
+
             try:
-                v2v_paths = info.get("_v2v_paths") if isinstance(info, dict) else {}
-                existing_vonly = (
-                    Path(v2v_paths.get("video_only"))
-                    if isinstance(v2v_paths, dict) and v2v_paths.get("video_only")
-                    else None
-                )
-                existing_aonly = (
-                    Path(v2v_paths.get("audio_only"))
-                    if isinstance(v2v_paths, dict) and v2v_paths.get("audio_only")
-                    else None
-                )
-
-                # Buscar archivos intermedios de yt-dlp que coincidan con el patrón
-                # yt-dlp nombra: titulo.f137.mp4 (video), titulo.f251.webm (audio)
-                video_pattern = f"{media_path.stem}.f*.mp4"
-                audio_pattern = f"{media_path.stem}.f*.webm"
-
-                yt_video_files = list(media_path.parent.glob(video_pattern))
-                yt_audio_files = list(media_path.parent.glob(audio_pattern))
-
-                # Si yt-dlp ya generó los archivos intermedios, usarlos
                 if not existing_vonly or not existing_vonly.exists():
-                    if yt_video_files:
-                        existing_vonly = yt_video_files[0]
-                        if isinstance(info, dict):
-                            info.setdefault("_v2v_paths", {})
-                            info["_v2v_paths"]["video_only"] = str(existing_vonly)
-
-                if not existing_aonly or not existing_aonly.exists():
-                    if yt_audio_files:
-                        existing_aonly = yt_audio_files[0]
-                        if isinstance(info, dict):
-                            info.setdefault("_v2v_paths", {})
-                            info["_v2v_paths"]["audio_only"] = str(existing_aonly)
-
-                # Solo generar fallbacks si NO hay archivos de yt-dlp ni paths registrados
-                if not existing_vonly or not existing_vonly.exists():
-                    video_only_path = media_path.with_name(
-                        f"{media_path.stem}_video{media_path.suffix}"
-                    )
+                    video_only_path = media_path.with_name(f"{media_path.stem}_video{media_path.suffix}")
                     if not video_only_path.exists():
-                        cmd = [
-                            "ffmpeg",
-                            "-y",
-                            "-v",
-                            "error",
-                            "-i",
-                            str(media_path),
-                            "-c",
-                            "copy",
-                            "-an",
-                            str(video_only_path),
-                        ]
+                        cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(media_path), "-c", "copy", "-an", str(video_only_path)]
                         subprocess.run(cmd, capture_output=True, text=True, check=False)
-                        existing_vonly = video_only_path
-
-                    if isinstance(info, dict):
-                        info.setdefault("_v2v_paths", {})
-                        info["_v2v_paths"]["video_only"] = str(video_only_path)
+                    info["_v2v_paths"]["video_only"] = str(video_only_path)
 
                 if not existing_aonly or not existing_aonly.exists():
-                    audio_only_path = media_path.with_name(
-                        f"{media_path.stem}_audio.m4a"
-                    )
+                    audio_only_path = media_path.with_name(f"{media_path.stem}_audio.m4a")
                     if not audio_only_path.exists():
-                        cmd_a = [
-                            "ffmpeg",
-                            "-y",
-                            "-v",
-                            "error",
-                            "-i",
-                            str(media_path),
-                            "-vn",
-                            "-c",
-                            "copy",
-                            str(audio_only_path),
-                        ]
-                        subprocess.run(
-                            cmd_a, capture_output=True, text=True, check=False
-                        )
-                        existing_aonly = audio_only_path
-
-                    if isinstance(info, dict):
-                        info.setdefault("_v2v_paths", {})
-                        info["_v2v_paths"]["audio_only"] = str(audio_only_path)
+                        cmd_a = ["ffmpeg", "-y", "-v", "error", "-i", str(media_path), "-vn", "-c", "copy", str(audio_only_path)]
+                        subprocess.run(cmd_a, capture_output=True, text=True, check=False)
+                    info["_v2v_paths"]["audio_only"] = str(audio_only_path)
             except Exception as e:
                 print(f"⚠️ No se pudo generar/registrar video_only fallback: {e}")
 
