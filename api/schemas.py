@@ -54,6 +54,7 @@ class VideoResult(BaseModel):
     video_path: str
     video_only_path: Optional[str] = None
     instrumental_path: Optional[str] = None
+    original_audio_path: Optional[str] = None
     output_video_path: str
     output_filename: str = ""  # e.g. "output_name.mp4" for file serving
     segments: list[SegmentSchema]
