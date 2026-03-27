@@ -16,6 +16,7 @@ export class PlaybackBridge {
   private unsubscribePlaybackEvents: (() => void) | null = null;
   private initialized = false;
   private isUpdatingProject = false;
+  private wasPlayingBeforeScrub = false;
 
   private async applyProjectUpdate(project: ReturnType<typeof useProjectStore.getState>["project"]): Promise<void> {
     if (!this.playbackController) return;
@@ -27,10 +28,18 @@ export class PlaybackBridge {
     this.isUpdatingProject = true;
     try {
       this.playbackController.setProject(project);
-      await this.playbackController.scrubTo(currentTime);
+      
+      // If we are currently scrubbing, use the scrub position instead of playhead
+      const targetTime = timelineStore.isScrubbing && timelineStore.scrubPosition !== null 
+        ? timelineStore.scrubPosition 
+        : currentTime;
+
+      await this.playbackController.scrubTo(targetTime);
       // Ensure UI timeline doesn't jump to zero if controller emits transient "stopped".
-      useTimelineStore.getState().setPlayheadPosition(currentTime);
-      if (wasPlaying) {
+      useTimelineStore.getState().setPlayheadPosition(targetTime);
+      
+      // Only resume if we were playing AND we are NOT scrubbing (scrubbing should stay paused or handle resumption on end)
+      if (wasPlaying && !timelineStore.isScrubbing) {
         await this.playbackController.play();
       }
     } finally {
@@ -260,12 +269,13 @@ export class PlaybackBridge {
    * Start scrubbing mode
    */
   startScrubbing(): void {
+    const timelineStore = useTimelineStore.getState();
+    this.wasPlayingBeforeScrub = timelineStore.playbackState === "playing";
+    
     if (this.playbackController) {
       this.playbackController.startScrubbing();
     }
-    useTimelineStore
-      .getState()
-      .startScrubbing(useTimelineStore.getState().playheadPosition);
+    timelineStore.startScrubbing(timelineStore.playheadPosition);
   }
 
   /**
@@ -281,11 +291,16 @@ export class PlaybackBridge {
   /**
    * End scrubbing mode
    */
-  endScrubbing(): void {
+  async endScrubbing(): Promise<void> {
     if (this.playbackController) {
       this.playbackController.endScrubbing();
     }
     useTimelineStore.getState().endScrubbing();
+    
+    if (this.wasPlayingBeforeScrub) {
+      await this.play();
+      this.wasPlayingBeforeScrub = false;
+    }
   }
 
   /**
