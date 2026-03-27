@@ -16,6 +16,7 @@ const JOB_STATE_STORAGE_KEY = "openreel.v2v.jobState";
 
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let isImportingBusy = false;
+let isFetchingSpeakers = false;
 
 export type V2VFolderRef = { jobId: string; videoIndex: number };
 
@@ -179,11 +180,15 @@ export const useV2VStore = create<V2VState>((set, get) => {
     setSpeaker: (speaker) => { set({ speaker }); saveJobStateToStorage({ speaker }); },
 
     fetchSpeakers: async () => {
+      if (get().speakers.length > 0 || isFetchingSpeakers) return;
+      isFetchingSpeakers = true;
       try {
         const list = await v2vApi.getSpeakers();
         set({ speakers: list });
       } catch {
         // log o ignorar
+      } finally {
+        isFetchingSpeakers = false;
       }
     },
 
