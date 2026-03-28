@@ -488,8 +488,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                       const { project: p1, trackId } = await addTrackAndGetId(workingProject, asset.type);
                       workingProject = p1;
                       if (!trackId) continue;
-
-                      workingProject = renameTrackInProject(workingProject, trackId, asset.trackPrefix ? `${asset.trackPrefix} · ${folder}` : asset.id);
+                      workingProject = renameTrackInProject(workingProject, trackId, asset.trackPrefix ? asset.trackPrefix : asset.id);
                       if (asset.muted) workingProject = muteTrackInProject(workingProject, trackId, true);
                       const clipRes = (await addClipToDetachedProject(workingProject, trackId, media.id, 0)) as any;
                       workingProject = clipRes.project!;
