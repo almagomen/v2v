@@ -289,28 +289,28 @@ def _build_ffmpeg_cmd(
         cmd += ["-map", video_map]
         
         # 1. Buscar bitrate original para decidir agresividad del encoder
-        target_bitrate = 0
-        if video_clips:
-            first_vp = _resolve_media_path(folder, video_clips[0].media_name, job_id, video_index)
-            target_bitrate = _get_video_bitrate(first_vp)
+        # target_bitrate = 0
+        # if video_clips:
+        #     first_vp = _resolve_media_path(folder, video_clips[0].media_name, job_id, video_index)
+        #     target_bitrate = _get_video_bitrate(first_vp)
             
         # 2. Configuración NVENC de Alto Rendimiento (Calidad sobre Velocidad)
         # Usamos preset p7 (lento pero mejor compresión) y AQ para conservar detalles
         cmd += ["-c:v", "h264_nvenc", "-preset", "p7", "-spatial-aq", "1", "-temporal-aq", "1", "-pix_fmt", "yuv420p"]
 
         # 3. Lógica de Calidad Dinámica (CQ)
-        if target_bitrate > 0:
-            # Si el video original es de muy bajo bitrate (<1Mbps), subimos el CQ para no "inventar" ruido
-            # Si es mayor, bajamos el CQ para preservar la alta fidelidad.
-            orig_kbps = target_bitrate / 1000
-            dynamic_cq = 32 if orig_kbps < 1500 else 24
+        # if target_bitrate > 0:
+        #     # Si el video original es de muy bajo bitrate (<1Mbps), subimos el CQ para no "inventar" ruido
+        #     # Si es mayor, bajamos el CQ para preservar la alta fidelidad.
+        #     orig_kbps = target_bitrate / 1000
+        #     dynamic_cq = 32 if orig_kbps < 1500 else 24
             
-            # Limitar bitrate máximo para evitar archivos gigantes (10 Mbps max)
-            max_kbps = min(int(orig_kbps * 2.0), 10000) 
-            cmd += ["-rc", "vbr", "-cq", str(dynamic_cq), "-b:v", "0", "-maxrate:v", f"{max_kbps}k", "-bufsize:v", f"{max_kbps*2}k"]
-        else:
-            # Fallback seguro
-            cmd += ["-rc", "vbr", "-cq", "28", "-b:v", "0"]
+        #     # Limitar bitrate máximo para evitar archivos gigantes (10 Mbps max)
+        #     max_kbps = min(int(orig_kbps * 2.0), 10000) 
+        #     cmd += ["-rc", "vbr", "-cq", str(dynamic_cq), "-b:v", "0", "-maxrate:v", f"{max_kbps}k", "-bufsize:v", f"{max_kbps*2}k"]
+        # else:
+        #     # Fallback seguro
+        #     cmd += ["-rc", "vbr", "-cq", "28", "-b:v", "0"]
 
     if audio_map:
         cmd += ["-map", audio_map]
