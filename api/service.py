@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 
 from api.job_store import create_job, update_job, append_log, get_job
+from src.assets import load_assets
 
 SPEAKER_OPTIONS = {
     "mrbeast_lmnt": "d47094be-9814-4323-9000-e735e04d8732",
@@ -77,7 +78,6 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             )
             
             if not res_list:
-                # Si falla una URL, continuamos con la siguiente
                 set_url_state(u, "error", "Error en descarga/transcripción")
                 continue
 
@@ -88,46 +88,35 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             transcription = r["transcription"]
             lang = translate_lang if translate_lang else transcription.language
             output_video_path = path.parent / f"{output_name}.mp4"
-            # Preferimos el bestvideo que yt-dlp ya descargó (sin audio) si está disponible.
-            info = r.get("info") or {}
-            v2v_paths = info.get("_v2v_paths") if isinstance(info, dict) else {}
-            vonly = (v2v_paths or {}).get("video_only") if isinstance(v2v_paths, dict) else None
-            video_only_path = Path(vonly) if vonly else path.with_name(f"{path.stem}_video{path.suffix}")
 
-            # Marca inicio de TTS para la UI (los segmentos se verán en el log general).
+            # --- Leer activos deterministas desde el manifiesto ---
+            assets = load_assets(path.parent)
+
+            def _build_video_entry(output_path: Path, segs: list) -> dict:
+                """Construye la entrada de video usando sólo el manifiesto."""
+                return {
+                    "index": idx,
+                    "output_name": output_name,
+                    "video_path": str(path),
+                    "output_video_path": str(output_path),
+                    "video_only_path": assets.get("video_only") or "",
+                    "instrumental_path": assets.get("no_vocals") or "",
+                    "original_audio_path": assets.get("audio_only") or "",
+                    "vocals_path": assets.get("vocals") or "",
+                    "output_filename": output_path.name,
+                    "segments": segs,
+                    "url": r.get("url", ""),
+                }
+
             set_url_state(r.get("url", ""), "tts", "⚡ TTS:", index=idx, output_name=output_name)
-            
+
             if output_video_path.exists():
                 output_paths.append(output_video_path)
                 segments = [
                     {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
                     for i, t in enumerate(texts)
                 ]
-
-                # Detección determinista de activos desde el pipeline
-                info = r.get("info") or {}
-                v2v_paths = info.get("_v2v_paths") or {}
-                
-                parent = path.parent
-                instrumental = v2v_paths.get("instrumental") or str(parent / "no_vocals.wav")
-                vocals = v2v_paths.get("vocals") or str(parent / "vocals.wav")
-                audio_only = v2v_paths.get("audio_only") or ""
-                v_only = v2v_paths.get("video_only") or ""
-
-                videos_data.append({
-                    "index": idx,
-                    "output_name": output_name,
-                    "video_path": str(path),
-                    "output_video_path": str(output_video_path),
-                    "video_only_path": v_only,
-                    "instrumental_path": instrumental if Path(instrumental).exists() else "",
-                    "original_audio_path": audio_only,
-                    "vocals_path": vocals if Path(vocals).exists() else "",
-                    "output_filename": output_video_path.name,
-                    "segments": segments,
-                    "url": r.get("url", ""),
-                })
-                # Actualizar job con resultados parciales para que el frontend los vea
+                videos_data.append(_build_video_entry(output_video_path, segments))
                 update_job(job_id, videos=videos_data, progress=(idx + 0.5) / len(urls))
                 set_url_state(r.get("url", ""), "done", f"Listo (cache): {output_name}", index=idx, output_name=output_name)
                 continue
@@ -153,38 +142,20 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 set_url_state(r.get("url", ""), "error", "Error: no_vocals.wav no encontrado")
                 continue
 
-            # En este punto ya existen Seqs_trg/vocals_XXXX.wav, así que el frontend puede importar audios.
             set_url_state(r.get("url", ""), "audio_ready", "Audios listos para importar", index=idx, output_name=output_name)
 
             update_job(job_id, status="rendering", message=f"Renderizando video {idx + 1}...")
             output_path = render_video(path, output_name, vocals_es_path, no_vocals_path, output_dir=path.parent)
             output_paths.append(output_path)
 
+            # Recargar el manifiesto tras el render (puede haber nuevos activos)
+            assets = load_assets(path.parent)
+
             segments = [
                 {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
                 for i, t in enumerate(texts)
             ]
-            # Detección robusta de audios
-            parent = path.parent
-            instrumental = parent / "no_vocals.wav"
-            vocals = parent / "vocals.wav"
-            audios = list(parent.glob("*.f*.webm")) + list(parent.glob("*.f*.m4a")) + list(parent.glob("*_audio.m4a"))
-            audio_only = str(audios[0]) if audios else ""
-
-            videos_data.append({
-                "index": idx,
-                "output_name": output_name,
-                "video_path": str(path),
-                "output_video_path": str(output_path),
-                "video_only_path": str(video_only_path) if video_only_path.exists() else "",
-                "instrumental_path": str(instrumental) if instrumental.exists() else "",
-                "original_audio_path": audio_only,
-                "vocals_path": str(vocals) if vocals.exists() else "",
-                "output_filename": output_path.name,
-                "segments": segments,
-                "url": r.get("url", ""),
-            })
-            # Actualizar job con resultados parciales tras el render
+            videos_data.append(_build_video_entry(output_path, segments))
             update_job(job_id, videos=videos_data, progress=(idx + 1.0) / len(urls))
             set_url_state(r.get("url", ""), "done", f"Listo: {output_name}", index=idx, output_name=output_name)
 

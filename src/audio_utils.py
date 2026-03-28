@@ -7,6 +7,8 @@ from typing import Optional, Tuple
 import torch
 import torchaudio
 
+from src.assets import register_segment
+
 
 def adjust_audio_duration(
     audio: torch.Tensor,
@@ -104,6 +106,8 @@ def clone_voice_segments(
         audio_es_path = seqs_trg_dir / f"{audio_en_path.stem}.wav"
         torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
         path_es.append(audio_es_path)
+        # Registrar ruta exacta del segmento en el manifiesto de activos
+        register_segment(path.parent, seq_num, audio_es_path)
         start_samples = int(start_time * rate)
         times.append(start_samples)
 

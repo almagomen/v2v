@@ -38,6 +38,22 @@ export async function addTrackToDetachedProject(
   return executeActionOnDetachedProject(project, action);
 }
 
+/**
+ * Igual que addTrackToDetachedProject pero devuelve también el trackId del nuevo track.
+ * Lo obtiene comparando los tracks antes y después de la acción.
+ */
+export async function addTrackAndGetId(
+  project: Project,
+  trackType: "video" | "audio" | "image" | "text" | "graphics",
+  position?: number,
+): Promise<{ project: Project; trackId: string | null }> {
+  const existingIds = new Set(project.timeline.tracks.map((t) => t.id));
+  const result = await addTrackToDetachedProject(project, trackType, position);
+  if (!result.success || !result.project) return { project, trackId: null };
+  const newTrack = result.project.timeline.tracks.find((t) => !existingIds.has(t.id));
+  return { project: result.project, trackId: newTrack?.id ?? null };
+}
+
 export async function addClipToDetachedProject(
   project: Project,
   trackId: string,

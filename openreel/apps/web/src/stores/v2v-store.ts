@@ -3,10 +3,10 @@ import { v2vApi, type Segment, type VideoResult, type JobUrlItem, type AudioSegm
 import { useProjectStore } from "./project-store";
 import { createEmptyProject } from "./project";
 import { importMultipleMediaIntoProject } from "../utils/import-media-into-project";
-import { toSafeToken, sanitizeFolderName, shortProjectToken, importKeyFor } from "../utils/v2v-utils";
+import { toSafeToken, sanitizeFolderName, importKeyFor } from "../utils/v2v-utils";
 import {
   addClipToDetachedProject,
-  addTrackToDetachedProject,
+  addTrackAndGetId,
   renameTrackInProject,
   muteTrackInProject,
 } from "../utils/detached-project-actions";
@@ -489,17 +489,16 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     for (const { asset } of downloadedAssets) {
                       if (!asset.toTimeline) continue;
                       const media = workingProject.mediaLibrary.items.find(m => m.name === asset.logicalName);
-                      if (media) {
-                        const trackRes = (await addTrackToDetachedProject(workingProject, asset.type)) as any;
-                        workingProject = trackRes.project!;
-                        const trackId = workingProject.timeline.tracks.find(t => t.type === asset.type && (trackRes.trackId ? t.id === trackRes.trackId : true))?.id;
-                        if (trackId) {
-                          workingProject = renameTrackInProject(workingProject, trackId, asset.trackPrefix ? `${asset.trackPrefix} · ${folder}` : asset.id);
-                          if (asset.trackPrefix === 'ORG') workingProject = muteTrackInProject(workingProject, trackId, true);
-                          const clipRes = (await addClipToDetachedProject(workingProject, trackId, media.id, 0)) as any;
-                          workingProject = clipRes.project!;
-                        }
-                      }
+                      if (!media) continue;
+
+                      const { project: p1, trackId } = await addTrackAndGetId(workingProject, asset.type);
+                      workingProject = p1;
+                      if (!trackId) continue;
+
+                      workingProject = renameTrackInProject(workingProject, trackId, asset.trackPrefix ? `${asset.trackPrefix} · ${folder}` : asset.id);
+                      if (asset.muted) workingProject = muteTrackInProject(workingProject, trackId, true);
+                      const clipRes = (await addClipToDetachedProject(workingProject, trackId, media.id, 0)) as any;
+                      workingProject = clipRes.project!;
                     }
 
                     const bySpeaker: Record<string, typeof downloadedSegs> = {};
@@ -510,17 +509,16 @@ export const useV2VStore = create<V2VState>((set, get) => {
 
                     for (const sKey of Object.keys(bySpeaker)) {
                       const segs = bySpeaker[sKey].sort((a,b) => a.seg.seg - b.seg.seg);
-                      const trackRes = (await addTrackToDetachedProject(workingProject, "audio")) as any;
-                      workingProject = trackRes.project!;
-                      const trackId = workingProject.timeline.tracks.find(t => t.type === 'audio' && (trackRes.trackId ? t.id === trackRes.trackId : true))?.id;
-                      if (trackId) {
-                        workingProject = renameTrackInProject(workingProject, trackId, sKey);
-                        for (const d of segs) {
-                          const media = workingProject.mediaLibrary.items.find(m => m.name === d.logicalName);
-                          if (media) {
-                            const clipRes = (await addClipToDetachedProject(workingProject, trackId, media.id, d.seg.start)) as any;
-                            workingProject = clipRes.project!;
-                          }
+                      const { project: p2, trackId } = await addTrackAndGetId(workingProject, "audio");
+                      workingProject = p2;
+                      if (!trackId) continue;
+
+                      workingProject = renameTrackInProject(workingProject, trackId, sKey);
+                      for (const d of segs) {
+                        const media = workingProject.mediaLibrary.items.find(m => m.name === d.logicalName);
+                        if (media) {
+                          const clipRes = (await addClipToDetachedProject(workingProject, trackId, media.id, d.seg.start)) as any;
+                          workingProject = clipRes.project!;
                         }
                       }
                     }

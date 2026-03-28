@@ -1,16 +1,15 @@
 """
 Descarga de videos YouTube (yt-dlp) y separación de voces (BS-RoFormer).
+Los activos generados se registran en v2v_assets.json de la carpeta del job.
 """
 
-import os
-import re
-import subprocess
 import io
 import contextlib
 from pathlib import Path
 
 from src.config import BASE_DIR, QUEUE_DIR, DRIVE_DIR, google_drive
 from src.models import get_or_load_model
+from src.assets import update_assets
 
 ROFORMER_DIR = DRIVE_DIR / "bs-roformer-revive3e" if DRIVE_DIR else None
 
@@ -100,8 +99,14 @@ def download_video(
     language: str | None = None,
 ) -> tuple[Path, dict]:
     """
-    Descarga un video de YouTube y extrae información.
-    Returns: (path, info)
+    Descarga un video de YouTube con yt-dlp (keepvideo=True).
+
+    Registra en v2v_assets.json:
+      - merged:     video resultante (video+audio mezclados por ffmpeg)
+      - video_only: stream de video intermedio de yt-dlp (ej. f137.mp4)
+      - audio_only: stream de audio intermedio de yt-dlp (ej. f251.webm)
+
+    Returns: (merged_path, yt_dlp_info)
     """
     if output_dir is None:
         output_dir = QUEUE_DIR
@@ -119,8 +124,8 @@ def download_video(
         "outtmpl": str(output_dir / "%(title)s" / "%(title)s.%(ext)s"),
         "format": f"{video} + {audio}",
         "merge_output_format": "mp4",
-        # Mantener los archivos intermedios (bestvideo/bestaudio) para poder
-        # reutilizar el video-only sin un paso extra de ffmpeg (-an).
+        # keepvideo=True hace que yt-dlp conserve los streams intermedios
+        # (video_only y audio_only) luego de la mezcla con ffmpeg.
         "keepvideo": True,
         "logger": OneLineLogger(),
         "quiet": True,
@@ -132,63 +137,34 @@ def download_video(
     if cookies_file and cookies_file.exists():
         opts["cookiefile"] = str(cookies_file)
 
-    try:
-        with YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            media = ydl.prepare_filename(info)
-            print(f"✅ {Path(media).name}")
-            print_codecs(info)
-            ydl.download([url])
-            media_path = Path(media)
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        media = ydl.prepare_filename(info)
+        print(f"✅ {Path(media).name}")
+        print_codecs(info)
+        ydl.download([url])
+        media_path = Path(media)
 
-            # Guardar paths útiles en info para el resto del pipeline:
-            try:
-                info["_v2v_paths"] = info.get("_v2v_paths") or {}
-                info["_v2v_paths"]["merged"] = str(media_path)
+    # --- Registro determinista en manifiesto ---
+    folder = media_path.parent
+    asset_update: dict = {"merged": str(media_path)}
 
-                requested = info.get("requested_formats") or []
-                # yt-dlp descarga video y audio por separado y luego los une (si keepvideo=True).
-                # Registramos las rutas de los archivos intermedios reales.
-                if len(requested) >= 1:
-                    v = requested[0] or {}
-                    vpath = v.get("filepath") or v.get("filename")
-                    if vpath and Path(vpath).exists():
-                        info["_v2v_paths"]["video_only"] = str(Path(vpath))
-                if len(requested) >= 2:
-                    a = requested[1] or {}
-                    apath = a.get("filepath") or a.get("filename")
-                    if apath and Path(apath).exists():
-                        info["_v2v_paths"]["audio_only"] = str(Path(apath))
-            except Exception as e:
-                print(f"⚠️ No se pudieron registrar paths de descarga: {e}")
+    requested = info.get("requested_formats") or []
+    # requested_formats[0] = stream de video (sin audio)
+    # requested_formats[1] = stream de audio (sin video)
+    if len(requested) >= 1:
+        vpath = requested[0].get("filepath") or requested[0].get("filename")
+        if vpath and Path(vpath).exists():
+            asset_update["video_only"] = str(Path(vpath))
+    if len(requested) >= 2:
+        apath = requested[1].get("filepath") or requested[1].get("filename")
+        if apath and Path(apath).exists():
+            asset_update["audio_only"] = str(Path(apath))
 
-            return media_path, info
+    update_assets(folder, **asset_update)
+    print(f"📋 Activos registrados: {list(asset_update.keys())}")
 
-            # Solo generar fallbacks si NO hay archivos de yt-dlp ni paths registrados
-            existing_vonly = Path(info["_v2v_paths"].get("video_only", "")) if info["_v2v_paths"].get("video_only") else None
-            existing_aonly = Path(info["_v2v_paths"].get("audio_only", "")) if info["_v2v_paths"].get("audio_only") else None
-
-            try:
-                if not existing_vonly or not existing_vonly.exists():
-                    video_only_path = media_path.with_name(f"{media_path.stem}_video{media_path.suffix}")
-                    if not video_only_path.exists():
-                        cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(media_path), "-c", "copy", "-an", str(video_only_path)]
-                        subprocess.run(cmd, capture_output=True, text=True, check=False)
-                    info["_v2v_paths"]["video_only"] = str(video_only_path)
-
-                if not existing_aonly or not existing_aonly.exists():
-                    audio_only_path = media_path.with_name(f"{media_path.stem}_audio.m4a")
-                    if not audio_only_path.exists():
-                        cmd_a = ["ffmpeg", "-y", "-v", "error", "-i", str(media_path), "-vn", "-c", "copy", str(audio_only_path)]
-                        subprocess.run(cmd_a, capture_output=True, text=True, check=False)
-                    info["_v2v_paths"]["audio_only"] = str(audio_only_path)
-            except Exception as e:
-                print(f"⚠️ No se pudo generar/registrar video_only fallback: {e}")
-
-            return media_path, info
-    except Exception as e:
-        print(f"❌ Error al descargar video: {e}")
-        raise
+    return media_path, info
 
 
 def separate_vocals(
@@ -196,6 +172,11 @@ def separate_vocals(
 ) -> tuple[Path, Path]:
     """
     Separa las voces del audio usando BS-RoFormer.
+
+    Registra en v2v_assets.json:
+      - vocals:    pista de voz extraída (vocals.wav)
+      - no_vocals: pista instrumental sin voz (no_vocals.wav)
+
     Returns: (vocals_path, no_vocals_path)
     """
     import torch
@@ -210,13 +191,14 @@ def separate_vocals(
 
     if vocals_path.exists() and no_vocals_path.exists():
         print("✅ Audio de voz ya existe.")
+        # Registrar aunque ya existan (recuperación de caché)
+        update_assets(output_dir, vocals=str(vocals_path), no_vocals=str(no_vocals_path))
         return vocals_path, no_vocals_path
 
     # 1) Cargar modelo BS-RoFormer (cacheado con get_or_load_model)
     config, model, device = get_roformer_model()
 
     # 2) Leer audio directamente del video con torchaudio (backend ffmpeg)
-
     mix, sr = torchaudio.load(str(video_path))
     original_channels = mix.shape[0]
     if original_channels == 1:
@@ -250,7 +232,15 @@ def separate_vocals(
             instrumental = instrumental[0:1, :]
 
         torchaudio.save(str(no_vocals_path), instrumental, sr)
-        print(f"🎧 Audio separado correctamente")
+
+    print("🎧 Audio separado correctamente")
+
+    # --- Registro determinista en manifiesto ---
+    update_assets(
+        output_dir,
+        vocals=str(vocals_path) if vocals_path.exists() else None,
+        no_vocals=str(no_vocals_path) if no_vocals_path.exists() else None,
+    )
 
     return vocals_path, no_vocals_path
 
