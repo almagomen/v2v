@@ -180,7 +180,7 @@ export const v2vApi = {
   },
 
   getFileUrl(jobId: string, videoIndex: number, filename: string): string {
-    return url(`/api/job/${jobId}/files/${videoIndex}/${filename}`);
+    return url(`/api/job/${jobId}/files/${videoIndex}/${encodeURIComponent(filename)}`);
   },
 
   async fetchFileBlob(
@@ -188,7 +188,7 @@ export const v2vApi = {
     videoIndex: number,
     filename: string
   ): Promise<Blob> {
-    const res = await fetch(url(`/api/job/${jobId}/files/${videoIndex}/${filename}`));
+    const res = await fetch(url(`/api/job/${jobId}/files/${videoIndex}/${encodeURIComponent(filename)}`));
     if (!res.ok) throw new Error(`Error al descargar ${filename}`);
     return res.blob();
   },

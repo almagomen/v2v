@@ -432,14 +432,6 @@ export const useV2VStore = create<V2VState>((set, get) => {
                       type: 'audio', 
                       toTimeline: false, 
                       enabled: true 
-                    },
-                    { 
-                      id: 'video_final', 
-                      serverFn: "video_final.mp4", 
-                      logicalName: `${folder}/video_final.mp4`,  
-                      type: 'video', 
-                      toTimeline: false, 
-                      enabled: true 
                     }
                   ];
 
