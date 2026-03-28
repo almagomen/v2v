@@ -45,14 +45,14 @@ def get_job_result(job_id: str):
 
     videos = []
     for v in job.get("videos", []):
-        output_filename = v.get("output_filename") or f"{v['output_name']}.mp4"
         videos.append(VideoResult(
             index=v["index"],
             output_name=v["output_name"],
             video_path=v["video_path"],
-            video_only_path=v.get("video_only_path"),
-            output_video_path=v["output_video_path"],
-            output_filename=output_filename,
+            video_only_path=v.get("video_only_path", ""),
+            instrumental_path=v.get("instrumental_path", ""),
+            original_audio_path=v.get("original_audio_path", ""),
+            vocals_path=v.get("vocals_path", ""),
             segments=[SegmentSchema(**s) for s in v["segments"]],
             url=v.get("url", ""),
         ))
