@@ -402,7 +402,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     { 
                       id: 'video_only', 
                       serverFn: v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4", 
-                      logicalName: `${folder}__video_only.mp4`, 
+                      logicalName: `${folder}/${v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4"}`, 
                       type: 'video', 
                       toTimeline: true, 
                       trackPrefix: 'V2V',
@@ -411,7 +411,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     { 
                       id: 'instrumental', 
                       serverFn: 'no_vocals.wav', 
-                      logicalName: `${folder}__no_vocals.wav`, 
+                      logicalName: `${folder}/no_vocals.wav`, 
                       type: 'audio', 
                       toTimeline: true, 
                       trackPrefix: 'INST',
@@ -420,7 +420,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     { 
                       id: 'original_audio', 
                       serverFn: v.original_audio_path?.split(/[\\/]/).pop() || "", 
-                      logicalName: `${folder}__original_audio.wav`, 
+                      logicalName: `${folder}/${v.original_audio_path?.split(/[\\/]/).pop() || "original_audio.wav"}`, 
                       type: 'audio', 
                       toTimeline: false, 
                       enabled: !!v.original_audio_path 
@@ -428,7 +428,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     { 
                       id: 'vocals_original', 
                       serverFn: 'vocals.wav', 
-                      logicalName: `${folder}__vocals_original.wav`, 
+                      logicalName: `${folder}/vocals_original.wav`, 
                       type: 'audio', 
                       toTimeline: false, 
                       enabled: true 
@@ -436,7 +436,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     { 
                       id: 'video_final', 
                       serverFn: v.output_filename || v.output_video_path?.split(/[\\/]/).pop() || "video.mp4", 
-                      logicalName: `${folder}__video_final.mp4`, 
+                      logicalName: `${folder}/${v.output_filename || "video_final.mp4"}`, 
                       type: 'video', 
                       toTimeline: false, 
                       enabled: true 
@@ -457,7 +457,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                   const assetTasks = assets.map(fetchAssetBlob);
                   const segmentTasks = audioSegs.map(seg => {
                     const speakerToken = toSafeToken(seg.speaker || "speaker");
-                    const logicalName = `${folder}__tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                    const logicalName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
                     return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg)
                       .then(blob => ({ isSegment: true as const, seg, logicalName, blob }))
                       .catch(() => null);
@@ -480,7 +480,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                   if (batchRes.success && batchRes.project) {
                     workingProject = batchRes.project;
 
-                    const vMedia = workingProject.mediaLibrary.items.find(m => m.name === `${folder}__video_only.mp4`);
+                    const vMedia = workingProject.mediaLibrary.items.find(m => m.name === `${folder}/${v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4"}`);
                     if (vMedia?.metadata.width && vMedia?.metadata.height) {
                       workingProject = {
                         ...workingProject,
