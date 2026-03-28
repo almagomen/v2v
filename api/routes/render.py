@@ -105,6 +105,27 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
     )
 
 
+def _get_video_bitrate(path: Path) -> int:
+    """Intenta extraer la tasa de bits (kbps) del archivo original con ffprobe."""
+    import subprocess
+    import json
+    try:
+        cmd = ["ffprobe", "-v", "error", "-show_entries", "format=bit_rate:stream=bit_rate", "-of", "json", str(path)]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        data = json.loads(res.stdout)
+        
+        streams = data.get("streams", [])
+        if streams and "bit_rate" in streams[0] and streams[0]["bit_rate"] != "N/A":
+            return int(streams[0]["bit_rate"])
+            
+        fmt = data.get("format", {})
+        if "bit_rate" in fmt and fmt["bit_rate"] != "N/A":
+            return int(fmt["bit_rate"])
+    except Exception as e:
+        print(f"Error extracting bitrate for {path}: {e}")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -262,13 +283,25 @@ def _build_ffmpeg_cmd(
     cmd += inputs
     cmd += ["-filter_complex", filter_complex]
 
+
     if video_map:
         cmd += ["-map", video_map]
-        # Use NVIDIA hardware acceleration (NVENC) for fast rendering on Colab GPU T4
-        cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "26", "-b:v", "0"]
+        
+        # Buscar el bitrate del primer clip activo
+        target_bitrate = 0
+        if video_clips:
+            first_vp = _resolve_media_path(folder, video_clips[0].media_name, job_id, video_index)
+            target_bitrate = _get_video_bitrate(first_vp)
+            
+        if target_bitrate > 0:
+            br_kbps = min(int((target_bitrate * 1.05) / 1000), 10000) # Máximo 10Mbps
+            max_kbps = br_kbps + 500
+            cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", f"{br_kbps}k", "-maxrate:v", f"{max_kbps}k", "-bufsize:v", f"{max_kbps*2}k"]
+        else:
+            cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "31", "-b:v", "0"]
     if audio_map:
         cmd += ["-map", audio_map]
-        cmd += ["-c:a", "aac", "-b:a", "256k"]
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
 
     cmd.append(str(output_path))
     return cmd
