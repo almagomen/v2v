@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from api.job_store import get_job
 from src.config import QUEUE_DIR
+from src.assets import load_assets # <--- Nueva lógica de activos
 
 router = APIRouter(prefix="/api", tags=["render"])
 
@@ -47,57 +48,57 @@ def _job_folder(job_id: str, video_index: int) -> Path:
 
 def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video_index: int = None) -> Path:
     """
-    Resolves a media_name (e.g. 'folder/video.mp4' or 'folder/tts_spk_0001.wav')
-    to an absolute path inside the job folder.
-    The media_name may include a leading subfolder that matches the folder name;
-    we strip it if needed.
+    Resolves a media_name to an absolute path.
+    Prioritizes the v2v_assets.json manifest (New Logic).
     """
-    # Try as absolute first
+    # 1. Cargar manifiesto
+    assets = load_assets(folder)
+    
+    # 2. Mapeo de nombres genéricos a claves del manifiesto
+    # Si el frontend pide "video.mp4", buscamos "video_only" (silencioso) o "merged"
+    name_to_asset_key = {
+        "video.mp4": "video_only",
+        "instrumental.wav": "no_vocals",
+        "audio.wav": "audio_only",
+        "vocals.wav": "vocals"
+    }
+    
+    # Intentar resolver vía manifiesto
+    asset_key = name_to_asset_key.get(media_name)
+    if asset_key and assets.get(asset_key):
+        path = Path(assets[asset_key])
+        if path.exists():
+            return path
+        # Si falló video_only, intentar con merged como fallback
+        if asset_key == "video_only" and assets.get("merged"):
+            path = Path(assets["merged"])
+            if path.exists(): return path
+
+    # 3. Especial: Segmentos TTS (si media_name es un índice numerico o tts_..._XXXX.wav)
+    import re
+    match = re.search(r'tts_.*_(\d+)\.wav$', media_name)
+    seg_idx = match.group(1) if match else (media_name if media_name.isdigit() else None)
+    
+    if seg_idx:
+        seg_path_str = assets.get("segments", {}).get(str(int(seg_idx)))
+        if seg_path_str:
+            path = Path(seg_path_str)
+            if path.exists(): return path
+
+    # 4. Fallbacks (Búsqueda manual si no está en el manifiesto)
     p = Path(media_name)
     if p.is_absolute() and p.exists():
         return p
 
-    # Fallback to the original source video if frontend requests "video.mp4"
-    if p.name == "video.mp4" and job_id is not None and video_index is not None:
-        job = get_job(job_id)
-        if job:
-            videos = job.get("videos", [])
-            if 0 <= video_index < len(videos):
-                v_only = videos[video_index].get("video_only_path")
-                v_path = videos[video_index].get("video_path")
-                # Priorizar video_only (silencioso) para evitar solapamientos
-                resolved = v_only if v_only and Path(v_only).exists() else v_path
-                if resolved and Path(resolved).exists():
-                    return Path(resolved)
-
-    # Fallback to the original TTS segments if frontend requests renamed "tts_..._XXXX.wav"
-    import re
-    match = re.search(r'tts_.*_(\d{4})\.wav$', p.name)
-    if match:
-        seg_num = match.group(1)
-        seg_path = folder / "Seqs_trg" / f"vocals_{seg_num}.wav"
-        if seg_path.exists():
-            return seg_path
-
-    # Try to strip the leading folder name if it matches the job folder name
-    if p.parts and p.parts[0] == folder.name:
-        rel_path = Path(*p.parts[1:])
-    else:
-        rel_path = p
-
-    candidate3 = folder / rel_path
-    if candidate3.exists():
-        return candidate3
-
-    # Fallback to pure filename just in case
-    candidate = folder / p.name
-    if candidate.exists():
-        return candidate
-
-    # Try relative to QUEUE_DIR root (e.g. 'My_Video/video.mp4')
-    candidate2 = QUEUE_DIR / p
-    if candidate2.exists():
-        return candidate2
+    # Quitar el nombre de la carpeta si viene incluido (ej. "MyFolder/file.mp4")
+    rel_path = Path(*p.parts[1:]) if p.parts and p.parts[0] == folder.name else p
+    
+    # Buscar en carpeta del job o en Queue global
+    for root in [folder, QUEUE_DIR]:
+        cand = root / rel_path
+        if cand.exists(): return cand
+        cand_name = root / p.name
+        if cand_name.exists(): return cand_name
 
     raise HTTPException(
         status_code=404,
@@ -287,18 +288,30 @@ def _build_ffmpeg_cmd(
     if video_map:
         cmd += ["-map", video_map]
         
-        # Buscar el bitrate del primer clip activo
+        # 1. Buscar bitrate original para decidir agresividad del encoder
         target_bitrate = 0
         if video_clips:
             first_vp = _resolve_media_path(folder, video_clips[0].media_name, job_id, video_index)
             target_bitrate = _get_video_bitrate(first_vp)
             
+        # 2. Configuración NVENC de Alto Rendimiento (Calidad sobre Velocidad)
+        # Usamos preset p7 (lento pero mejor compresión) y AQ para conservar detalles
+        cmd += ["-c:v", "h264_nvenc", "-preset", "p7", "-spatial-aq", "1", "-temporal-aq", "1", "-pix_fmt", "yuv420p"]
+
+        # 3. Lógica de Calidad Dinámica (CQ)
         if target_bitrate > 0:
-            br_kbps = min(int((target_bitrate * 1.05) / 1000), 10000) # Máximo 10Mbps
-            max_kbps = br_kbps + 500
-            cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", f"{br_kbps}k", "-maxrate:v", f"{max_kbps}k", "-bufsize:v", f"{max_kbps*2}k"]
+            # Si el video original es de muy bajo bitrate (<1Mbps), subimos el CQ para no "inventar" ruido
+            # Si es mayor, bajamos el CQ para preservar la alta fidelidad.
+            orig_kbps = target_bitrate / 1000
+            dynamic_cq = 32 if orig_kbps < 1500 else 24
+            
+            # Limitar bitrate máximo para evitar archivos gigantes (10 Mbps max)
+            max_kbps = min(int(orig_kbps * 2.0), 10000) 
+            cmd += ["-rc", "vbr", "-cq", str(dynamic_cq), "-b:v", "0", "-maxrate:v", f"{max_kbps}k", "-bufsize:v", f"{max_kbps*2}k"]
         else:
-            cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "31", "-b:v", "0"]
+            # Fallback seguro
+            cmd += ["-rc", "vbr", "-cq", "28", "-b:v", "0"]
+
     if audio_map:
         cmd += ["-map", audio_map]
         cmd += ["-c:a", "aac", "-b:a", "192k"]
