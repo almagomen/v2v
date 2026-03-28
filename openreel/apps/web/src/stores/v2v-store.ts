@@ -19,7 +19,7 @@ let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let isImportingBusy = false;
 let isFetchingSpeakers = false;
 
-export type V2VFolderRef = { jobId: string; videoIndex: number; outputName?: string };
+export type V2VFolderRef = { jobId: string; videoIndex: number; outputName?: string; nativeFiles?: string[] };
 
 function loadFolderRefsFromStorage(): Record<string, V2VFolderRef> {
   if (typeof window === "undefined") return {};
@@ -405,7 +405,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                       logicalName: `${folder}/${v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4"}`, 
                       type: 'video', 
                       toTimeline: true, 
-                      trackPrefix: 'V2V',
+                      trackPrefix: 'Video',
                       enabled: !!v.video_only_path 
                     },
                     { 
@@ -414,7 +414,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                       logicalName: `${folder}/no_vocals.wav`, 
                       type: 'audio', 
                       toTimeline: true, 
-                      trackPrefix: 'INST',
+                      trackPrefix: 'INSTRUMENTAL',
                       enabled: true 
                     },
                     { 
@@ -428,15 +428,15 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     { 
                       id: 'vocals_original', 
                       serverFn: 'vocals.wav', 
-                      logicalName: `${folder}/vocals_original.wav`, 
+                      logicalName: `${folder}/vocals.wav`, 
                       type: 'audio', 
                       toTimeline: false, 
                       enabled: true 
                     },
                     { 
                       id: 'video_final', 
-                      serverFn: v.output_filename || v.output_video_path?.split(/[\\/]/).pop() || "video.mp4", 
-                      logicalName: `${folder}/${v.output_filename || "video_final.mp4"}`, 
+                      serverFn: "video_final.mp4", 
+                      logicalName: `${folder}/video_final.mp4`,  
                       type: 'video', 
                       toTimeline: false, 
                       enabled: true 
@@ -526,7 +526,8 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     }
 
                     await autoSaveManager.forceSave(workingProject);
-                    get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index, outputName: v.output_name });
+                    const nativeFiles = filesToImport.map(f => f.name.split("/").pop() || "");
+                    get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index, outputName: v.output_name, nativeFiles });
                     get().setImportStatus(key, "done");
                     if (urlForLog) get().appendUrlLog(urlForLog, `✅ Importación completada por activos.`);
                   }

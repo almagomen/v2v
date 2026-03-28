@@ -66,18 +66,16 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
         speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
         videos_data = []
 
-        def build_entry(idx: int, path: Path, output_name: str, output_path: Path, segs: list, assets: dict, url: str) -> dict:
+        def build_entry(idx: int, path: Path, output_name: str, segs: list, assets: dict, url: str) -> dict:
             """Construye la entrada de video usando sólo el manifiesto de activos."""
             return {
                 "index": idx,
                 "output_name": output_name,
                 "video_path": str(path),
-                "output_video_path": str(output_path),
                 "video_only_path": assets.get("video_only") or "",
                 "instrumental_path": assets.get("no_vocals") or "",
                 "original_audio_path": assets.get("audio_only") or "",
                 "vocals_path": assets.get("vocals") or "",
-                "output_filename": output_path.name,
                 "segments": segs,
                 "url": url,
             }
@@ -130,7 +128,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
 
             if already_done:
                 segments = make_segments(texts)
-                videos_data.append(build_entry(idx, path, output_name, path, segments, assets, r.get("url", "")))
+                videos_data.append(build_entry(idx, path, output_name, segments, assets, r.get("url", "")))
                 update_job(job_id, videos=videos_data, progress=(idx + 0.5) / len(urls))
                 set_url_state(r.get("url", ""), "done", f"Listo (cache): {output_name}", index=idx, output_name=output_name)
                 continue
@@ -152,7 +150,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             # Recargar el manifiesto (register_segment lo actualizó iterativamente).
             assets = load_assets(path.parent)
             segments = make_segments(texts)
-            videos_data.append(build_entry(idx, path, output_name, path, segments, assets, r.get("url", "")))
+            videos_data.append(build_entry(idx, path, output_name, segments, assets, r.get("url", "")))
             update_job(job_id, videos=videos_data, progress=(idx + 1.0) / len(urls))
             set_url_state(r.get("url", ""), "done", f"Listo: {output_name}", index=idx, output_name=output_name)
 

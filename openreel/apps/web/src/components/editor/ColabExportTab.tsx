@@ -52,11 +52,14 @@ interface SavedProject {
 // ----------------------------------------------------------------
 
 /** Determine if a media_name belongs to a V2V folder (already in Colab). */
-function isInV2VFolder(name: string, folderRefs: Record<string, unknown>): boolean {
-  // Manejamos tanto el formato antiguo "folder/file" como el nuevo "folder__file"
-  const norm = name.replace(/\\/g, "/");
+function isInV2VFolder(
+  mediaName: string,
+  folderRefs: Record<string, any>,
+): boolean {
   let folder = "";
   let filename = "";
+
+  const norm = mediaName.replace(/\\/g, "/");
 
   if (norm.includes("__")) {
     const parts = norm.split("__");
@@ -70,18 +73,15 @@ function isInV2VFolder(name: string, folderRefs: Record<string, unknown>): boole
 
   if (!folder || !(folder in folderRefs)) return false;
 
-  // Solo consideramos "en el servidor" los archivos estándar generados por V2V.
-  const isStandardV2V =
-    filename === "video.mp4" ||
-    filename === "video_only.mp4" ||
-    filename === "video_final.mp4" ||
-    filename.startsWith("tts_") ||
-    filename === "no_vocals.wav" ||
-    filename === "original_audio.wav" ||
-    filename === "vocals_original.wav" ||
-    filename === "vocals_only.wav";
+  const ref = folderRefs[folder];
+  
+  // Solo consideramos "en el servidor" los archivos que el Store ya registró como nativos.
+  // (Sin fallback, se asume que si no está en la lista estricta, es un archivo del usuario).
+  if (ref.nativeFiles && Array.isArray(ref.nativeFiles)) {
+    return ref.nativeFiles.includes(filename);
+  }
 
-  return isStandardV2V;
+  return false;
 }
 
 function analyzeProject(
