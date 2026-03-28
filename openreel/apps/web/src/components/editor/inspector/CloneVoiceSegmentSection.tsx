@@ -168,15 +168,18 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const [regenError, setRegenError] = useState<string | null>(null);
   const [regenStatus, setRegenStatus] = useState<string | null>(null);
 
+  const [backendSpeaker, setBackendSpeaker] = useState<string | null>(null);
+
 
   // Determinamos estáticamente qué token buscar (el local o el del filename)
   const activeTokenToResolve = useMemo(() => {
     if (!mediaItem?.name) return null;
     const localData = loadFromLocalStorage(mediaItem.name);
     if (localData) return localData.speaker;
+    if (backendSpeaker) return backendSpeaker;
     if (parsed) return parsed.speakerToken;
     return null;
-  }, [mediaItem?.name, parsed]);
+  }, [mediaItem?.name, parsed, backendSpeaker]);
 
   // Evaluamos la voz seleccionada reactivamente frente al store global de speakers
   useEffect(() => {
@@ -221,6 +224,10 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           setSegmentText(localData.text);
         } else {
           setSegmentText(seg?.text ?? "");
+        }
+        
+        if (seg?.speaker) {
+          setBackendSpeaker(seg.speaker);
         }
       } catch (e) {
         if (cancelled) return;

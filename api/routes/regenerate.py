@@ -70,7 +70,9 @@ def _do_regenerate_segment(
         raise HTTPException(status_code=404, detail="result.pkl no encontrado")
 
     with open(pkl_path, "rb") as f:
-        texts_original, output_name, url, result, transcription, diarization = pickle.load(f)
+        cached_data = pickle.load(f)
+        texts_original, output_name, url, result, transcription, diarization, *rest = cached_data
+        info = rest[0] if rest else {}
 
     if seg_idx < 1 or seg_idx > len(texts_original):
         raise HTTPException(status_code=400, detail="Índice de segmento inválido")
@@ -107,7 +109,7 @@ def _do_regenerate_segment(
         raise HTTPException(status_code=500, detail="No se pudo generar el audio")
 
     with open(pkl_path, "wb") as f:
-        pickle.dump((texts_edited, output_name, url, result, transcription, diarization), f)
+        pickle.dump((texts_edited, output_name, url, result, transcription, diarization, info), f)
 
     return FileResponse(paths_es[0], filename=paths_es[0].name, media_type="audio/wav")
 
@@ -124,7 +126,9 @@ async def regenerate_video(req: RegenerateVideoRequest):
         raise HTTPException(status_code=404, detail="result.pkl no encontrado")
 
     with open(pkl_path, "rb") as f:
-        texts_original, output_name, url, result, transcription, diarization = pickle.load(f)
+        cached_data = pickle.load(f)
+        texts_original, output_name, url, result, transcription, diarization, *rest = cached_data
+        info = rest[0] if rest else {}
 
     texts_edited = []
     changed_indices = []
@@ -164,7 +168,7 @@ async def regenerate_video(req: RegenerateVideoRequest):
         )
 
     with open(pkl_path, "wb") as f:
-        pickle.dump((texts_edited, output_name, url, result, transcription, diarization), f)
+        pickle.dump((texts_edited, output_name, url, result, transcription, diarization, info), f)
 
     seqs_trg_dir = path.parent / "Seqs_trg"
     all_paths_es = sorted(seqs_trg_dir.glob("*.wav"))
