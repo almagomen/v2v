@@ -101,18 +101,6 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             # Leer activos deterministas desde el manifiesto
             assets = load_assets(path.parent)
 
-            # --- Autocorrección para caché viejo / compatibilidad retroactiva ---
-            if not assets.get("video_only") or not assets.get("no_vocals"):
-                from src.assets import update_assets
-                v_only = list(path.parent.glob("*.f*.mp4")) or list(path.parent.glob("*.f*.webm"))
-                if v_only: assets["video_only"] = str(v_only[0])
-                a_only = list(path.parent.glob("*.f*.webm")) or list(path.parent.glob("*.f*.m4a")) or list(path.parent.glob("*_audio.m4a"))
-                if a_only: assets["audio_only"] = str(a_only[0])
-                if (path.parent / "vocals.wav").exists(): assets["vocals"] = str(path.parent / "vocals.wav")
-                if (path.parent / "no_vocals.wav").exists(): assets["no_vocals"] = str(path.parent / "no_vocals.wav")
-                update_assets(path.parent, **assets)
-            # --------------------------------------------------------------------
-
             def make_segments(texts_list: list) -> list:
                 return [
                     {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}

@@ -401,7 +401,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                   const assets: V2VAssetDef[] = [
                     { 
                       id: 'video_only', 
-                      serverFn: v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4", 
+                      serverFn: v.video_only_path?.split(/[\\/]/).pop() || "", 
                       logicalName: `${folder}/${v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4"}`, 
                       type: 'video', 
                       toTimeline: true, 
@@ -410,28 +410,36 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     },
                     { 
                       id: 'instrumental', 
-                      serverFn: 'no_vocals.wav', 
+                      serverFn: v.instrumental_path?.split(/[\\/]/).pop() || "no_vocals.wav", 
                       logicalName: `${folder}/no_vocals.wav`, 
                       type: 'audio', 
                       toTimeline: true, 
                       trackPrefix: 'INSTRUMENTAL',
-                      enabled: true 
+                      enabled: !!v.instrumental_path 
+                    },
+                    { 
+                      id: 'merged_video', 
+                      serverFn: v.video_path?.split(/[\\/]/).pop() || "", 
+                      logicalName: `${folder}/${v.video_path?.split(/[\\/]/).pop() || "merged.mp4"}`, 
+                      type: 'video', 
+                      toTimeline: false, 
+                      enabled: !!v.video_path 
                     },
                     { 
                       id: 'original_audio', 
                       serverFn: v.original_audio_path?.split(/[\\/]/).pop() || "", 
-                      logicalName: `${folder}/${v.original_audio_path?.split(/[\\/]/).pop() || "original_audio.wav"}`, 
+                      logicalName: `${folder}/${v.original_audio_path?.split(/[\\/]/).pop() || "original_audio.webm"}`, 
                       type: 'audio', 
                       toTimeline: false, 
                       enabled: !!v.original_audio_path 
                     },
                     { 
                       id: 'vocals_original', 
-                      serverFn: 'vocals.wav', 
+                      serverFn: v.vocals_path?.split(/[\\/]/).pop() || "vocals.wav", 
                       logicalName: `${folder}/vocals.wav`, 
                       type: 'audio', 
                       toTimeline: false, 
-                      enabled: true 
+                      enabled: !!v.vocals_path 
                     }
                   ];
 

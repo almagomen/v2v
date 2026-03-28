@@ -123,9 +123,7 @@ def download_video(
     opts = {
         "outtmpl": str(output_dir / "%(title)s" / "%(title)s.%(ext)s"),
         "format": f"{video} + {audio}",
-        "merge_output_format": "mp4",
         # keepvideo=True hace que yt-dlp conserve los streams intermedios
-        # (video_only y audio_only) luego de la mezcla con ffmpeg.
         "keepvideo": True,
         "logger": OneLineLogger(),
         "quiet": True,
@@ -150,16 +148,44 @@ def download_video(
     asset_update: dict = {"merged": str(media_path)}
 
     requested = info.get("requested_formats") or []
-    # requested_formats[0] = stream de video (sin audio)
-    # requested_formats[1] = stream de audio (sin video)
-    if len(requested) >= 1:
-        vpath = requested[0].get("filepath") or requested[0].get("filename")
-        if vpath and Path(vpath).exists():
-            asset_update["video_only"] = str(Path(vpath))
-    if len(requested) >= 2:
-        apath = requested[1].get("filepath") or requested[1].get("filename")
-        if apath and Path(apath).exists():
-            asset_update["audio_only"] = str(Path(apath))
+    # yt-dlp requested_formats[0] suele ser el video y [1] el audio en modo dash.
+    # Si bajó un solo archivo (ej format 18), 'requested' podría estar vacío.
+    
+    v_cand = None
+    a_cand = None
+
+    if requested:
+        # Modo estándar: Video + Audio separados
+        v_info = requested[0]
+        a_info = requested[1]
+        v_cand = folder / f"{media_path.stem}.f{v_info['format_id']}.{v_info['ext']}"
+        a_cand = folder / f"{media_path.stem}.f{a_info['format_id']}.{a_info['ext']}"
+    else:
+        # Modo merged (ej. format 18): Hay que separar manualmente para el pipeline
+        v_ext = info.get("ext", "mp4")
+        acodec = info.get("acodec", "").lower()
+        if "mp4a" in acodec or "aac" in acodec: a_ext = "m4a"
+        elif "opus" in acodec: a_ext = "webm"
+        else: a_ext = v_ext 
+        
+        v_cand = folder / f"{media_path.stem}.v{info.get('format_id', '18')}.{v_ext}"
+        a_cand = folder / f"{media_path.stem}.a{info.get('format_id', '18')}.{a_ext}"
+        
+        if not v_cand.exists() or not a_cand.exists():
+            import subprocess
+            print(f"📦 Separando flujos del video merged (fallback ffmpeg -c copy)...")
+            try:
+                # Extraer video sin audio (copy)
+                subprocess.run(["ffmpeg", "-y", "-i", str(media_path), "-map", "0:v", "-c:v", "copy", "-an", str(v_cand)], check=True, capture_output=True)
+                # Extraer audio sin video (copy)
+                subprocess.run(["ffmpeg", "-y", "-i", str(media_path), "-map", "0:a", "-c:a", "copy", "-vn", str(a_cand)], check=True, capture_output=True)
+            except Exception as e:
+                print(f"⚠️ Error en fallback de separación: {e}")
+
+    if v_cand and v_cand.exists():
+        asset_update["video_only"] = str(v_cand)
+    if a_cand and a_cand.exists():
+        asset_update["audio_only"] = str(a_cand)
 
     update_assets(folder, **asset_update)
     print(f"📋 Activos registrados: {list(asset_update.keys())}")

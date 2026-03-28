@@ -454,12 +454,13 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       // Obtenemos el store fresco tras el posible cambio de proyecto
                       let freshStore = useProjectStore.getState();
                       
-                      // 1) Video
-                      const videoMediaName = `${folder}/video.mp4`;
+                      // 1) Video Merged (Original)
+                      const videoRealName = v.video_path?.split(/[\\/]/).pop() || "video_original.mp4";
+                      const videoMediaName = `${folder}/${videoRealName}`;
                       const videoExists = freshStore.project.mediaLibrary.items.some((m: any) => m.name === videoMediaName);
                       
                       if (!videoExists) {
-                        const vblob = await v2vApi.fetchOutputVideoBlob(jobId!, v.index);
+                        const vblob = await v2vApi.fetchFileBlob(jobId!, v.index, videoRealName);
                         const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
                         await freshStore.importMedia(vfile);
                         // Refresh store reference after import
