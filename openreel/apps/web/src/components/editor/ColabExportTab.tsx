@@ -221,8 +221,8 @@ export const ColabExportTab: React.FC = () => {
           folder = norm.split("/")[0];
         }
         
-        const ref = (folderRefs as Record<string, { jobId: string; videoIndex: number }>)[folder];
-        if (ref) return { ...ref, longName: folder };
+        const ref = (folderRefs as Record<string, { jobId: string; videoIndex: number; outputName?: string }>)[folder];
+        if (ref) return { ...ref, longName: ref.outputName || folder };
       }
     }
     return null;
@@ -328,8 +328,9 @@ export const ColabExportTab: React.FC = () => {
           if (acc) return acc;
           if (c.status !== "not_allowed") {
             const folder = c.mediaName.replace(/\\/g, "/").split("/")[0];
-            const ref = (folderRefs as Record<string, { jobId: string; videoIndex: number }>)[folder];
-            return ref ?? null;
+            const ref = (folderRefs as Record<string, { jobId: string; videoIndex: number; outputName?: string }>)[folder];
+            if (ref) return { ...ref, longName: ref.outputName || folder };
+            return null;
           }
           return null;
         }, null);

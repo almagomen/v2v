@@ -33,10 +33,8 @@ class JobLogWriter(io.TextIOBase):
 def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, speaker_name: str) -> None:
     """Run pipeline with stdout redirected to job log."""
     from src.pipeline import process_video_queue, split_all_sequences
-    from src.audio_utils import clone_voice_segments, merge_cloned_audio
-    from src.render import render_video
+    from src.audio_utils import clone_voice_segments
     from src.tts import model_tts
-    import torchaudio
 
     old_stdout = sys.stdout
     try:
@@ -66,17 +64,31 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             update_job(job_id, url_states=updated)
 
         speaker_audio = SPEAKER_OPTIONS.get(speaker_name, speaker_name)
-        output_paths: list[Path] = []
         videos_data = []
 
+        def build_entry(idx: int, path: Path, output_name: str, output_path: Path, segs: list, assets: dict, url: str) -> dict:
+            """Construye la entrada de video usando sólo el manifiesto de activos."""
+            return {
+                "index": idx,
+                "output_name": output_name,
+                "video_path": str(path),
+                "output_video_path": str(output_path),
+                "video_only_path": assets.get("video_only") or "",
+                "instrumental_path": assets.get("no_vocals") or "",
+                "original_audio_path": assets.get("audio_only") or "",
+                "vocals_path": assets.get("vocals") or "",
+                "output_filename": output_path.name,
+                "segments": segs,
+                "url": url,
+            }
+
         for idx, u in enumerate(urls):
-            # Procesa un video a la vez para permitir flujo secuencial URL por URL
             res_list = process_video_queue(
                 [u],
                 translate_lang=translate_lang,
                 on_stage=lambda u, st, msg: set_url_state(u, st, msg),
             )
-            
+
             if not res_list:
                 set_url_state(u, "error", "Error en descarga/transcripción")
                 continue
@@ -87,44 +99,35 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             output_name = r["output_name"]
             transcription = r["transcription"]
             lang = translate_lang if translate_lang else transcription.language
-            output_video_path = path.parent / f"{output_name}.mp4"
 
-            # --- Leer activos deterministas desde el manifiesto ---
+            # Leer activos deterministas desde el manifiesto
             assets = load_assets(path.parent)
 
-            def _build_video_entry(output_path: Path, segs: list) -> dict:
-                """Construye la entrada de video usando sólo el manifiesto."""
-                return {
-                    "index": idx,
-                    "output_name": output_name,
-                    "video_path": str(path),
-                    "output_video_path": str(output_path),
-                    "video_only_path": assets.get("video_only") or "",
-                    "instrumental_path": assets.get("no_vocals") or "",
-                    "original_audio_path": assets.get("audio_only") or "",
-                    "vocals_path": assets.get("vocals") or "",
-                    "output_filename": output_path.name,
-                    "segments": segs,
-                    "url": r.get("url", ""),
-                }
+            def make_segments(texts_list: list) -> list:
+                return [
+                    {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
+                    for i, t in enumerate(texts_list)
+                ]
 
             set_url_state(r.get("url", ""), "tts", "⚡ TTS:", index=idx, output_name=output_name)
 
-            if output_video_path.exists():
-                output_paths.append(output_video_path)
-                segments = [
-                    {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
-                    for i, t in enumerate(texts)
-                ]
-                videos_data.append(_build_video_entry(output_video_path, segments))
+            # ── Caché: el job ya fue procesado antes ──────────────────────────────
+            # Detectamos si los segmentos TTS ya existen como señal de caché completo.
+            seqs_trg = path.parent / "Seqs_trg"
+            already_done = seqs_trg.exists() and any(seqs_trg.glob("vocals_*.wav"))
+
+            if already_done:
+                segments = make_segments(texts)
+                videos_data.append(build_entry(idx, path, output_name, path, segments, assets, r.get("url", "")))
                 update_job(job_id, videos=videos_data, progress=(idx + 0.5) / len(urls))
                 set_url_state(r.get("url", ""), "done", f"Listo (cache): {output_name}", index=idx, output_name=output_name)
                 continue
 
+            # ── Nuevo proceso ─────────────────────────────────────────────────────
             update_job(job_id, status="tts", message=f"Clonando voz: {path.stem} [{idx + 1}/{len(urls)}]")
             split_all_sequences([path])
 
-            paths_es, times, freq = clone_voice_segments(
+            paths_es, _times, _freq = clone_voice_segments(
                 path, texts, lang, speaker_audio, model_tts,
                 slowdown_range=(0.5, 0.8), stretch_target_ratio=0.85,
             )
@@ -133,29 +136,11 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 set_url_state(r.get("url", ""), "error", "Error en TTS")
                 continue
 
-            vocals_es_path = path.with_name("vocals_es.wav")
-            merged = merge_cloned_audio(path.with_name("vocals.wav"), paths_es, times, freq)
-            torchaudio.save(str(vocals_es_path), merged, freq)
-
-            no_vocals_path = path.with_name("no_vocals.wav")
-            if not no_vocals_path.exists():
-                set_url_state(r.get("url", ""), "error", "Error: no_vocals.wav no encontrado")
-                continue
-
-            set_url_state(r.get("url", ""), "audio_ready", "Audios listos para importar", index=idx, output_name=output_name)
-
-            update_job(job_id, status="rendering", message=f"Renderizando video {idx + 1}...")
-            output_path = render_video(path, output_name, vocals_es_path, no_vocals_path, output_dir=path.parent)
-            output_paths.append(output_path)
-
-            # Recargar el manifiesto tras el render (puede haber nuevos activos)
+            # El pipeline termina aquí. El render se hace desde Colab Export.
+            # Recargar el manifiesto (register_segment lo actualizó iterativamente).
             assets = load_assets(path.parent)
-
-            segments = [
-                {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
-                for i, t in enumerate(texts)
-            ]
-            videos_data.append(_build_video_entry(output_path, segments))
+            segments = make_segments(texts)
+            videos_data.append(build_entry(idx, path, output_name, path, segments, assets, r.get("url", "")))
             update_job(job_id, videos=videos_data, progress=(idx + 1.0) / len(urls))
             set_url_state(r.get("url", ""), "done", f"Listo: {output_name}", index=idx, output_name=output_name)
 
@@ -166,8 +151,8 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
         update_job(
             job_id,
             status="done",
-            message=f"Completado: {len(output_paths)} videos",
-            output_paths=[str(p) for p in output_paths],
+            message=f"Completado: {len(videos_data)} videos",
+            output_paths=[v["video_path"] for v in videos_data],
             videos=videos_data,
             progress=1.0,
         )

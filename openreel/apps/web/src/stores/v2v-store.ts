@@ -3,7 +3,7 @@ import { v2vApi, type Segment, type VideoResult, type JobUrlItem, type AudioSegm
 import { useProjectStore } from "./project-store";
 import { createEmptyProject } from "./project";
 import { importMultipleMediaIntoProject } from "../utils/import-media-into-project";
-import { toSafeToken, sanitizeFolderName, importKeyFor } from "../utils/v2v-utils";
+import { toSafeToken, folderNameFromTitle, importKeyFor } from "../utils/v2v-utils";
 import {
   addClipToDetachedProject,
   addTrackAndGetId,
@@ -19,7 +19,7 @@ let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let isImportingBusy = false;
 let isFetchingSpeakers = false;
 
-export type V2VFolderRef = { jobId: string; videoIndex: number };
+export type V2VFolderRef = { jobId: string; videoIndex: number; outputName?: string };
 
 function loadFolderRefsFromStorage(): Record<string, V2VFolderRef> {
   if (typeof window === "undefined") return {};
@@ -377,7 +377,9 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     continue;
                   }
 
-                  const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
+                  // folder: nombre de carpeta SIN hashtags (para paths de sistema)
+                  // v.output_name: título completo CON hashtags (para el render final en Colab)
+                  const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
                   const urlForLog = v.url || "";
                   let workingProject = createEmptyProject(folder, {
                     width: baseProjectSettings.width,
@@ -524,7 +526,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     }
 
                     await autoSaveManager.forceSave(workingProject);
-                    get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index });
+                    get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index, outputName: v.output_name });
                     get().setImportStatus(key, "done");
                     if (urlForLog) get().appendUrlLog(urlForLog, `✅ Importación completada por activos.`);
                   }

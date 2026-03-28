@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback } from "react";
-import { Youtube, Loader2, AlertCircle, Download, Share2, FolderDown } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Share2, FolderDown } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
 import { v2vApi } from "../../lib/v2v-api";
@@ -8,7 +8,7 @@ import { useV2VStore } from "../../stores/v2v-store";
 import { autoSaveManager } from "../../services/auto-save";
 import {
   toSafeToken,
-  sanitizeFolderName,
+  folderNameFromTitle,
   shortProjectToken,
   importKeyFor,
 } from "../../utils/v2v-utils";
@@ -24,16 +24,6 @@ const TRANSLATE_OPTIONS = [
   { value: "it", label: "Italiano" },
 ];
 
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "En cola",
@@ -185,15 +175,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     }
   }, [jobId, selectedVideoIndex, setShareUrl]);
 
-  const handleDownloadZip = useCallback(async () => {
-    if (!jobId) return;
-    try {
-      const blob = await v2vApi.downloadZipBlob(jobId);
-      downloadBlob(blob, "videos_inferidos.zip");
-    } catch (e) {
-      toast.error("Error", e instanceof Error ? e.message : "Error al descargar ZIP");
-    }
-  }, [jobId]);
+
 
   return (
     <ScrollArea className="h-full min-h-0 flex-1 w-full">
@@ -422,7 +404,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                   onClick={async () => {
                     if (!jobId || selectedVideoIndex < 0 || !videos[selectedVideoIndex]) return;
                     const v = videos[selectedVideoIndex];
-                    const folder = sanitizeFolderName(v.output_name || `video_${v.index}`);
+                    const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
                     
                     const currentItems = useV2VStore.getState().urlItems;
                     const pos = currentItems.findIndex(
@@ -503,7 +485,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       await freshStore.forceSave();
                       
                       // 3) Vincular carpeta al Job para que AssetsPanel la reconozca
-                      useV2VStore.getState().setFolderRef(folder, { jobId: jobId!, videoIndex: v.index });
+                      useV2VStore.getState().setFolderRef(folder, { jobId: jobId!, videoIndex: v.index, outputName: v.output_name });
 
                       toast.success("Re-importación completa", `Archivos en proyecto "${projectTitle}".`);
                     } catch (e) {
@@ -522,18 +504,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
               </div>
             </div>
 
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                className="flex-1"
-                onClick={handleDownloadZip}
-                disabled={!jobId || isProcessing}
-              >
-                <Download size={12} className="mr-1" />
-                Descargar ZIP
-              </Button>
-            </div>
+
 
             {shareUrl && (
               <div className="p-2 rounded bg-background-tertiary">

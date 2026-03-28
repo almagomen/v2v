@@ -18,6 +18,23 @@ export function sanitizeFolderName(name: string): string {
   return cleaned || "Video";
 }
 
+/**
+ * Deriva el nombre de carpeta / proyecto a partir del output_name generado por IA.
+ * Elimina los hashtags (#palabra) ya que son para redes sociales, no para carpetas.
+ * El output_name completo (con hashtags) se conserva como título del render final.
+ *
+ * Ejemplo:
+ *   "¡Truco de Python! 🤫 #Programacion #Python" → "¡Truco de Python! 🤫"
+ */
+export function folderNameFromTitle(outputName: string): string {
+  const withoutHashtags = (outputName || "Video")
+    .replace(/#\S+/g, "")   // quitar #hashtags
+    .replace(/\s{2,}/g, " ") // colapsar espacios dobles
+    .trim();
+  // Luego aplicar el saneado de caracteres inválidos en paths
+  return sanitizeFolderName(withoutHashtags) || "Video";
+}
+
 export function shortProjectToken(name: string): string {
   const s = (name || "video")
     .normalize("NFKD")
