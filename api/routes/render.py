@@ -326,7 +326,7 @@ async def render_batch(req: RenderBatchRequest):
         try:
             folder = _job_folder(item.job_id, item.video_index)
             safe_name = item.output_name.replace("/", "_").replace("\\", "_")
-            output_path = folder / f"_export_{safe_name}.mp4"
+            output_path = folder / f"{safe_name}.mp4"
 
             cmd = _build_ffmpeg_cmd(item.clips, folder, output_path, item.job_id, item.video_index)
             result = subprocess.run(cmd, capture_output=True, text=True)
