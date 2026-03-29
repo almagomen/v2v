@@ -85,6 +85,8 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                 [u],
                 translate_lang=translate_lang,
                 on_stage=lambda u, st, msg: set_url_state(u, st, msg),
+                current_idx=idx + 1,
+                total_count=len(urls),
             )
 
             if not res_list:

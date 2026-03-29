@@ -18,6 +18,8 @@ def process_video_queue(
     urls: list[str],
     translate_lang: Union[bool, str] = False,
     on_stage: Optional[callable] = None,
+    current_idx: Optional[int] = None,
+    total_count: Optional[int] = None,
 ) -> list[dict]:
     """
     Procesa una cola de videos: descarga, transcribe y traduce.
@@ -25,10 +27,12 @@ def process_video_queue(
     """
     results = []
     for idx, u in enumerate(urls, 1):
-        print(f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
+        display_idx = current_idx if current_idx is not None else idx
+        display_total = total_count if total_count is not None else len(urls)
+        print(f"⚙️ Procesando: {u}  [{display_idx}/{display_total}]")
         if on_stage:
             try:
-                on_stage(u, "downloading", f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
+                on_stage(u, "downloading", f"⚙️ Procesando: {u}  [{display_idx}/{display_total}]")
             except Exception:
                 pass
         try:

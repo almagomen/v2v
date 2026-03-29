@@ -389,7 +389,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 >
                   {videos.map((v: any, i: number) => (
                     <option key={i} value={i}>
-                      {v.output_name}
+                      {i + 1}. {v.output_name}
                     </option>
                   ))}
                 </select>
@@ -407,7 +407,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       (it) => it.url === v.url && it.index === v.index,
                     );
                     const seq = pos >= 0 ? pos + 1 : v.index + 1;
-                    const projectTitle = `${seq}. TTS ${shortProjectToken(v.output_name || folder)}`;
+                    const projectTitle = `${seq}. V2V ${shortProjectToken(v.output_name || folder)}`;
                     
                     setIsProcessing(true);
                     try {

@@ -41,8 +41,9 @@ export function shortProjectToken(name: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^A-Za-z0-9._ -]+/g, " ")
     .trim();
-  const firstWords = s.split(/\s+/).filter(Boolean).slice(0, 2).join(" ");
-  const compact = firstWords.replace(/\s+/g, "_").slice(0, 16);
+  const words = s.split(/\s+/).filter(Boolean).slice(0, 3);
+  const firstWords = words.join(" ");
+  const compact = firstWords.replace(/\s+/g, "_").slice(0, 24);
   return compact || "video";
 }
 
