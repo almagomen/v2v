@@ -472,19 +472,26 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
 
       {isAudio && (
         <>
-          <div className="absolute inset-0 flex items-center opacity-50 px-1 pointer-events-none">
+          <div className="absolute inset-x-0 inset-y-0 h-full overflow-hidden opacity-50 pointer-events-none">
             {mediaItem?.waveformData ? (
               <svg
-                className="w-full h-full"
+                style={{
+                  width: `${(mediaItem.metadata.duration || clip.duration) * pixelsPerSecond}px`,
+                  transform: `translateX(-${(clip.inPoint || 0) * pixelsPerSecond}px)`,
+                }}
+                className="h-full"
+                viewBox={`0 0 ${(mediaItem.metadata.duration || clip.duration) * pixelsPerSecond} 40`}
                 preserveAspectRatio="none"
-                viewBox="0 0 100 40"
               >
                 <path
-                  d={generateWaveformPath(mediaItem.waveformData, 100)}
+                  d={generateWaveformPath(
+                    mediaItem.waveformData,
+                    Math.floor((mediaItem.metadata.duration || clip.duration) * pixelsPerSecond)
+                  )}
                   stroke="currentColor"
                   className="text-blue-400"
                   fill="none"
-                  strokeWidth="1"
+                  strokeWidth="1.5"
                   vectorEffect="non-scaling-stroke"
                 />
               </svg>

@@ -176,7 +176,7 @@ export async function importMultipleMediaIntoProject(
     try {
       const isLargeFile = file.size > 50 * 1024 * 1024;
       // En modo 'quick', saltamos generación de waveform para ganar velocidad
-      const importResult = await mediaBridge.importFile(file, !quick, quick || isLargeFile);
+      const importResult = await mediaBridge.importFile(file, true, quick || isLargeFile);
 
       if (!importResult.success || !importResult.media) {
         errors.push({ fileName: file.name, message: importResult.error || "Import failed" });
