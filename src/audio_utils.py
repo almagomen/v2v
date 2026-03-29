@@ -77,17 +77,6 @@ def clone_voice_segments(
         duration_ratio = dur_es / dur_en if dur_en > 0 else 0
         print(f"{idx:2d}. ", end="")
 
-        # if duration_ratio > 1.0:
-        #     print(f"Fast: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
-        #     target_samples = int(dur_en * rate)
-        #     arr = adjust_audio_duration(arr, target_samples, rate)
-        # elif slowdown_range and slowdown_range[0] < duration_ratio < slowdown_range[1]:
-        #     target_dur_sec = dur_es + (dur_en - dur_es) * stretch_target_ratio
-        #     print(f"Slow: {dur_es:5.2f}s → {target_dur_sec:5.2f}s", end=" ")
-        #     target_samples = int(target_dur_sec * rate)
-        #     arr = adjust_audio_duration(arr, target_samples, rate)
-        # else:
-        #     print(f"Stay: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
         if slowdown_range and stretch_target_ratio != 1.0:
             if duration_ratio > 1.0:
                 print(f"Fast: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")

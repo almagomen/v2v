@@ -107,7 +107,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
                     for i, t in enumerate(texts_list)
                 ]
 
-            set_url_state(r.get("url", ""), "tts", "⚡ TTS:", index=idx, output_name=output_name)
+            set_url_state(r.get("url", ""), "tts", "TTS:", index=idx, output_name=output_name)
 
             # ── Caché: el job ya fue procesado antes ──────────────────────────────
             # Detectamos si los segmentos TTS ya existen como señal de caché completo.
@@ -124,6 +124,8 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             # ── Nuevo proceso ─────────────────────────────────────────────────────
             update_job(job_id, status="tts", message=f"Clonando voz: {path.stem} [{idx + 1}/{len(urls)}]")
             split_all_sequences([path])
+
+            print("⚡ TTS:\n")
 
             paths_es, _times, _freq = clone_voice_segments(
                 path, texts, lang, speaker_audio, model_tts,
