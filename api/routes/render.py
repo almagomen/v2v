@@ -106,27 +106,6 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
     )
 
 
-def _get_video_bitrate(path: Path) -> int:
-    """Intenta extraer la tasa de bits (kbps) del archivo original con ffprobe."""
-    import subprocess
-    import json
-    try:
-        cmd = ["ffprobe", "-v", "error", "-show_entries", "format=bit_rate:stream=bit_rate", "-of", "json", str(path)]
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        data = json.loads(res.stdout)
-        
-        streams = data.get("streams", [])
-        if streams and "bit_rate" in streams[0] and streams[0]["bit_rate"] != "N/A":
-            return int(streams[0]["bit_rate"])
-            
-        fmt = data.get("format", {})
-        if "bit_rate" in fmt and fmt["bit_rate"] != "N/A":
-            return int(fmt["bit_rate"])
-    except Exception as e:
-        print(f"Error extracting bitrate for {path}: {e}")
-    return 0
-
-
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -287,30 +266,17 @@ def _build_ffmpeg_cmd(
 
     if video_map:
         cmd += ["-map", video_map]
-        
-        # 1. Buscar bitrate original para decidir agresividad del encoder
-        # target_bitrate = 0
-        # if video_clips:
-        #     first_vp = _resolve_media_path(folder, video_clips[0].media_name, job_id, video_index)
-        #     target_bitrate = _get_video_bitrate(first_vp)
-            
-        # 2. Configuración NVENC de Alto Rendimiento (Calidad sobre Velocidad)
-        # Usamos preset p7 (lento pero mejor compresión) y AQ para conservar detalles
-        cmd += ["-c:v", "h264_nvenc", "-preset", "p7", "-spatial-aq", "1", "-temporal-aq", "1", "-pix_fmt", "yuv420p"]
-
-        # 3. Lógica de Calidad Dinámica (CQ)
-        # if target_bitrate > 0:
-        #     # Si el video original es de muy bajo bitrate (<1Mbps), subimos el CQ para no "inventar" ruido
-        #     # Si es mayor, bajamos el CQ para preservar la alta fidelidad.
-        #     orig_kbps = target_bitrate / 1000
-        #     dynamic_cq = 32 if orig_kbps < 1500 else 24
-            
-        #     # Limitar bitrate máximo para evitar archivos gigantes (10 Mbps max)
-        #     max_kbps = min(int(orig_kbps * 2.0), 10000) 
-        #     cmd += ["-rc", "vbr", "-cq", str(dynamic_cq), "-b:v", "0", "-maxrate:v", f"{max_kbps}k", "-bufsize:v", f"{max_kbps*2}k"]
-        # else:
-        #     # Fallback seguro
-        #     cmd += ["-rc", "vbr", "-cq", "28", "-b:v", "0"]
+        # Configuración simplificada de Máxima Calidad:
+        # preset p7 + cq 19 + b:v 0 = Alta fidelidad constante sin importar el peso
+        cmd += [
+            "-c:v", "h264_nvenc", 
+            "-preset", "p7", 
+            "-rc", "vbr", 
+            "-cq", "19", 
+            "-b:v", "0", 
+            "-spatial-aq", "1", 
+            "-pix_fmt", "yuv420p"
+        ]
 
     if audio_map:
         cmd += ["-map", audio_map]
