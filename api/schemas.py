@@ -77,6 +77,7 @@ class RegenerateSegmentRequest(BaseModel):
     end: float
     translate_lang: Optional[str] = None
     speaker: str = "mrbeast_lmnt"
+    speed: float = Field(1.0, description="Factor de velocidad (0.5 a 2.0)")
 
 
 class RegenerateVideoRequest(BaseModel):
@@ -85,6 +86,13 @@ class RegenerateVideoRequest(BaseModel):
     segments: list[SegmentSchema]
     translate_lang: Optional[str] = None
     speaker: str = "mrbeast_lmnt"
+
+
+class ApplySpeedRequest(BaseModel):
+    job_id: Optional[str] = Field(None, description="ID del job")
+    video_index: int = Field(0, description="Índice del video en el job")
+    seg_idx: int = Field(..., ge=1)
+    speed: float = Field(..., description="Factor de velocidad (0.5 a 2.0)")
 
 
 class SpeakerOption(BaseModel):

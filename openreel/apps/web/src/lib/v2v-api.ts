@@ -217,7 +217,8 @@ export const v2vApi = {
     start: number,
     end: number,
     translateLang: string | null,
-    speaker: string
+    speaker: string,
+    speed: number = 1.0
   ): Promise<Blob> {
     const res = await fetch(url("/api/regenerate-segment"), {
       method: "POST",
@@ -231,6 +232,7 @@ export const v2vApi = {
         end,
         translate_lang: translateLang,
         speaker,
+        speed,
       }),
     });
     if (!res.ok) {
@@ -263,6 +265,29 @@ export const v2vApi = {
       throw new Error(err.detail || "Error al regenerar video");
     }
     return readJsonOrThrow<{ output_path: string; filename: string }>(res);
+  },
+
+  async applyAudioSpeed(
+    jobId: string,
+    videoIndex: number,
+    segIdx: number,
+    speed: number
+  ): Promise<Blob> {
+    const res = await fetch(url("/api/apply-speed"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: jobId,
+        video_index: videoIndex,
+        seg_idx: segIdx,
+        speed,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al aplicar velocidad al audio");
+    }
+    return res.blob();
   },
 
   async shareToCatbox(jobId: string, videoIndex: number): Promise<string> {

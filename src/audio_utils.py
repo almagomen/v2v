@@ -43,6 +43,7 @@ def clone_voice_segments(
     only_indices: Optional[list[int]] = None,
     slowdown_range: Optional[Tuple[float, float]] = None,
     stretch_target_ratio: float = 1.0,
+    speed: float = 1.0,
     **kwargs,
 ) -> Tuple[list[Path], list[int], int]:
     seqs_src_dir = path.parent / "Seqs_src"
@@ -79,16 +80,22 @@ def clone_voice_segments(
 
         if slowdown_range and stretch_target_ratio != 1.0:
             if duration_ratio > 1.0:
-                print(f"Fast: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
+                print(f"{(dur_es/dur_en):.2f}x: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
                 target_samples = int(dur_en * rate)
                 arr = adjust_audio_duration(arr, target_samples, rate)
             elif slowdown_range[0] < duration_ratio < slowdown_range[1]:
                 target_dur_sec = dur_es + (dur_en - dur_es) * stretch_target_ratio
-                print(f"Slow: {dur_es:5.2f}s → {target_dur_sec:5.2f}s", end=" ")
+                print(f"{(dur_es/target_dur_sec):.2f}x: {dur_es:5.2f}s → {target_dur_sec:5.2f}s", end=" ")
                 target_samples = int(target_dur_sec * rate)
                 arr = adjust_audio_duration(arr, target_samples, rate)
             else:
-                print(f"Stay: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
+                print(f"{(dur_es/dur_en):.2f}x: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
+        
+        # Aplicar speed manual del usuario si es distinto de 1.0 y no se aplicó stretch automático
+        if speed != 1.0:
+            target_samples = int(arr.shape[-1] / speed)
+            print(f"Speed manual: {speed}x -> {target_samples} samples", end=" ")
+            arr = adjust_audio_duration(arr, target_samples, rate)
 
         print(f" {text}")
 

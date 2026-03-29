@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from api.job_store import get_job
-from api.schemas import RegenerateSegmentRequest, RegenerateVideoRequest, SegmentSchema
+from api.schemas import RegenerateSegmentRequest, RegenerateVideoRequest, SegmentSchema, ApplySpeedRequest
 from api.service import SPEAKER_OPTIONS
 
 router = APIRouter(prefix="/api", tags=["regenerate"])
@@ -48,7 +48,7 @@ async def regenerate_segment(req: RegenerateSegmentRequest):
     else:
         raise HTTPException(status_code=400, detail="Proporciona job_id o video_path")
     return _do_regenerate_segment(
-        path, req.seg_idx, req.text, req.start, req.end, req.translate_lang, req.speaker
+        path, req.seg_idx, req.text, req.start, req.end, req.translate_lang, req.speaker, req.speed
     )
 
 
@@ -60,6 +60,7 @@ def _do_regenerate_segment(
     end: float,
     translate_lang: str | None,
     speaker: str,
+    speed: float = 1.0,
 ):
     from src.pipeline import split_audio_sequences
     from src.audio_utils import clone_voice_segments
@@ -103,6 +104,7 @@ def _do_regenerate_segment(
         speaker_audio,
         model_tts,
         only_indices=[seg_idx],
+        speed=speed,
     )
 
     if not paths_es:
@@ -112,6 +114,43 @@ def _do_regenerate_segment(
         pickle.dump((texts_edited, output_name, url, result, transcription, diarization, info), f)
 
     return FileResponse(paths_es[0], filename=paths_es[0].name, media_type="audio/wav")
+
+
+@router.post("/apply-speed")
+async def apply_speed(req: ApplySpeedRequest):
+    """Aplica velocidad a un segmento de audio existente sin regenerar TTS."""
+    import torchaudio
+    from src.audio_utils import adjust_audio_duration
+
+    path = _get_video_path_from_job(req.job_id, req.video_index)
+    seqs_trg_dir = path.parent / "Seqs_trg"
+    vocals_src = path.with_name("vocals.wav")
+    
+    # El nombre del archivo se deduce por convención: vocals_{idx:04d}.wav para src
+    # Pero aquí necesitamos el target que ya fue generado una vez: tts_..._seg.wav
+    # Lo más seguro es buscarlo en el Seqs_trg según el índice
+    possible_files = list(seqs_trg_dir.glob(f"*_{req.seg_idx:04d}.wav"))
+    if not possible_files:
+        # Intenta tts_*_seg.wav
+        possible_files = list(seqs_trg_dir.glob(f"tts_*_{req.seg_idx:04d}.wav"))
+        
+    if not possible_files:
+        raise HTTPException(status_code=404, detail=f"No se encontró el audio del segmento {req.seg_idx}")
+    
+    audio_path = possible_files[0]
+    arr, rate = torchaudio.load(str(audio_path))
+    
+    # Aplicar la velocidad
+    # atempo=1.5 -> target_duration = original_duration / 1.5
+    # En adjust_audio_duration pasamos target_duration_samples
+    target_samples = int(arr.shape[-1] / req.speed)
+    
+    # Usamos la lógica de adjust_audio_duration que internamente usa atempo
+    arr_new = adjust_audio_duration(arr, target_samples, rate)
+    
+    torchaudio.save(str(audio_path), arr_new, sample_rate=rate)
+    
+    return FileResponse(audio_path, filename=audio_path.name, media_type="audio/wav")
 
 
 @router.post("/regenerate-video")
