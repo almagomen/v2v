@@ -365,10 +365,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
               {(() => {
                 let out = log || "";
 
-                // Antes de la primera tanda de segmentos TTS.
-                // (Sin tokens [STATE:...] en pantalla)
-                // out = out.replace(/^(\s*)0\. Fast:/gm, "$1⚡ TTS:\n$10. Fast:");
-
                 // Import-only: mostramos lo que se registra en `urlLogs` (sin [STATE:...]).
                 const importText = urlItems
                   .map((it: any) => (it.url ? urlLogs[it.url] || "" : ""))

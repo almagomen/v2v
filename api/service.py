@@ -126,11 +126,11 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             split_all_sequences([path])
 
             print("⚡ TTS:")
-
             paths_es, _times, _freq = clone_voice_segments(
                 path, texts, lang, speaker_audio, model_tts,
                 slowdown_range=(0.5, 0.8), stretch_target_ratio=0.85,
             )
+            print("\n")
 
             if not paths_es:
                 set_url_state(r.get("url", ""), "error", "Error en TTS")
