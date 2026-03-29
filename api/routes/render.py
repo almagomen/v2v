@@ -267,14 +267,13 @@ def _build_ffmpeg_cmd(
     if video_map:
         cmd += ["-map", video_map]
         # Configuración simplificada de Máxima Calidad:
-        # preset p7 + cq 19 + b:v 0 = Alta fidelidad constante sin importar el peso
         cmd += [
             "-c:v", "h264_nvenc", 
+            "-profile:v", "high",
             "-preset", "p7", 
             "-rc", "vbr", 
-            "-cq", "19", 
-            "-b:v", "0", 
-            "-spatial-aq", "1", 
+            "-cq", "26", 
+            "-multipass", "fullres", 
             "-pix_fmt", "yuv420p"
         ]
 
