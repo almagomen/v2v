@@ -371,6 +371,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                           )}
                       </td>
                       <td className="px-2 py-1">
+                        <span
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded ${statusToBadgeClass(it.status)}`}
+                        >
+                          {STATUS_LABEL[it.status] || it.status}
                         </span>
                       </td>
                       <td className="px-2 py-1 text-center">

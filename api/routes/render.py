@@ -15,6 +15,7 @@ from api.job_store import get_job
 from src.config import QUEUE_DIR
 from src.assets import load_assets
 from src.download import to_safe_name
+from src.edit_utils import get_video_bitrate
 
 router = APIRouter(prefix="/api", tags=["render"])
 
@@ -274,14 +275,32 @@ def _build_ffmpeg_cmd(
 
     if video_map:
         cmd += ["-map", video_map]
-        # Configuración simplificada de Máxima Calidad:
+        
+        # --- Lógica de Bitrate Dinámico ---
+        # Intentamos obtener el bitrate del video original para ser fieles a la fuente
+        assets = load_assets(folder)
+        orig_path = assets.get("video_only") or assets.get("merged")
+        orig_bitrate = get_video_bitrate(orig_path) if orig_path else 0
+        
+        # Convertimos a Kbps para FFmpeg. Límites: 800k min, 8000k max.
+        # Si no se detecta (0), usamos 2000k como valor seguro por defecto.
+        target_k = max(800, min(int(orig_bitrate / 1000), 8000)) if orig_bitrate > 0 else 2000
+        max_k = int(target_k * 1.5)
+        buf_k = int(target_k * 2.0)
+
+        # Configuración optimizada para Peso/Calidad (NVENC):
         cmd += [
             "-c:v", "h264_nvenc", 
             "-profile:v", "high",
-            "-preset", "p7", 
-            "-rc", "vbr", 
-            "-cq", "26", 
-            "-multipass", "fullres", 
+            "-preset", "p7",            # Máximo análisis de calidad
+            "-rc", "vbr",               # Variable Bit Rate
+            "-cq", "28",                # Calidad constante balanceada para peso
+            "-b:v", f"{target_k}k",      # Bitrate objetivo dinámico
+            "-maxrate:v", f"{max_k}k",   # Límite máximo dinámico (1.5x)
+            "-bufsize:v", f"{buf_k}k",   # Buffer dinámico (2x)
+            "-multipass", "fullres",    # Análisis detallado multipass
+            "-spatial-aq", "1",         # Adaptive Quantization espacial
+            "-temporal-aq", "1",        # Adaptive Quantization temporal
             "-pix_fmt", "yuv420p"
         ]
 
