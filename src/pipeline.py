@@ -53,8 +53,17 @@ def process_video_queue(
                                         on_stage(u, "cached", f"En caché: {folder.name}")
                                     except Exception:
                                         pass
-                                translated_result, output_name, url, result, transcription, diarization, *rest = cached_data
-                                info = rest[0] if rest else {}
+                                # pkl antiguo: (translated_result, output_name, url, result, transcription, diarization)
+                                # pkl nuevo: (translated_result, output_name, url, result, transcription, diarization, info)
+                                if len(cached_data) >= 7:
+                                    translated_result, output_name, url, result, transcription, diarization, info, *rest = cached_data
+                                else:
+                                    translated_result, output_name, url, result, transcription, diarization, *rest = cached_data
+                                    info = {}
+                                
+                                # Asegurar que info es un dict
+                                if not isinstance(info, dict):
+                                    info = {}
                                 
                                 # Encontrar el archivo de video original (.mp4) dentro de la carpeta
                                 # yt-dlp lo guarda como folder_name.mp4 dentro de folder_name/
@@ -90,8 +99,15 @@ def process_video_queue(
                 print(f"♻️ Cargando caché: {path.name}")
                 with open(output_file, "rb") as f:
                     cached_data = pickle.load(f)
-                    translated_result, output_name, url, result, transcription, diarization, *rest = cached_data
-                    info = rest[0] if rest else {}
+                    # Compatibilidad con versiones antiguas de pkl
+                    if len(cached_data) >= 7:
+                        translated_result, output_name, url, result, transcription, diarization, info, *rest = cached_data
+                    else:
+                        translated_result, output_name, url, result, transcription, diarization, *rest = cached_data
+                        info = {}
+                    
+                    if not isinstance(info, dict):
+                        info = {}
                 
                 results.append({
                     "path": path,
@@ -115,8 +131,10 @@ def process_video_queue(
                     on_stage(u, "transcribing", "📝 Transcribiendo (Whisper + diarización)...")
                 except Exception:
                     pass
+            # Asegurar que info es dict antes de llamar a .get() (falla si viene de caché antigua corrupta)
+            safe_title = info.get("title") if isinstance(info, dict) else None
             translated_result, output_name, result, transcription, diarization = run_main(
-                path, u, translate=translate_lang, title=info.get("title")
+                path, u, translate=translate_lang, title=safe_title
             )
             if translate_lang:
                 print("🔤 Traduciendo texto con Gemini...")
