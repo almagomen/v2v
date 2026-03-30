@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from api.job_store import get_job
 from src.config import QUEUE_DIR
-from src.assets import load_assets
+from src.assets import load_assets, update_assets
 from src.download import to_safe_name
 from src.edit_utils import get_video_bitrate
 
@@ -167,6 +167,10 @@ async def upload_media(
     dest = target_dir / safe_name
     content = await file.read()
     dest.write_bytes(content)
+    
+    # Registrar el archivo en el manifiesto para que el renderizador lo encuentre
+    update_assets(folder, **{safe_name: str(dest)})
+
     return {"media_name": f"{subfolder}/{safe_name}" if subfolder else safe_name}
 
 
