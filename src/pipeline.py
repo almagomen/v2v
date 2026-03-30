@@ -43,24 +43,9 @@ def process_video_queue(
                 pkl_file = folder / "result.pkl"
                 if pkl_file.exists():
                     try:
-                        with open(pkl_file, "rb") as f:
-                            cached_data = pickle.load(f)
-                            # pkl: (translated_result, output_name, url, result, transcription, diarization)
-                            if len(cached_data) >= 3 and cached_data[2] == u:
-                                print(f"♻️ Link en caché: {folder.name}")
-                                if on_stage:
-                                    try:
-                                        on_stage(u, "cached", f"En caché: {folder.name}")
-                                    except Exception:
-                                        pass
-                                # Recuperar info con validación estricta de tipo
-                                info = {}
-                                if len(cached_data) >= 7:
-                                    potential_info = cached_data[6]
-                                    if isinstance(potential_info, dict):
-                                        info = potential_info
-                                
-                                translated_result, output_name, url, result, transcription, diarization = cached_data[:6]
+                                # Carga de datos procesados (Estructura: translated_result, output_name, url, result, transcription, diarization, info)
+                                translated_result, output_name, url, result, transcription, diarization, info, *extra = pickle.load(f)
+                                if not isinstance(info, dict): info = {}
                                 
                                 # Encontrar el archivo de video original (.mp4) dentro de la carpeta
                                 # yt-dlp lo guarda como folder_name.mp4 dentro de folder_name/
@@ -95,15 +80,9 @@ def process_video_queue(
             if output_file.exists():
                 print(f"♻️ Cargando caché: {path.name}")
                 with open(output_file, "rb") as f:
-                    cached_data = pickle.load(f)
-                    # Recuperar info con validación estricta de tipo
-                    info = {}
-                    if len(cached_data) >= 7:
-                        potential_info = cached_data[6]
-                        if isinstance(potential_info, dict):
-                            info = potential_info
-                    
-                    translated_result, output_name, url, result, transcription, diarization = cached_data[:6]
+                    # Carga directa de la nueva estructura de 7 campos
+                    translated_result, output_name, url, result, transcription, diarization, info, *extra = pickle.load(f)
+                    if not isinstance(info, dict): info = {}
                 
                 results.append({
                     "path": path,
@@ -127,11 +106,8 @@ def process_video_queue(
                     on_stage(u, "transcribing", "📝 Transcribiendo (Whisper + diarización)...")
                 except Exception:
                     pass
-            # Asegurar info dict tipo antes de run_main
-            if not isinstance(info, dict):
-                info = {}
-            
-            safe_title = info.get("title")
+            # Uso del título original para la visualización en el frontend
+            safe_title = info.get("title") if isinstance(info, dict) else None
             translated_result, output_name, result, transcription, diarization = run_main(
                 path, u, translate=translate_lang, title=safe_title
             )
@@ -215,7 +191,8 @@ def split_all_sequences(video_paths: list[Path]) -> None:
             print(f"⚠️ Saltando {path.stem}: no hay archivo de textos")
             continue
         with open(texts_file, "rb") as f:
-            texts, output_name, url, result, transcription, diarization, *rest = pickle.load(f)
+            # Sincronización con el nuevo formato de 7 campos en todos los procesos
+            texts, output_name, url, result, transcription, diarization, info, *rest = pickle.load(f)
         split_audio_sequences(
             audio_path=path.with_name("vocals.wav"),
             texts=texts,

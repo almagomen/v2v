@@ -132,13 +132,7 @@ def download_video(
 
     cookies_file = (DRIVE_DIR / "cookies.txt") if DRIVE_DIR else None
 
-    video = "bv[vcodec^=avc1]"
-    if resolution:
-        video += f"[width<={resolution}]"
-    audio = f"ba[language^={language}]" if language else "ba"
-
-    cookies_file = (DRIVE_DIR / "cookies.txt") if DRIVE_DIR else None
-
+    # Configuración de video/audio única
     video = "bv[vcodec^=avc1]"
     if resolution:
         video += f"[width<={resolution}]"
