@@ -285,7 +285,7 @@ def _build_ffmpeg_cmd(
         # Convertimos a Kbps para FFmpeg. Límites: 800k min, 8000k max.
         # Si no se detecta (0), usamos 2000k como valor seguro por defecto.
         target_k = max(800, min(int(orig_bitrate / 1000), 8000)) if orig_bitrate > 0 else 2000
-        max_k = int(target_k * 1.5)
+        max_k = int(target_k * 1.1)
         buf_k = int(target_k * 2.0)
 
         # Configuración optimizada para Peso/Calidad (NVENC):

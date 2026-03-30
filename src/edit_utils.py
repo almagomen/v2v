@@ -110,10 +110,10 @@ def get_video_bitrate(file_path: Union[str, Path]) -> int:
         return 0
 
     try:
-        # 1. Intentar obtener el bitrate directo del stream de video
+        # 1. Intentar obtener el bitrate directo del video
         cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=bit_rate",
+            "ffprobe", "-v", "error", 
+            "-show_entries", "format=bit_rate",
             "-of", "default=noprint_wrappers=1:nokey=1",
             file_path
         ]
