@@ -140,6 +140,8 @@ def process_video_queue(
                 "cached": False
             })
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"❌ Error procesando {u}: {e}\n")
             if on_stage:
                 try:
