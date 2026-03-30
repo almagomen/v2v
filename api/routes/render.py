@@ -13,7 +13,8 @@ from pydantic import BaseModel
 
 from api.job_store import get_job
 from src.config import QUEUE_DIR
-from src.assets import load_assets # <--- Nueva lógica de activos
+from src.assets import load_assets
+from src.download import to_safe_name
 
 router = APIRouter(prefix="/api", tags=["render"])
 
@@ -85,24 +86,14 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
             path = Path(seg_path_str)
             if path.exists(): return path
 
-    # 4. Fallbacks (Búsqueda manual si no está en el manifiesto)
+    # Fallback solo para rutas absolutas existentes
     p = Path(media_name)
     if p.is_absolute() and p.exists():
         return p
 
-    # Quitar el nombre de la carpeta si viene incluido (ej. "MyFolder/file.mp4")
-    rel_path = Path(*p.parts[1:]) if p.parts and p.parts[0] == folder.name else p
-    
-    # Buscar en carpeta del job o en Queue global
-    for root in [folder, QUEUE_DIR]:
-        cand = root / rel_path
-        if cand.exists(): return cand
-        cand_name = root / p.name
-        if cand_name.exists(): return cand_name
-
     raise HTTPException(
         status_code=404,
-        detail=f"Archivo no encontrado en el servidor: {media_name}",
+        detail=f"Archivo no encontrado en el manifiesto del job: {media_name}. Por favor, vuelve a procesar el video si es antiguo.",
     )
 
 
@@ -291,7 +282,7 @@ async def render_timeline(req: RenderTimelineRequest):
     import subprocess
 
     folder = _job_folder(req.job_id, req.video_index)
-    safe_name = req.output_name.replace("/", "_").replace("\\", "_")
+    safe_name = to_safe_name(req.output_name)
     output_path = folder / f"_export_{safe_name}.mp4"
 
     cmd = _build_ffmpeg_cmd(req.clips, folder, output_path, req.job_id, req.video_index)
@@ -325,7 +316,7 @@ async def render_batch(req: RenderBatchRequest):
     for item in req.renders:
         try:
             folder = _job_folder(item.job_id, item.video_index)
-            safe_name = item.output_name.replace("/", "_").replace("\\", "_")
+            safe_name = to_safe_name(item.output_name)
             output_path = folder / f"{safe_name}.mp4"
 
             cmd = _build_ffmpeg_cmd(item.clips, folder, output_path, item.job_id, item.video_index)

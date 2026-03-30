@@ -71,9 +71,8 @@ def _do_regenerate_segment(
         raise HTTPException(status_code=404, detail="result.pkl no encontrado")
 
     with open(pkl_path, "rb") as f:
-        cached_data = pickle.load(f)
-        texts_original, output_name, url, result, transcription, diarization, *rest = cached_data
-        info = rest[0] if rest else {}
+        # Carga directa de la nueva estructura de 7 campos (limpia, sin fallbacks)
+        texts_original, output_name, url, result, transcription, diarization, info, *extra = pickle.load(f)
 
     if seg_idx < 1 or seg_idx > len(texts_original):
         raise HTTPException(status_code=400, detail="Índice de segmento inválido")
@@ -165,9 +164,8 @@ async def regenerate_video(req: RegenerateVideoRequest):
         raise HTTPException(status_code=404, detail="result.pkl no encontrado")
 
     with open(pkl_path, "rb") as f:
-        cached_data = pickle.load(f)
-        texts_original, output_name, url, result, transcription, diarization, *rest = cached_data
-        info = rest[0] if rest else {}
+        # Carga robusta de 7 campos para regeneración de video
+        texts_original, output_name, url, result, transcription, diarization, info, *extra = pickle.load(f)
 
     texts_edited = []
     changed_indices = []

@@ -210,9 +210,7 @@ def download_video(
         asset_update["audio_only"] = str(a_cand)
 
     update_assets(folder, **asset_update)
-    # print(f"📋 Activos registrados: {list(asset_update.keys())}")
     return media_path, info
-# las 
 
 def separate_vocals(
     video_path: Path, output_dir: Path | None = None
