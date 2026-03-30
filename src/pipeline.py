@@ -116,7 +116,7 @@ def process_video_queue(
                 except Exception:
                     pass
             translated_result, output_name, result, transcription, diarization = run_main(
-                path, u, translate=translate_lang
+                path, u, translate=translate_lang, title=info.get("title")
             )
             if translate_lang:
                 print("🔤 Traduciendo texto con Gemini...")

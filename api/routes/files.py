@@ -11,8 +11,9 @@ router = APIRouter(prefix="/api", tags=["files"])
 
 
 def _safe_filename(name: str) -> bool:
-    """Reject path traversal in filename."""
-    return ".." not in name and "/" not in name and "\\" not in name and len(name) < 256
+    """Reject dangerous filenames and prevent common security issues."""
+    # No permitimos subir de nivel con nombres que empiecen por punto o contengan separadores.
+    return not (name.startswith(".") or "/" in name or "\\" in name) and len(name) < 256
 
 
 def _get_video_folder(job_id: str, video_index: int) -> Path:
@@ -52,7 +53,14 @@ def serve_file(job_id: str, video_index: int, filename: str):
     if not _safe_filename(filename):
         raise HTTPException(status_code=400, detail="Nombre de archivo no permitido")
     folder = _get_video_folder(job_id, video_index)
-    file_path = folder / filename
+    
+    # Aseguramos que el path resuelto esté dentro de la carpeta permitida (seguridad real)
+    base_dir = folder.resolve()
+    file_path = (base_dir / filename).resolve()
+    
+    if not str(file_path).startswith(str(base_dir)):
+        raise HTTPException(status_code=403, detail="Acceso denegado")
+        
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
     return FileResponse(file_path, filename=filename)

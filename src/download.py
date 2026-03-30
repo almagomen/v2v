@@ -14,6 +14,23 @@ from src.assets import update_assets
 ROFORMER_DIR = DRIVE_DIR / "bs-roformer-revive3e" if DRIVE_DIR else None
 
 
+def to_safe_name(text: str) -> str:
+    """Genera un nombre de archivo seguro para el sistema operativo."""
+    import re
+    import unicodedata
+
+    # Normalizar para quitar tildes y caracteres especiales
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    # Eliminar hashtags (ej. #shorts)
+    text = re.sub(r"#\S+", "", text)
+    # Solo permitir letras, números, espacios, puntos, guiones y guiones bajos
+    text = re.sub(r"[^\w\s.\-_]", "", text)
+    # Reemplazar espacios y múltiples puntos/guiones por un solo guion bajo
+    text = re.sub(r"[\s.\-_]+", "_", text)
+    # Limitar longitud para evitar errores de path demasiado largo (Windows)
+    return text.strip("_").strip()[:80] or "video"
+
+
 def _load_bs_roformer():
     """
     Loader puro de BS-RoFormer. Devuelve (config, model, device).
@@ -120,10 +137,15 @@ def download_video(
         video += f"[width<={resolution}]"
     audio = f"ba[language^={language}]" if language else "ba"
 
+    cookies_file = (DRIVE_DIR / "cookies.txt") if DRIVE_DIR else None
+
+    video = "bv[vcodec^=avc1]"
+    if resolution:
+        video += f"[width<={resolution}]"
+    audio = f"ba[language^={language}]" if language else "ba"
+
     opts = {
-        "outtmpl": str(output_dir / "%(title)s" / "%(title)s.%(ext)s"),
         "format": f"{video} + {audio}",
-        # keepvideo=True hace que yt-dlp conserve los streams intermedios
         "keepvideo": True,
         "logger": OneLineLogger(),
         "quiet": True,
@@ -137,8 +159,14 @@ def download_video(
 
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
+        title = info.get("title", "video")
+        safe_name = to_safe_name(title)
+        
+        # Ajustar outtmpl dinámicamente con el nombre sanitizado
+        ydl.params["outtmpl"] = str(output_dir / safe_name / f"{safe_name}.%(ext)s")
+        
         media = ydl.prepare_filename(info)
-        print(f"✅ {Path(media).name}")
+        print(f"✅ {title}") # Mostramos título real en log
         print_codecs(info)
         ydl.download([url])
         media_path = Path(media)
