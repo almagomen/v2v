@@ -141,7 +141,9 @@ def process_video_queue(
             })
         except Exception as e:
             import traceback
-            traceback.print_exc()
+            error_trace = traceback.format_exc()
+            print(f"DEBUG: Error detectado en el pipeline:")
+            print(error_trace)
             print(f"❌ Error procesando {u}: {e}\n")
             if on_stage:
                 try:

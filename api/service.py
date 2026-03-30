@@ -37,8 +37,9 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
     from src.tts import model_tts
 
     old_stdout = sys.stdout
+    old_stderr = sys.stderr
     try:
-        sys.stdout = JobLogWriter(job_id)
+        sys.stdout = sys.stderr = JobLogWriter(job_id)
         # Inicializar estados por URL
         update_job(
             job_id,
@@ -164,6 +165,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
         update_job(job_id, status="error", message=str(e), error=str(e))
     finally:
         sys.stdout = old_stdout
+        sys.stderr = old_stderr
 
 
 def start_process(urls: list[str], translate_lang: str | None, speaker_name: str) -> str:
