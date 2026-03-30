@@ -69,25 +69,36 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
     }
     
     # Intentar resolver vía manifiesto (usando file_name sanitizado)
-    # Esto permite que si el frontend manda "Carpeta Sucia/video.mp4", 
-    # nosotros encontremos el recurso real en la "Carpeta Limpia"
     asset_key = name_to_asset_key.get(file_name)
     if asset_key and assets.get(asset_key):
         path = Path(assets[asset_key])
         if path.exists():
             return path
-        # Si falló video_only, intentar con merged como fallback
         if asset_key == "video_only" and assets.get("merged"):
             path = Path(assets["merged"])
             if path.exists(): return path
 
+    # 2.5 Búsqueda exhaustiva en el manifiesto por nombre de archivo
+    # Si el frontend manda el nombre real (ej. El_reductor...f137.mp4), lo buscamos en los valores
+    for val in assets.values():
+        if isinstance(val, str) and Path(val).name == file_name:
+            p_cand = Path(val)
+            if p_cand.exists(): return p_cand
+    
+    # Buscar también en la subsección de segmentos del manifiesto
+    segments_map = assets.get("segments", {})
+    for seg_path in segments_map.values():
+        if isinstance(seg_path, str) and Path(seg_path).name == file_name:
+            p_cand = Path(seg_path)
+            if p_cand.exists(): return p_cand
+
     # 3. Especial: Segmentos TTS (si media_name es un índice numerico o tts_..._XXXX.wav)
     import re
-    match = re.search(r'tts_.*_(\d+)\.wav$', media_name)
-    seg_idx = match.group(1) if match else (media_name if media_name.isdigit() else None)
+    match = re.search(r'tts_.*_(\d+)\.wav$', file_name)
+    seg_idx = match.group(1) if match else (file_name if file_name.isdigit() else None)
     
     if seg_idx:
-        seg_path_str = assets.get("segments", {}).get(str(int(seg_idx)))
+        seg_path_str = segments_map.get(str(int(seg_idx)))
         if seg_path_str:
             path = Path(seg_path_str)
             if path.exists(): return path
