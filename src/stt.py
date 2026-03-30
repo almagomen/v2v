@@ -107,12 +107,18 @@ def run_main(
             ]
         else: print("⚠️ No se pudo traducir, usando texto original")
 
-    output_name = generate_tiktok_title(url, translate if translate else transcription.language)
+    try:
+        output_name = generate_tiktok_title(url, translate if translate else transcription.language)
+    except Exception as e:
+        print(f"⚠️ Error al generar título viral (IA): {e}")
+        output_name = None
+
     if output_name:
         # Limpiar solo si es un nombre autogenerado para seguridad básica, 
         # pero para el título original de YT lo dejamos tal cual.
         output_name = "".join(c for c in output_name if c not in r'\/:*?"<>|').replace('\n', ' ').strip() or "output"
     else: 
+        # Fallback al título original de YouTube proporcionado por pipeline.py
         output_name = title or media_path.stem
 
     return translated_result, output_name, result, transcription, diarization
