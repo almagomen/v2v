@@ -40,7 +40,9 @@ def _job_folder(job_id: str, video_index: int) -> Path:
     """Resolve the folder for a given job/video_index."""
     job = get_job(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job no encontrado")
+        # NOTA: Si ves este error, es porque el servidor se reinició y el job_id ya no existe en memoria.
+        # Debes iniciar un nuevo proceso en el panel V2V.
+        raise HTTPException(status_code=404, detail=f"Job {job_id} no encontrado. Por favor, reinicia el proceso de inferencia.")
     videos = job.get("videos", [])
     if video_index < 0 or video_index >= len(videos):
         raise HTTPException(status_code=404, detail="Video index fuera de rango")
@@ -67,6 +69,8 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
     }
     
     # Intentar resolver vía manifiesto (usando file_name sanitizado)
+    # Esto permite que si el frontend manda "Carpeta Sucia/video.mp4", 
+    # nosotros encontremos el recurso real en la "Carpeta Limpia"
     asset_key = name_to_asset_key.get(file_name)
     if asset_key and assets.get(asset_key):
         path = Path(assets[asset_key])
