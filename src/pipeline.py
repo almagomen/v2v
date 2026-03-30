@@ -53,17 +53,14 @@ def process_video_queue(
                                         on_stage(u, "cached", f"En caché: {folder.name}")
                                     except Exception:
                                         pass
-                                # pkl antiguo: (translated_result, output_name, url, result, transcription, diarization)
-                                # pkl nuevo: (translated_result, output_name, url, result, transcription, diarization, info)
+                                # Recuperar info con validación estricta de tipo
+                                info = {}
                                 if len(cached_data) >= 7:
-                                    translated_result, output_name, url, result, transcription, diarization, info, *rest = cached_data
-                                else:
-                                    translated_result, output_name, url, result, transcription, diarization, *rest = cached_data
-                                    info = {}
+                                    potential_info = cached_data[6]
+                                    if isinstance(potential_info, dict):
+                                        info = potential_info
                                 
-                                # Asegurar que info es un dict
-                                if not isinstance(info, dict):
-                                    info = {}
+                                translated_result, output_name, url, result, transcription, diarization = cached_data[:6]
                                 
                                 # Encontrar el archivo de video original (.mp4) dentro de la carpeta
                                 # yt-dlp lo guarda como folder_name.mp4 dentro de folder_name/
@@ -99,15 +96,14 @@ def process_video_queue(
                 print(f"♻️ Cargando caché: {path.name}")
                 with open(output_file, "rb") as f:
                     cached_data = pickle.load(f)
-                    # Compatibilidad con versiones antiguas de pkl
+                    # Recuperar info con validación estricta de tipo
+                    info = {}
                     if len(cached_data) >= 7:
-                        translated_result, output_name, url, result, transcription, diarization, info, *rest = cached_data
-                    else:
-                        translated_result, output_name, url, result, transcription, diarization, *rest = cached_data
-                        info = {}
+                        potential_info = cached_data[6]
+                        if isinstance(potential_info, dict):
+                            info = potential_info
                     
-                    if not isinstance(info, dict):
-                        info = {}
+                    translated_result, output_name, url, result, transcription, diarization = cached_data[:6]
                 
                 results.append({
                     "path": path,
@@ -131,8 +127,11 @@ def process_video_queue(
                     on_stage(u, "transcribing", "📝 Transcribiendo (Whisper + diarización)...")
                 except Exception:
                     pass
-            # Asegurar que info es dict antes de llamar a .get() (falla si viene de caché antigua corrupta)
-            safe_title = info.get("title") if isinstance(info, dict) else None
+            # Asegurar info dict tipo antes de run_main
+            if not isinstance(info, dict):
+                info = {}
+            
+            safe_title = info.get("title")
             translated_result, output_name, result, transcription, diarization = run_main(
                 path, u, translate=translate_lang, title=safe_title
             )
