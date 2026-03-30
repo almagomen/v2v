@@ -420,4 +420,15 @@ export const v2vApi = {
     }
     return readJsonOrThrow<PollResponse>(res);
   },
+
+  async deleteVideo(folderName: string): Promise<{ status: string; message: string }> {
+    const res = await fetch(url(`/api/video/${encodeURIComponent(folderName)}`), {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al borrar carpeta de vídeo");
+    }
+    return await readJsonOrThrow<{ status: string; message: string }>(res);
+  },
 };

@@ -26,8 +26,10 @@ DRIVE_DIR = Path("/content/drive/MyDrive/v2v") if google_drive else None
 # Directorios de trabajo
 QUEUE_DIR = BASE_DIR / "Queue"
 TEMP_DIR = BASE_DIR / "temp"
+JOBS_DIR = QUEUE_DIR / "jobs"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Dispositivo
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

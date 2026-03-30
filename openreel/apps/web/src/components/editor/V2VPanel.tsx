@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback } from "react";
-import { Youtube, Loader2, AlertCircle, Share2, FolderDown } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Share2, FolderDown, Trash2 } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
 import { v2vApi } from "../../lib/v2v-api";
@@ -175,6 +175,32 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     }
   }, [jobId, selectedVideoIndex, setShareUrl]);
 
+  const handleDeleteFolder = useCallback(async (folderName: string, urlToRemove?: string) => {
+    if (!confirm(`¿Estás seguro de borrar físicamente la carpeta "${folderName}"? Se perderá el caché de descarga y procesamiento para este vídeo.`)) {
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      await v2vApi.deleteVideo(folderName);
+      toast.success("Borrado completo", `Carpeta ${folderName} eliminada del disco.`);
+      
+      // Si se proporciona una URL, la quitamos también de la lista de items para permitir re-intento
+      if (urlToRemove) {
+        useV2VStore.setState((state) => ({
+          urlItems: state.urlItems.filter(it => it.url !== urlToRemove)
+        }));
+      } else {
+        // Si es un video de la lista final, refrescamos el job para que desaparezca
+        if (jobId) startPolling(jobId);
+      }
+    } catch (e) {
+      toast.error("Error al borrar", e instanceof Error ? e.message : "No se pudo borrar");
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [jobId, setIsProcessing, startPolling]);
+
 
 
   return (
@@ -330,6 +356,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                     <th className="px-2 py-1 text-left">#</th>
                     <th className="px-2 py-1 text-left">Título</th>
                     <th className="px-2 py-1 text-left">tag/state</th>
+                    <th className="px-2 py-1 text-center">Acción</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -344,11 +371,20 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                           )}
                       </td>
                       <td className="px-2 py-1">
-                        <span
-                          className={`inline-flex items-center px-1.5 py-0.5 rounded ${statusToBadgeClass(it.status)}`}
-                        >
-                          {STATUS_LABEL[it.status] || it.status}
                         </span>
+                      </td>
+                      <td className="px-2 py-1 text-center">
+                        <button
+                          className="text-text-muted hover:text-red-500 transition-colors p-1"
+                          title="Borrar carpeta y permitir re-intento"
+                          disabled={isProcessing}
+                          onClick={() => {
+                            const folder = folderNameFromTitle(it.output_name || it.url);
+                            handleDeleteFolder(folder, it.url);
+                          }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -497,6 +533,20 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 </Button>
                 <Button size="icon" variant="secondary" onClick={handleShare} title="Compartir" disabled={!jobId || isProcessing}>
                   <Share2 size={14} />
+                </Button>
+                <Button 
+                  size="icon" 
+                  variant="secondary" 
+                  title="Borrar físicamente del servidor"
+                  className="hover:bg-red-500/20 hover:text-red-500"
+                  onClick={() => {
+                    const v = videos[selectedVideoIndex];
+                    const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
+                    handleDeleteFolder(folder);
+                  }}
+                  disabled={!jobId || isProcessing}
+                >
+                  <Trash2 size={14} />
                 </Button>
               </div>
             </div>

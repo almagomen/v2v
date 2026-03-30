@@ -1,10 +1,40 @@
-"""In-memory job store for v2v processing."""
+"""Persistent job store for v2v processing."""
+import json
 import threading
 import uuid
+from pathlib import Path
 from typing import Any
+from src.config import JOBS_DIR
 
 _jobs: dict[str, dict[str, Any]] = {}
 _lock = threading.Lock()
+
+
+def _job_file(job_id: str) -> Path:
+    return JOBS_DIR / f"{job_id}.json"
+
+
+def _save_job_to_disk(job_id: str) -> None:
+    """Sincroniza el estado del job con el archivo en disco."""
+    if job_id in _jobs:
+        try:
+            with open(_job_file(job_id), "w", encoding="utf-8") as f:
+                json.dump(_jobs[job_id], f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠️ Error al guardar job {job_id} en disco: {e}")
+
+
+def _load_jobs_from_disk() -> None:
+    """Carga todos los jobs existentes al arrancar."""
+    if not JOBS_DIR.exists():
+        return
+    for f in JOBS_DIR.glob("*.json"):
+        try:
+            job_id = f.stem
+            with open(f, "r", encoding="utf-8") as j:
+                _jobs[job_id] = json.load(j)
+        except Exception:
+            pass
 
 
 def create_job() -> str:
@@ -17,9 +47,10 @@ def create_job() -> str:
             "log": "",
             "output_paths": [],
             "videos": [],
-            "url_states": [],  # [{url, status, message, output_name?, index?}]
+            "url_states": [],
             "error": None,
         }
+        _save_job_to_disk(job_id)
     return job_id
 
 
@@ -27,14 +58,20 @@ def update_job(job_id: str, **kwargs) -> None:
     with _lock:
         if job_id in _jobs:
             _jobs[job_id].update(kwargs)
+            _save_job_to_disk(job_id)
 
 
 def append_log(job_id: str, text: str) -> None:
     with _lock:
         if job_id in _jobs:
             _jobs[job_id]["log"] = (_jobs[job_id].get("log") or "") + text
+            _save_job_to_disk(job_id)
 
 
 def get_job(job_id: str) -> dict | None:
     with _lock:
         return _jobs.get(job_id)
+
+
+# Cargar jobs al iniciar el módulo
+_load_jobs_from_disk()
