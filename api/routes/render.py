@@ -52,11 +52,13 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
     Resolves a media_name to an absolute path.
     Prioritizes the v2v_assets.json manifest (New Logic).
     """
+    # 0. Normalizar media_name para extraer solo el nombre base (el frontend manda Carpeta/Archivo.mp4)
+    file_name = Path(media_name).name
+
     # 1. Cargar manifiesto
     assets = load_assets(folder)
     
     # 2. Mapeo de nombres genéricos a claves del manifiesto
-    # Si el frontend pide "video.mp4", buscamos "video_only" (silencioso) o "merged"
     name_to_asset_key = {
         "video.mp4": "video_only",
         "instrumental.wav": "no_vocals",
@@ -64,8 +66,8 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
         "vocals.wav": "vocals"
     }
     
-    # Intentar resolver vía manifiesto
-    asset_key = name_to_asset_key.get(media_name)
+    # Intentar resolver vía manifiesto (usando file_name sanitizado)
+    asset_key = name_to_asset_key.get(file_name)
     if asset_key and assets.get(asset_key):
         path = Path(assets[asset_key])
         if path.exists():
