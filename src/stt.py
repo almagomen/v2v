@@ -4,7 +4,7 @@ Transcripción STT con Whisper y procesamiento con diarización.
 import contextlib
 import io
 from pathlib import Path
-from typing import Union, Tuple, Any
+from typing import Union, Tuple, Any, Optional
 
 import stable_whisper
 import torchaudio
