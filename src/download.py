@@ -156,8 +156,8 @@ def download_video(
         title = info.get("title", "video")
         safe_name = to_safe_name(title)
         
-        # Ajustar outtmpl dinámicamente con el nombre sanitizado
-        ydl.params["outtmpl"] = str(output_dir / safe_name / f"{safe_name}.%(ext)s")
+        # Ajustar outtmpl de forma compatible con yt-dlp (espera un dict o objeto con .get)
+        ydl.params["outtmpl"] = {"default": str(output_dir / safe_name / f"{safe_name}.%(ext)s")}
         
         media = ydl.prepare_filename(info)
         print(f"✅ {title}") # Mostramos título real en log
