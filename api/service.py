@@ -97,7 +97,7 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             r = res_list[0]
             path = r["path"]
             texts = r["texts"]
-            output_name = r["output_name"]
+            output_name = f"{idx + 1}. {r['output_name']}"
             transcription = r["transcription"]
             lang = translate_lang if translate_lang else transcription.language
 

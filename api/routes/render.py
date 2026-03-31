@@ -160,18 +160,32 @@ async def upload_media(
 ):
     """Upload a local file into the job folder so it can be included in render."""
     folder = _job_folder(job_id, video_index)
-    target_dir = folder / subfolder if subfolder else folder
+    
+    # Sanitizar subfolder para mantener la estética del sistema de archivos (save_name)
+    subfolder_safe = to_safe_name(subfolder) if subfolder else ""
+    target_dir = folder / subfolder_safe if subfolder_safe else folder
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    safe_name = Path(file.filename or "upload.bin").name
-    dest = target_dir / safe_name
+    # Sanitizar también el nombre de archivo (preservando extensión)
+    raw_name = Path(file.filename or "upload.bin")
+    safe_stem = to_safe_name(raw_name.stem)
+    safe_filename = f"{safe_stem}{raw_name.suffix}" if raw_name.suffix else safe_stem
+    
+    dest = target_dir / safe_filename
     content = await file.read()
     dest.write_bytes(content)
     
     # Registrar el archivo en el manifiesto para que el renderizador lo encuentre
-    update_assets(folder, **{safe_name: str(dest)})
+    update_assets(folder, **{safe_filename: str(dest)})
 
-    return {"media_name": f"{subfolder}/{safe_name}" if subfolder else safe_name}
+    return {"media_name": f"{subfolder_safe}/{safe_filename}" if subfolder_safe else safe_filename}
+
+
+@router.get("/render/manifest/{job_id}/{video_index}")
+async def get_rendered_manifest(job_id: str, video_index: int):
+    """Obtiene el manifiesto v2v_assets.json actual para un video específico."""
+    folder = _job_folder(job_id, video_index)
+    return load_assets(folder)
 
 
 # ---------------------------------------------------------------------------

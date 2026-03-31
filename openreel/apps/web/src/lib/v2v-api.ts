@@ -354,6 +354,15 @@ export const v2vApi = {
     return url(`/api/job/${jobId}/zip`);
   },
 
+  async getManifest(jobId: string, videoIndex: number): Promise<Record<string, string>> {
+    const res = await fetch(url(`/api/render/manifest/${jobId}/${videoIndex}`));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al obtener manifiesto");
+    }
+    return readJsonOrThrow<Record<string, string>>(res);
+  },
+
   /**
    * Upload a local file to the Colab server before rendering.
    * Returns the media_name to use in the render payload.

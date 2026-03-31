@@ -154,6 +154,12 @@ async function uploadPendingClips(
     const subfolder = parts.length > 1 ? parts[0] : "";
     const result = await v2vApi.uploadMediaForRender(jobId, videoIndex, file, subfolder);
     nameMap.set(clip.mediaName, result.media_name);
+    
+    // Al subir, sincronizamos para que isInV2VFolder lo reconozca de inmediato
+    const folder = subfolder || (result.media_name.includes("/") ? result.media_name.split("/")[0] : "");
+    if (folder) {
+      await useV2VStore.getState().syncFolderAssets(jobId, videoIndex, folder);
+    }
   }
 
   return nameMap;
@@ -189,7 +195,7 @@ function downloadBlob(blob: Blob, filename: string) {
 
 export const ColabExportTab: React.FC = () => {
   const { project } = useProjectStore();
-  const { folderRefs } = useV2VStore();
+  const { folderRefs, syncFolderAssets } = useV2VStore();
 
   const [isBatch, setIsBatch] = useState(false);
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
@@ -227,6 +233,17 @@ export const ColabExportTab: React.FC = () => {
     }
     return null;
   }, [analyzed, folderRefs]);
+
+  // ── Auto-sync with backend manifest ──────────────────────────
+  useEffect(() => {
+    if (jobContext && !isBatch) {
+      const parts = jobContext.longName?.replace(/\\/g, "/").split("/");
+      const folder = parts ? parts[0] : "";
+      if (folder) {
+        syncFolderAssets(jobContext.jobId, jobContext.videoIndex, folder);
+      }
+    }
+  }, [jobContext?.jobId, jobContext?.videoIndex, isBatch]);
 
   // ── Load saved projects for batch mode ──────────────────────
   useEffect(() => {

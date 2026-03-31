@@ -143,6 +143,7 @@ export interface V2VState {
   startPolling: (jobId: string) => void;
   stopPolling: () => void;
 
+  syncFolderAssets: (jobId: string, videoIndex: number, folder: string) => Promise<void>;
   reset: () => void;
 }
 
@@ -550,6 +551,28 @@ export const useV2VStore = create<V2VState>((set, get) => {
         pollingTimer = null;
       }
       set({ isProcessing: false });
+    },
+
+    syncFolderAssets: async (jobId, videoIndex, folder) => {
+      try {
+        const assets = await v2vApi.getManifest(jobId, videoIndex);
+        const filenames = Object.values(assets)
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.split(/[\\/]/).pop() || "");
+
+        set((state) => {
+          const ref = state.folderRefs[folder];
+          if (!ref) return state;
+          const next = {
+            ...state.folderRefs,
+            [folder]: { ...ref, nativeFiles: filenames },
+          };
+          saveFolderRefsToStorage(next);
+          return { folderRefs: next };
+        });
+      } catch (e) {
+        console.warn(`[V2V] Error al sincronizar manifiesto para ${folder}:`, e);
+      }
     },
 
     reset: () => {
