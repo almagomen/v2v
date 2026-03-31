@@ -185,7 +185,22 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
   const [backendSpeaker, setBackendSpeaker] = useState<string | null>(null);
   const [speed, setSpeed] = useState<number>(1.0);
+  const [speedMode, setSpeedMode] = useState<"x" | "s">("x");
   const [isApplyingSpeed, setIsApplyingSpeed] = useState(false);
+
+  function getSpeakerFilenameToken(): string {
+    if (!parsed) return "unknown";
+    const speakerChanged = parsed.speakerToken !== selectedVoice;
+    if (!speakerChanged) {
+      return parsed.speakerToken;
+    }
+    const speakerLabel = speakers.find((s) => s.value === selectedVoice)?.label || selectedVoice;
+    return speakerLabel.replace(/[^a-zA-Z0-9_-]/g, "_");
+  }
+
+  function getSpeakerTrackName(): string {
+    return speakers.find((s) => s.value === selectedVoice)?.label || selectedVoice;
+  }
 
 
   // Determinamos estáticamente qué token buscar (el local o el del filename)
@@ -396,8 +411,11 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
       const newDuration = await getAudioDuration(blob);
 
-      const safeSpeakerName = currentSpeaker.replace(/[^a-zA-Z0-9_-]/g, "_");
-      const newFileName = `tts_${safeSpeakerName}_${String(parsed.segIdx).padStart(4, "0")}.wav`;
+      const speakerChanged = oldSpeaker !== currentSpeaker;
+      const filenameToken = getSpeakerFilenameToken();
+      const trackName = getSpeakerTrackName();
+
+      const newFileName = `tts_${filenameToken}_${String(parsed.segIdx).padStart(4, "0")}.wav`;
       const newMediaName = `${parsed.folder}/${newFileName}`;
 
       const file = new File([blob], newMediaName, { type: "audio/wav" });
@@ -421,8 +439,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
       invalidateAudioCache(mediaItem.id);
 
-      const speakerChanged = oldSpeaker !== currentSpeaker;
-
       if (speakerChanged) {
         const { project: renamedProject } = useProjectStore.getState();
         const projectAfterRename = renameMediaInLibrary(
@@ -433,7 +449,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         const moveResult = await moveClipToTrack(
           projectAfterRename,
           clipId,
-          currentSpeaker,
+          trackName,
           effectiveTimes.start,
         );
         if (moveResult.success) {
@@ -461,7 +477,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       }
 
       if (speakerChanged) {
-        setRegenStatus(`Segmento regenerado y movido a pista "${currentSpeaker}"`);
+        setRegenStatus(`Segmento regenerado y movido a pista "${trackName}"`);
       } else {
         setRegenStatus("Segmento regenerado");
       }
@@ -483,6 +499,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     replaceMediaAsset,
     segmentTimes,
     speed,
+    speakers,
   ]);
 
   const handleApplySpeedFilter = useCallback(async () => {
@@ -492,11 +509,19 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     setRegenError(null);
     setRegenStatus(null);
     try {
+      let effectiveSpeed = speed;
+      if (speedMode === "s" && segmentTimes) {
+        const currentDuration = segmentTimes.end - segmentTimes.start;
+        if (currentDuration > 0) {
+          effectiveSpeed = currentDuration / speed;
+        }
+      }
+
       const blob = await v2vApi.applyAudioSpeed(
         folderRef.jobId,
         folderRef.videoIndex,
         parsed.segIdx,
-        speed
+        effectiveSpeed
       );
 
       const newDuration = await getAudioDuration(blob);
@@ -506,7 +531,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       saveToLocalStorage(mediaItem.name, {
         text: segmentText,
         speaker: selectedVoice,
-        speed,
+        speed: effectiveSpeed,
         timestamp,
       });
 
@@ -536,7 +561,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     } finally {
       setIsApplyingSpeed(false);
     }
-  }, [folderRef, parsed, mediaItem, speed, segmentText, selectedVoice, clipId, replaceMediaAsset, segmentTimes]);
+  }, [folderRef, parsed, mediaItem, speed, speedMode, segmentText, selectedVoice, clipId, replaceMediaAsset, segmentTimes]);
 
   if (!clip || !mediaItem) {
     return (
@@ -610,46 +635,66 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       {/* Speed Selector */}
       <div className="space-y-2 p-3 bg-background-tertiary border border-border rounded-lg">
         <label className="text-[10px] text-text-secondary block mb-1">
-          Speed (Factor de velocidad)
+          Speed
         </label>
         
-        <div className="grid grid-cols-3 gap-1.5 mb-2">
-          {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((s) => (
+        <div className="flex items-center gap-2 mb-2">
+          <div className="flex bg-background-secondary border border-border rounded overflow-hidden">
             <button
-              key={s}
-              onClick={() => setSpeed(s)}
-              className={`py-1.5 text-[10px] rounded transition-all border ${
-                speed === s
-                  ? "bg-primary/20 border-primary text-primary font-bold"
-                  : "bg-background-secondary border-border text-text-muted hover:border-text-muted"
+              onClick={() => setSpeedMode("x")}
+              className={`px-3 py-1 text-[10px] font-medium transition-colors ${
+                speedMode === "x"
+                  ? "bg-primary/20 text-primary"
+                  : "text-text-muted hover:text-text-primary"
               }`}
             >
-              {s.toFixed(2)}x
+              x
             </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <label className="text-[10px] text-text-muted whitespace-nowrap">Custom:</label>
+            <button
+              onClick={() => setSpeedMode("s")}
+              className={`px-3 py-1 text-[10px] font-medium transition-colors border-l border-border ${
+                speedMode === "s"
+                  ? "bg-primary/20 text-primary"
+                  : "text-text-muted hover:text-text-primary"
+              }`}
+            >
+              s
+            </button>
+          </div>
           <input
             type="number"
-            min={0.5}
-            max={2.0}
-            step={0.05}
+            min={speedMode === "x" ? 0.5 : 0.1}
+            max={speedMode === "x" ? 2.0 : 60}
+            step={speedMode === "x" ? 0.05 : 0.1}
             value={speed}
-            onChange={(e) => setSpeed(parseFloat(e.target.value) || 1.0)}
+            onChange={(e) => setSpeed(parseFloat(e.target.value) || (speedMode === "x" ? 1.0 : 1.0))}
             className="flex-1 px-2 py-1 bg-background-secondary border border-border rounded text-[11px] text-text-primary focus:outline-none focus:border-primary"
+            placeholder={speedMode === "x" ? "1.0" : "2.0"}
           />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <p className="text-[9px] text-text-muted">
+            {speedMode === "x"
+              ? `Multiplicador: ${speed}x`
+              : segmentTimes
+                ? `Actual: ${(segmentTimes.end - segmentTimes.start).toFixed(2)}s → Objetivo: ${speed}s`
+                : "Necesita tiempos del segmento"}
+          </p>
           <button
             onClick={handleApplySpeedFilter}
             disabled={isApplyingSpeed || regenLoading || speed === 1.0}
             className="px-3 py-1 bg-background-secondary border border-border rounded text-[10px] text-text-secondary hover:text-text-primary transition-all disabled:opacity-50"
             title="Aplica solo el filtro de velocidad sin regenerar TTS"
           >
-            {isApplyingSpeed ? <Loader2 size={12} className="animate-spin" /> : "Aplicar filtro"}
+            {isApplyingSpeed ? <Loader2 size={12} className="animate-spin" /> : "Aplicar"}
           </button>
         </div>
-        <p className="text-[9px] text-text-muted italic">Rango permitido: 0.5x - 2.0x</p>
+        <p className="text-[9px] text-text-muted italic">
+          {speedMode === "x"
+            ? "x = multiplicar velocidad (1.5x = 50% más rápido)"
+            : "s = segundos objetivo (el audio durará exactamente X segundos)"}
+        </p>
       </div>
 
       <div className="space-y-2">
