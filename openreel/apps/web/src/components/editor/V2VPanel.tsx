@@ -12,6 +12,7 @@ import {
   shortProjectToken,
   importKeyFor,
 } from "../../utils/v2v-utils";
+import { createSegmentInfo } from "../../utils/v2v-segment-ids";
 import { ColabExportTab } from "./ColabExportTab";
 
 const TRANSLATE_OPTIONS = [
@@ -523,6 +524,26 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       
                       // 3) Vincular carpeta al Job para que AssetsPanel la reconozca
                       useV2VStore.getState().setFolderRef(folder, { jobId: jobId!, videoIndex: v.index, outputName: v.output_name });
+                      
+                      // 4) Guardar información de segmentos
+                      const importedMedia = freshStore.project.mediaLibrary.items;
+                      for (const seg of audioSegs) {
+                        const speakerToken = toSafeToken(seg.speaker || "speaker");
+                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                        const mediaItem = importedMedia.find((m: any) => m.name === wavName);
+                        if (mediaItem) {
+                          const segmentData = createSegmentInfo({
+                            mediaId: mediaItem.id,
+                            jobId: jobId!,
+                            videoIndex: v.index,
+                            segIdx: seg.seg,
+                            folder: folder,
+                            originalText: seg.text || "",
+                            speaker: seg.speaker,
+                          });
+                          useV2VStore.getState().setSegmentInfo(folder, segmentData);
+                        }
+                      }
 
                       toast.success("Re-importación completa", `Archivos en proyecto "${projectTitle}".`);
                     } catch (e) {

@@ -11,6 +11,12 @@ import {
   muteTrackInProject,
 } from "../utils/detached-project-actions";
 import { autoSaveManager } from "../services/auto-save";
+import {
+  type V2VSegmentInfo,
+  type V2VFolderData,
+  generateFolderId,
+  createSegmentInfo,
+} from "../utils/v2v-segment-ids";
 
 const FOLDER_REFS_STORAGE_KEY = "openreel.v2v.folderRefs";
 const JOB_STATE_STORAGE_KEY = "openreel.v2v.jobState";
@@ -23,19 +29,33 @@ let isImportingBusy = false;
 let isFetchingSpeakers = false;
 let currentPollPhase: "fast" | "slow" = "fast";
 
-export type V2VFolderRef = { jobId: string; videoIndex: number; outputName?: string; nativeFiles?: string[] };
+export type V2VFolderRef = { 
+  jobId: string; 
+  videoIndex: number; 
+  outputName?: string; 
+  nativeFiles?: string[];
+  segments?: Record<string, V2VSegmentInfo>;
+};
 
-function loadFolderRefsFromStorage(): Record<string, V2VFolderRef> {
+type SerializedFolderData = Omit<V2VFolderData, "segments"> & { segments: Record<string, V2VSegmentInfo> };
+
+function loadFolderRefsFromStorage(): Record<string, SerializedFolderData> {
   if (typeof window === "undefined") return {};
   try {
     const raw = localStorage.getItem(FOLDER_REFS_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, V2VFolderRef>) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, SerializedFolderData>;
+    const result: Record<string, SerializedFolderData> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      result[key] = value;
+    }
+    return result;
   } catch {
     return {};
   }
 }
 
-function saveFolderRefsToStorage(refs: Record<string, V2VFolderRef>): void {
+function saveFolderRefsToStorage(refs: Record<string, SerializedFolderData>): void {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(FOLDER_REFS_STORAGE_KEY, JSON.stringify(refs));
@@ -103,7 +123,7 @@ export interface V2VState {
   log: string;
   importStatusByKey: Record<string, "in_progress" | "done" | "error">; // `${jobId}:${videoIndex}`
   urlItems: JobUrlItem[];
-  folderRefs: Record<string, V2VFolderRef>;
+  folderRefs: Record<string, SerializedFolderData>;
   selectedUrlForLogs: string | null;
   urlLogs: Record<string, string>;
   jobPhase: string;
@@ -136,9 +156,16 @@ export interface V2VState {
   setJobPhase: (phase: string) => void;
 
   setFolderRef: (folder: string, ref: V2VFolderRef) => void;
-  getFolderRef: (folder: string) => V2VFolderRef | undefined;
+  getFolderRef: (folder: string) => SerializedFolderData | undefined;
   removeFolderRef: (folder: string) => void;
   renameFolderRef: (oldFolder: string, newFolder: string) => void;
+
+  setSegmentInfo: (folder: string, segment: V2VSegmentInfo) => void;
+  getSegmentInfo: (folder: string, segmentId: string) => V2VSegmentInfo | undefined;
+  getSegmentByMediaId: (folder: string, mediaId: string) => V2VSegmentInfo | undefined;
+  updateSegmentText: (folder: string, segmentId: string, text: string) => void;
+  updateSegmentSpeaker: (folder: string, segmentId: string, speaker: string | null) => void;
+  updateSegmentSpeed: (folder: string, segmentId: string, speed: number | null) => void;
 
   clearJobRunState: (opts?: { keepImports?: boolean; keepItems?: boolean }) => void;
 
@@ -234,7 +261,19 @@ export const useV2VStore = create<V2VState>((set, get) => {
 
     setFolderRef: (folder: string, ref: V2VFolderRef) =>
       set((state) => {
-        const folderRefs = { ...state.folderRefs, [folder]: ref };
+        const existing = state.folderRefs[folder];
+        const now = Date.now();
+        const newFolderData: SerializedFolderData = {
+          folderId: existing?.folderId || generateFolderId(folder, ref.jobId),
+          jobId: ref.jobId,
+          videoIndex: ref.videoIndex,
+          outputName: ref.outputName || null,
+          nativeFiles: ref.nativeFiles || [],
+          segments: existing?.segments || {},
+          createdAt: existing?.createdAt || now,
+          updatedAt: now,
+        };
+        const folderRefs = { ...state.folderRefs, [folder]: newFolderData };
         saveFolderRefsToStorage(folderRefs);
         return { folderRefs };
       }),
@@ -261,10 +300,104 @@ export const useV2VStore = create<V2VState>((set, get) => {
       set((state) => {
         if (!state.folderRefs[oldFolder]) return state;
         const next = { ...state.folderRefs };
-        next[newFolder] = next[oldFolder];
+        const renamedFolder = { ...next[oldFolder], folderId: generateFolderId(newFolder, next[oldFolder].jobId) };
+        next[newFolder] = renamedFolder;
         delete next[oldFolder];
         saveFolderRefsToStorage(next);
         return { folderRefs: next };
+      }),
+
+    setSegmentInfo: (folder: string, segment: V2VSegmentInfo) =>
+      set((state) => {
+        const folderData = state.folderRefs[folder];
+        if (!folderData) {
+          console.warn(`[V2V] No folderRef found for ${folder}`);
+          return state;
+        }
+        const now = Date.now();
+        const segments = { ...folderData.segments, [segment.segmentId]: segment };
+        const updatedFolder: SerializedFolderData = {
+          ...folderData,
+          segments,
+          updatedAt: now,
+        };
+        const folderRefs = { ...state.folderRefs, [folder]: updatedFolder };
+        saveFolderRefsToStorage(folderRefs);
+        return { folderRefs };
+      }),
+    getSegmentInfo: (folder: string, segmentId: string) => {
+      const folderData = get().folderRefs[folder];
+      return folderData?.segments[segmentId];
+    },
+    getSegmentByMediaId: (folder: string, mediaId: string) => {
+      const folderData = get().folderRefs[folder];
+      if (!folderData) return undefined;
+      for (const segment of Object.values(folderData.segments)) {
+        if (segment.mediaId === mediaId) {
+          return segment;
+        }
+      }
+      return undefined;
+    },
+    updateSegmentText: (folder: string, segmentId: string, text: string) =>
+      set((state) => {
+        const folderData = state.folderRefs[folder];
+        if (!folderData || !folderData.segments[segmentId]) return state;
+        const now = Date.now();
+        const updatedSegment: V2VSegmentInfo = {
+          ...folderData.segments[segmentId],
+          editedText: text,
+          updatedAt: now,
+        };
+        const segments = { ...folderData.segments, [segmentId]: updatedSegment };
+        const updatedFolder: SerializedFolderData = {
+          ...folderData,
+          segments,
+          updatedAt: now,
+        };
+        const folderRefs = { ...state.folderRefs, [folder]: updatedFolder };
+        saveFolderRefsToStorage(folderRefs);
+        return { folderRefs };
+      }),
+    updateSegmentSpeaker: (folder: string, segmentId: string, speaker: string | null) =>
+      set((state) => {
+        const folderData = state.folderRefs[folder];
+        if (!folderData || !folderData.segments[segmentId]) return state;
+        const now = Date.now();
+        const updatedSegment: V2VSegmentInfo = {
+          ...folderData.segments[segmentId],
+          speaker,
+          updatedAt: now,
+        };
+        const segments = { ...folderData.segments, [segmentId]: updatedSegment };
+        const updatedFolder: SerializedFolderData = {
+          ...folderData,
+          segments,
+          updatedAt: now,
+        };
+        const folderRefs = { ...state.folderRefs, [folder]: updatedFolder };
+        saveFolderRefsToStorage(folderRefs);
+        return { folderRefs };
+      }),
+    updateSegmentSpeed: (folder: string, segmentId: string, speed: number | null) =>
+      set((state) => {
+        const folderData = state.folderRefs[folder];
+        if (!folderData || !folderData.segments[segmentId]) return state;
+        const now = Date.now();
+        const updatedSegment: V2VSegmentInfo = {
+          ...folderData.segments[segmentId],
+          speed,
+          updatedAt: now,
+        };
+        const segments = { ...folderData.segments, [segmentId]: updatedSegment };
+        const updatedFolder: SerializedFolderData = {
+          ...folderData,
+          segments,
+          updatedAt: now,
+        };
+        const folderRefs = { ...state.folderRefs, [folder]: updatedFolder };
+        saveFolderRefsToStorage(folderRefs);
+        return { folderRefs };
       }),
 
     clearJobRunState: (opts) =>
@@ -556,7 +689,36 @@ export const useV2VStore = create<V2VState>((set, get) => {
 
                     await autoSaveManager.forceSave(workingProject);
                     const nativeFiles = filesToImport.map(f => f.name.split("/").pop() || "");
+                    
                     get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index, outputName: v.output_name, nativeFiles });
+                    
+                    const segsWithMediaInfo = downloadedSegs.map(d => {
+                      const media = workingProject.mediaLibrary.items.find(m => m.name === d.logicalName);
+                      const videoSegment = v.segments.find(s => s.seg === d.seg.seg);
+                      return {
+                        seg: d.seg,
+                        mediaId: media?.id || "",
+                        logicalName: d.logicalName,
+                        text: videoSegment?.text || "",
+                        speaker: videoSegment?.speaker || d.seg.speaker,
+                      };
+                    });
+                    
+                    for (const segInfo of segsWithMediaInfo) {
+                      if (segInfo.mediaId) {
+                        const segmentData = createSegmentInfo({
+                          mediaId: segInfo.mediaId,
+                          jobId: state.jobId!,
+                          videoIndex: v.index,
+                          segIdx: segInfo.seg.seg,
+                          folder: folder,
+                          originalText: segInfo.text,
+                          speaker: segInfo.speaker,
+                        });
+                        get().setSegmentInfo(folder, segmentData);
+                      }
+                    }
+                    
                     get().setImportStatus(key, "done");
                     if (urlForLog) get().appendUrlLog(urlForLog, `✅ Importación completada por activos.`);
                   }

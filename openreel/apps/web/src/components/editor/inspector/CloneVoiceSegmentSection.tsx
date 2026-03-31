@@ -1,25 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
-import {
-  getTranscriptionService,
-  initializeTranscriptionService,
-} from "@openreel/core";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
-import { v2vApi, type SpeakerOption, type JobResultResponse } from "../../../lib/v2v-api";
+import { v2vApi, type SpeakerOption } from "../../../lib/v2v-api";
 import { useProjectStore } from "../../../stores/project-store";
 import { moveClipToTrack, renameMediaInLibrary } from "../../../utils/detached-project-actions";
 
-// Cache en memoria para resultados de jobs
-const jobResultCache = new Map<string, JobResultResponse>();
-function getCachedJobResult(jobId: string): JobResultResponse | undefined {
-  return jobResultCache.get(jobId);
-}
-function setCachedJobResult(jobId: string, result: JobResultResponse): void {
-  jobResultCache.set(jobId, result);
-}
 import { useV2VStore } from "../../../stores/v2v-store";
 import { invalidateAudioCache } from "../../../stores/audio-cache-store";
+import { generateSegmentId } from "../../../utils/v2v-segment-ids";
 
 type V2VParsedSegment = {
   folder: string;
@@ -27,28 +16,16 @@ type V2VParsedSegment = {
   segIdx: number;
 };
 
-
 function parseV2VSegmentFromName(name: string): V2VParsedSegment | null {
   const normalized = name.replace(/\\/g, "/");
 
-  // Formato nuevo: tts_{speaker}_{NNNN}.wav
-  const matchNew = normalized.match(/^(?:(.+?)\/)?tts_(.+)_(\d{4})\.wav$/);
-  if (matchNew) {
-    const folder = matchNew[1];
-    const speakerToken = matchNew[2];
-    const segIdx = parseInt(matchNew[3], 10);
+  const match = normalized.match(/^(?:(.+?)\/)?tts_(.+)_(\d{4})\.wav$/);
+  if (match) {
+    const folder = match[1];
+    const speakerToken = match[2];
+    const segIdx = parseInt(match[3], 10);
     if (folder && !Number.isNaN(segIdx)) {
       return { folder, speakerToken, segIdx };
-    }
-  }
-
-  // Formato legacy: vocals_NNNN.wav
-  const matchLegacy = normalized.match(/^(?:(.+?)\/)?vocals_(\d{4})\.wav$/);
-  if (matchLegacy) {
-    const folder = matchLegacy[1];
-    const segIdx = parseInt(matchLegacy[2], 10);
-    if (folder && !Number.isNaN(segIdx)) {
-      return { folder, speakerToken: "SPEAKER_00", segIdx };
     }
   }
 
@@ -63,33 +40,6 @@ function joinNonEmpty(parts: string[]): string {
     .replace(/\s+/g, " ")
     .trim();
 }
-
-function getLocalStorageKey(filename: string): string {
-  return `v2v_cloned_text_${filename}`;
-}
-
-function loadFromLocalStorage(filename: string): { text: string; speaker: string; speed?: number; timestamp: number } | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const key = getLocalStorageKey(filename);
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    return JSON.parse(raw) as { text: string; speaker: string; speed?: number; timestamp: number };
-  } catch {
-    return null;
-  }
-}
-
-function saveToLocalStorage(filename: string, data: { text: string; speaker: string; speed?: number; timestamp: number }): void {
-  if (typeof window === "undefined") return;
-  try {
-    const key = getLocalStorageKey(filename);
-    localStorage.setItem(key, JSON.stringify(data));
-  } catch {
-    // ignore quota errors
-  }
-}
-
 
 async function getAudioDuration(blob: Blob): Promise<number> {
   const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -111,7 +61,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const clip = getClip(clipId);
   const mediaItem = clip ? getMediaItem(clip.mediaId) : undefined;
 
-  const { translateLang, speaker: defaultSpeaker, getFolderRef, speakers, fetchSpeakers } = useV2VStore();
+  const { translateLang, speaker: defaultSpeaker, getFolderRef, getSegmentByMediaId, speakers, fetchSpeakers } = useV2VStore();
 
   useEffect(() => {
     if (speakers.length === 0) {
@@ -119,32 +69,31 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     }
   }, [speakers.length, fetchSpeakers]);
 
-
   const parsed = useMemo(() => {
     if (!mediaItem?.name) return null;
     return parseV2VSegmentFromName(mediaItem.name);
   }, [mediaItem?.name]);
 
   const folderRef = parsed ? getFolderRef(parsed.folder) : undefined;
+  
+  const segmentInfo = useMemo(() => {
+    if (!folderRef || !parsed || !mediaItem) return undefined;
+    return getSegmentByMediaId(parsed.folder, mediaItem.id);
+  }, [folderRef, parsed, mediaItem, getSegmentByMediaId]);
 
   const [selectedVoice, setSelectedVoice] = useState<string>("");
 
-  // Resuelve un token (key del backend) al value correcto del Select.
-  // Busca por value exacto, luego por label exacto, y por último una normalización agresiva.
   function resolveSpeakerValue(token: string, speakerList: SpeakerOption[], defaultVal?: string): string {
     if (!token || speakerList.length === 0) return defaultVal || token;
     
-    // Coincidencia exacta
     const byValue = speakerList.find((s) => s.value === token);
     if (byValue) return byValue.value;
     const byLabel = speakerList.find((s) => s.label === token);
     if (byLabel) return byLabel.value;
 
-    // Función de normalización (remueve todo menos minúsculas/números)
     const normalize = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, "");
     const normToken = normalize(token);
 
-    // Búsqueda parcial ultra-tolerante (token puede venir con GUIDs raros, espacios como _, URI encoded, etc)
     const byFuzzy = speakerList.find((s) => {
       const normLabel = normalize(s.label);
       const normValue = normalize(s.value);
@@ -156,8 +105,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
     if (byFuzzy) return byFuzzy.value;
 
-    // Fallback: si es algo como "SPEAKER_00" de diarización, intentamos aplicar
-    // la voz seleccionada por defecto en el store global.
     if (defaultVal) {
       const byDefValue = speakerList.find((s) => s.value === defaultVal);
       if (byDefValue) return byDefValue.value;
@@ -168,7 +115,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
     return token;
   }
-
 
   const [jobLoading, setJobLoading] = useState(false);
   const [jobError, setJobError] = useState<string | null>(null);
@@ -202,27 +148,21 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     return speakers.find((s) => s.value === selectedVoice)?.label || selectedVoice;
   }
 
-
-  // Determinamos estáticamente qué token buscar (el local o el del filename)
   const activeTokenToResolve = useMemo(() => {
     if (!mediaItem?.name) return null;
-    const localData = loadFromLocalStorage(mediaItem.name);
-    if (localData) return localData.speaker;
+    if (segmentInfo?.speaker) return segmentInfo.speaker;
     if (backendSpeaker) return backendSpeaker;
     if (parsed) return parsed.speakerToken;
     return null;
-  }, [mediaItem?.name, parsed, backendSpeaker]);
+  }, [mediaItem?.name, parsed, backendSpeaker, segmentInfo]);
 
-  // Evaluamos la voz seleccionada reactivamente frente al store global de speakers
   useEffect(() => {
     if (activeTokenToResolve && speakers.length > 0) {
       setSelectedVoice(resolveSpeakerValue(activeTokenToResolve, speakers, defaultSpeaker));
     } else if (activeTokenToResolve && speakers.length === 0) {
-      // Placeholder provisorio si no ha cargado
       setSelectedVoice(activeTokenToResolve);
     }
   }, [activeTokenToResolve, speakers, defaultSpeaker]);
-
 
   useEffect(() => {
     let cancelled = false;
@@ -235,13 +175,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       setJobError(null);
 
       try {
-        const localData = loadFromLocalStorage(mediaItem.name);
-        
-        let job = getCachedJobResult(folderRef.jobId);
-        if (!job) {
-          job = await v2vApi.getJobResult(folderRef.jobId);
-          setCachedJobResult(folderRef.jobId, job);
-        }
+        const job = await v2vApi.getJobResult(folderRef.jobId);
         if (cancelled) return;
 
         const video = job.videos.find((v) => v.index === folderRef.videoIndex);
@@ -252,13 +186,18 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
         setSegmentTimes({ start, end });
         
-        if (localData) {
-          setSegmentText(localData.text);
-          if (typeof localData.speed === "number") {
-            setSpeed(localData.speed);
-          }
+        if (segmentInfo?.editedText) {
+          setSegmentText(segmentInfo.editedText);
+        } else if (segmentInfo?.originalText) {
+          setSegmentText(segmentInfo.originalText);
         } else {
           setSegmentText(seg?.text ?? "");
+        }
+        
+        if (typeof segmentInfo?.speed === "number") {
+          setSpeed(segmentInfo.speed);
+        } else {
+          setSpeed(1.0);
         }
         
         if (seg?.speaker) {
@@ -276,7 +215,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     return () => {
       cancelled = true;
     };
-  }, [folderRef, parsed, clip, mediaItem]);
+  }, [folderRef, parsed, clip, mediaItem, segmentInfo]);
 
   const effectiveTimes = useMemo(() => {
     if (segmentTimes) return segmentTimes;
@@ -287,40 +226,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const normalizeTranslateLang = useMemo(() => {
     return translateLang === "None" ? null : translateLang;
   }, [translateLang]);
-
-  const handleTranscribeWithOpenReel = useCallback(async () => {
-    if (!clip || !mediaItem) return;
-    if (!mediaItem.blob) {
-      setSttError("No hay blob de audio disponible para transcribir");
-      return;
-    }
-
-    setSttLoading(true);
-    setSttError(null);
-    try {
-      let transcriptionService = getTranscriptionService();
-      if (!transcriptionService) {
-        transcriptionService = initializeTranscriptionService({
-          apiEndpoint: "https://transcribe.openreel.video",
-        });
-      }
-
-      const subtitles = await transcriptionService.transcribeClip(clip, mediaItem);
-      const text = joinNonEmpty(subtitles.map((s) => s.text || ""));
-      setSegmentText(text);
-
-      if (!segmentTimes) {
-        setSegmentTimes({
-          start: clip.startTime,
-          end: clip.startTime + clip.duration,
-        });
-      }
-    } catch (e) {
-      setSttError(e instanceof Error ? e.message : "STT falló");
-    } finally {
-      setSttLoading(false);
-    }
-  }, [clip, mediaItem, segmentTimes]);
 
   const handleTranscribeWithBackend = useCallback(async () => {
     if (!mediaItem?.blob) return;
@@ -377,7 +282,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     }
   }, [mediaItem]);
 
-
   const handleRegenerate = useCallback(async () => {
     if (!folderRef || !parsed || !clip || !mediaItem) return;
     if (!effectiveTimes) return;
@@ -389,27 +293,25 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     const currentText = segmentText;
     const currentSpeaker = selectedVoice;
     const oldSpeaker = parsed.speakerToken;
+    const segmentId = generateSegmentId(folderRef.jobId, folderRef.videoIndex, parsed.segIdx);
 
     setRegenLoading(true);
     setRegenError(null);
     setRegenStatus(null);
     try {
-      const { blob } = await (async () => {
-        const regenBlob = await v2vApi.regenerateSegment(
-          folderRef.jobId,
-          folderRef.videoIndex,
-          parsed.segIdx,
-          segmentText,
-          effectiveTimes.start,
-          effectiveTimes.end,
-          normalizeTranslateLang,
-          selectedVoice,
-          speed,
-        );
-        return { blob: regenBlob };
-      })();
+      const regenBlob = await v2vApi.regenerateSegment(
+        folderRef.jobId,
+        folderRef.videoIndex,
+        parsed.segIdx,
+        segmentText,
+        effectiveTimes.start,
+        effectiveTimes.end,
+        normalizeTranslateLang,
+        selectedVoice,
+        speed,
+      );
 
-      const newDuration = await getAudioDuration(blob);
+      const newDuration = await getAudioDuration(regenBlob);
 
       const speakerChanged = oldSpeaker !== currentSpeaker;
       const filenameToken = getSpeakerFilenameToken();
@@ -418,15 +320,12 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       const newFileName = `tts_${filenameToken}_${String(parsed.segIdx).padStart(4, "0")}.wav`;
       const newMediaName = `${parsed.folder}/${newFileName}`;
 
-      const file = new File([blob], newMediaName, { type: "audio/wav" });
+      const file = new File([regenBlob], newMediaName, { type: "audio/wav" });
       
-      const timestamp = Date.now();
-      saveToLocalStorage(newMediaName, {
-        text: currentText,
-        speaker: currentSpeaker,
-        speed,
-        timestamp,
-      });
+      const { updateSegmentText, updateSegmentSpeaker, updateSegmentSpeed } = useV2VStore.getState();
+      updateSegmentText(parsed.folder, segmentId, currentText);
+      updateSegmentSpeaker(parsed.folder, segmentId, currentSpeaker);
+      updateSegmentSpeed(parsed.folder, segmentId, speed);
 
       const result = await replaceMediaAsset(mediaItem.id, file);
       if (!result.success) {
@@ -527,13 +426,9 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       const newDuration = await getAudioDuration(blob);
       const file = new File([blob], mediaItem.name, { type: "audio/wav" });
       
-      const timestamp = Date.now();
-      saveToLocalStorage(mediaItem.name, {
-        text: segmentText,
-        speaker: selectedVoice,
-        speed: effectiveSpeed,
-        timestamp,
-      });
+      const segmentId = generateSegmentId(folderRef.jobId, folderRef.videoIndex, parsed.segIdx);
+      const { updateSegmentSpeed } = useV2VStore.getState();
+      updateSegmentSpeed(parsed.folder, segmentId, effectiveSpeed);
 
       const result = await replaceMediaAsset(mediaItem.id, file);
       if (!result.success) throw new Error("Error al reemplazar audio");
@@ -632,7 +527,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         </Select>
       </div>
 
-      {/* Speed Selector */}
       <div className="space-y-2 p-3 bg-background-tertiary border border-border rounded-lg">
         <label className="text-[10px] text-text-secondary block mb-1">
           Speed
@@ -710,7 +604,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         />
       </div>
 
-
       <div className="space-y-2">
         {sttError && (
           <div className="flex items-center gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded-lg">
@@ -719,31 +612,21 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           </div>
         )}
 
-        <div className="flex gap-2">
-          <button
-            onClick={handleTranscribeWithOpenReel}
-            disabled={sttLoading || regenLoading}
-            className="flex-1 py-2 bg-background-secondary border border-border rounded-lg text-[10px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
-          >
-            {sttLoading ? (
-              <>
-                <Loader2 size={12} className="animate-spin mr-2 inline" />
-                Transcribiendo...
-              </>
-            ) : (
-              "STT OpenReel"
-            )}
-          </button>
-
-          <button
-            onClick={handleTranscribeWithBackend}
-            disabled={sttLoading || regenLoading}
-            className="flex-1 py-2 bg-background-secondary border border-border rounded-lg text-[10px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
-            title="Fallback backend (requiere endpoint /api/transcribe-audio)"
-          >
-            Whisper+diar.
-          </button>
-        </div>
+        <button
+          onClick={handleTranscribeWithBackend}
+          disabled={sttLoading || regenLoading}
+          className="w-full py-2 bg-background-secondary border border-border rounded-lg text-[10px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+          title="Transcribe audio usando Whisper con diarización"
+        >
+          {sttLoading ? (
+            <>
+              <Loader2 size={12} className="animate-spin mr-2 inline" />
+              Transcribiendo...
+            </>
+          ) : (
+            "Whisper + diarización"
+          )}
+        </button>
       </div>
 
       <div className="space-y-2 pt-2 border-t border-border">

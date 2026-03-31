@@ -2315,6 +2315,14 @@ export const useProjectStore = create<ProjectState>()(
             error: null,
           });
 
+          const v2vFolderRefs = (recoveredProject as Project & { v2vFolderRefs?: Record<string, unknown> }).v2vFolderRefs;
+          if (v2vFolderRefs && typeof v2vFolderRefs === 'object') {
+            const { useV2VStore } = await import("./v2v-store");
+            Object.entries(v2vFolderRefs).forEach(([folder, ref]) => {
+              useV2VStore.getState().setFolderRef(folder, ref as Parameters<ReturnType<typeof useV2VStore.getState>['setFolderRef']>[1]);
+            });
+          }
+
           await projectManager.addToRecent(projectWithMedia);
           return true;
         }
@@ -2326,13 +2334,17 @@ export const useProjectStore = create<ProjectState>()(
         const titleEngine = useEngineStore.getState().getTitleEngine();
         const graphicsEngine = useEngineStore.getState().getGraphicsEngine();
 
-        const fullProject: Project = {
+        const { useV2VStore } = await import("./v2v-store");
+        const v2vFolderRefs = useV2VStore.getState().folderRefs;
+
+        const fullProject = {
           ...project,
           textClips: titleEngine?.getAllTextClips() || [],
           shapeClips: graphicsEngine?.getAllShapeClips() || [],
           svgClips: graphicsEngine?.getAllSVGClips() || [],
           stickerClips: graphicsEngine?.getAllStickerClips() || [],
-        };
+          v2vFolderRefs,
+        } as Project & { v2vFolderRefs: Record<string, unknown> };
         await autoSaveManager.forceSave(fullProject);
       },
 
