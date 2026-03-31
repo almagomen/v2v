@@ -1,6 +1,7 @@
 """
 Renderizado de video final: ffmpeg, preview baja res, upload opcional.
 """
+
 import json
 import subprocess
 from pathlib import Path
@@ -10,6 +11,44 @@ import unicodedata
 from src.config import TEMP_DIR
 
 
+def _has_nvenc() -> bool:
+    """Check if NVENC encoder is available."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return "h264_nvenc" in result.stdout
+    except Exception:
+        return False
+
+
+def _get_video_bitrate(path: Path) -> int:
+    """Get video bitrate in bps from a media file."""
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-select_streams",
+            "v:0",
+            str(path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        data = json.loads(result.stdout)
+        streams = data.get("streams", [])
+        if streams:
+            return int(streams[0].get("bit_rate", 0))
+    except Exception:
+        pass
+    return 0
+
+
 def render_video(
     video_path: Path,
     output_name: str,
@@ -17,33 +56,157 @@ def render_video(
     no_vocals_path: Path,
     output_dir: Path | None = None,
 ) -> Path:
-    """Renderiza el video final combinando video original con audio clonado."""
+    """Renderiza el video final combinando video original con audio clonado.
+
+    Usa NVENC si está disponible (mismo codec que ColabExport), con fallback a libx264.
+    """
     if output_dir is None:
         output_dir = TEMP_DIR
-    
+
     final_output_path = output_dir / f"{output_name}.mp4"
-    # Renderizar a un archivo temporal para evitar conflictos si input == output
     temp_output_path = output_dir / f"temp_{output_name}.mp4"
 
-    cmd = [
-        "ffmpeg", "-y", "-v", "error",
-        "-i", str(video_path),
-        "-i", str(vocals_es_path),
-        "-i", str(no_vocals_path),
-        "-filter_complex",
-        "[0]volume=0.00[a0];[1]volume=3.5[a1];[2]volume=1.0[a2];[a0][a1][a2]amix=inputs=3[a]",
-        "-map", "0:v",
-        "-map", "[a]",
-        "-c:v", "copy",
-        str(temp_output_path),
-    ]
+    use_nvenc = _has_nvenc()
+
+    # Obtener bitrate del video original para configuración dinámica
+    orig_bitrate = _get_video_bitrate(video_path)
+    target_k = (
+        max(800, min(int(orig_bitrate / 1000), 8000)) if orig_bitrate > 0 else 2000
+    )
+    max_k = int(target_k * 1.1)
+    buf_k = int(target_k * 2.0)
+
+    if use_nvenc:
+        # Mismo codec y configuración que ColabExport (api/routes/render.py)
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(video_path),
+            "-i",
+            str(vocals_es_path),
+            "-i",
+            str(no_vocals_path),
+            "-filter_complex",
+            "[0]volume=0.00[a0];[1]volume=3.5[a1];[2]volume=1.0[a2];[a0][a1][a2]amix=inputs=3[a]",
+            "-map",
+            "0:v",
+            "-map",
+            "[a]",
+            "-c:v",
+            "h264_nvenc",
+            "-profile:v",
+            "high",
+            "-preset",
+            "p7",
+            "-rc",
+            "vbr",
+            "-cq",
+            "28",
+            "-b:v",
+            f"{target_k}k",
+            "-maxrate:v",
+            f"{max_k}k",
+            "-bufsize:v",
+            f"{buf_k}k",
+            "-multipass",
+            "fullres",
+            "-spatial-aq",
+            "1",
+            "-temporal-aq",
+            "1",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(temp_output_path),
+        ]
+    else:
+        # Fallback a libx264 con buena calidad
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(video_path),
+            "-i",
+            str(vocals_es_path),
+            "-i",
+            str(no_vocals_path),
+            "-filter_complex",
+            "[0]volume=0.00[a0];[1]volume=3.5[a1];[2]volume=1.0[a2];[a0][a1][a2]amix=inputs=3[a]",
+            "-map",
+            "0:v",
+            "-map",
+            "[a]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(temp_output_path),
+        ]
+
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
         if final_output_path.exists():
             final_output_path.unlink()
         temp_output_path.rename(final_output_path)
         return final_output_path
-    
+
+    # Si falla NVENC, intentar fallback a libx264
+    if use_nvenc:
+        print(f"⚠️ NVENC falló, intentando libx264...")
+        fallback_cmd = [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(video_path),
+            "-i",
+            str(vocals_es_path),
+            "-i",
+            str(no_vocals_path),
+            "-filter_complex",
+            "[0]volume=0.00[a0];[1]volume=3.5[a1];[2]volume=1.0[a2];[a0][a1][a2]amix=inputs=3[a]",
+            "-map",
+            "0:v",
+            "-map",
+            "[a]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(temp_output_path),
+        ]
+        result = subprocess.run(fallback_cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            if final_output_path.exists():
+                final_output_path.unlink()
+            temp_output_path.rename(final_output_path)
+            return final_output_path
+
     print(f"❌ Error al renderizar: {result.stderr}")
     if temp_output_path.exists():
         temp_output_path.unlink()
@@ -52,9 +215,13 @@ def render_video(
 
 def get_video_metadata(video_path: Path) -> dict:
     cmd = [
-        "ffprobe", "-v", "quiet",
-        "-print_format", "json",
-        "-show_format", "-show_streams",
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
         str(video_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -66,11 +233,18 @@ def create_low_res_preview(input_path: Path, output_path: Path | None = None) ->
     if output_path is None:
         output_path = input_path.parent / "low_preview.mp4"
     cmd = [
-        "ffmpeg", "-y", "-v", "error",
-        "-i", str(input_path),
-        "-vf", "scale=360:-1",
-        "-c:a", "copy",
-        "-vcodec", "libx264",
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        str(input_path),
+        "-vf",
+        "scale=360:-1",
+        "-c:a",
+        "copy",
+        "-vcodec",
+        "libx264",
         str(output_path),
     ]
     subprocess.run(cmd, check=True)
@@ -88,9 +262,13 @@ def upload_to_catbox(file_path: Path) -> str:
     safe_name = f"{base}{file_path.suffix or '.mp4'}"
 
     cmd = [
-        "curl", "-F", "reqtype=fileupload",
-        "-F", "time=24h",
-        "-F", f"fileToUpload=@{file_path};filename={safe_name}",
+        "curl",
+        "-F",
+        "reqtype=fileupload",
+        "-F",
+        "time=24h",
+        "-F",
+        f"fileToUpload=@{file_path};filename={safe_name}",
         "https://litterbox.catbox.moe/resources/internals/api.php",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)

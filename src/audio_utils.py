@@ -1,6 +1,7 @@
 """
 Utilidades de audio: ajuste de duración, clonado de segmentos, merge.
 """
+
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -50,7 +51,9 @@ def clone_voice_segments(
     seqs_trg_dir = path.parent / "Seqs_trg"
     seqs_trg_dir.mkdir(exist_ok=True)
 
-    texts_to_process = texts if only_indices is None else [texts[i - 1] for i in only_indices]
+    texts_to_process = (
+        texts if only_indices is None else [texts[i - 1] for i in only_indices]
+    )
     start_idx = 1 if only_indices is None else only_indices[0]
 
     times: list[int] = []
@@ -59,6 +62,7 @@ def clone_voice_segments(
     for idx, text_dict in enumerate(texts_to_process):
         text = text_dict["text"]
         start_time = text_dict["start"]
+        speaker = text_dict.get("speaker", "SPEAKER_00")
 
         seq_num = only_indices[idx] if only_indices else texts.index(text_dict) + 1
 
@@ -80,17 +84,26 @@ def clone_voice_segments(
 
         if slowdown_range and stretch_target_ratio != 1.0:
             if duration_ratio > 1.0:
-                print(f"{(dur_es/dur_en):.2f}x: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
+                print(
+                    f"{(dur_es / dur_en):.2f}x: {dur_es:5.2f}s → {dur_en:5.2f}s",
+                    end=" ",
+                )
                 target_samples = int(dur_en * rate)
                 arr = adjust_audio_duration(arr, target_samples, rate)
             elif slowdown_range[0] < duration_ratio < slowdown_range[1]:
                 target_dur_sec = dur_es + (dur_en - dur_es) * stretch_target_ratio
-                print(f"{(dur_es/target_dur_sec):.2f}x: {dur_es:5.2f}s → {target_dur_sec:5.2f}s", end=" ")
+                print(
+                    f"{(dur_es / target_dur_sec):.2f}x: {dur_es:5.2f}s → {target_dur_sec:5.2f}s",
+                    end=" ",
+                )
                 target_samples = int(target_dur_sec * rate)
                 arr = adjust_audio_duration(arr, target_samples, rate)
             else:
-                print(f"{(dur_es/dur_en):.2f}x: {dur_es:5.2f}s → {dur_en:5.2f}s", end=" ")
-        
+                print(
+                    f"{(dur_es / dur_en):.2f}x: {dur_es:5.2f}s → {dur_en:5.2f}s",
+                    end=" ",
+                )
+
         # Aplicar speed manual del usuario si es distinto de 1.0 y no se aplicó stretch automático
         if speed != 1.0:
             target_samples = int(arr.shape[-1] / speed)
@@ -99,7 +112,10 @@ def clone_voice_segments(
 
         print(f" {text}")
 
-        audio_es_path = seqs_trg_dir / f"{audio_en_path.stem}.wav"
+        # Generar nombre con formato consistente: tts_{speaker}_{NNNN}.wav
+        # Esto permite al frontend identificar el segmento y su speaker
+        safe_speaker = speaker.replace(" ", "_").replace("/", "_").replace("\\", "_")
+        audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:04d}.wav"
         torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
         path_es.append(audio_es_path)
         # Registrar ruta exacta del segmento en el manifiesto de activos

@@ -430,6 +430,14 @@ export const v2vApi = {
     return readJsonOrThrow<PollResponse>(res);
   },
 
+  async reconcileJobs(): Promise<{ jobs: Array<{ job_id: string; status: string; message: string; video_count: number; videos: any[] }> }> {
+    const res = await fetch(url("/api/jobs/reconcile"));
+    if (!res.ok) {
+      return { jobs: [] };
+    }
+    return readJsonOrThrow(res);
+  },
+
   async deleteVideo(folderName: string): Promise<{ status: string; message: string }> {
     const res = await fetch(url(`/api/video/${encodeURIComponent(folderName)}`), {
       method: "DELETE",

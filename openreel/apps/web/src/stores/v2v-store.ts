@@ -15,9 +15,13 @@ import { autoSaveManager } from "../services/auto-save";
 const FOLDER_REFS_STORAGE_KEY = "openreel.v2v.folderRefs";
 const JOB_STATE_STORAGE_KEY = "openreel.v2v.jobState";
 
+const POLL_INTERVAL_FAST = 2000;
+const POLL_INTERVAL_SLOW = 8000;
+
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let isImportingBusy = false;
 let isFetchingSpeakers = false;
+let currentPollPhase: "fast" | "slow" = "fast";
 
 export type V2VFolderRef = { jobId: string; videoIndex: number; outputName?: string; nativeFiles?: string[] };
 
@@ -146,8 +150,6 @@ export interface V2VState {
   syncFolderAssets: (jobId: string, videoIndex: number, folder: string) => Promise<void>;
   reset: () => void;
 }
-
-const POLL_INTERVAL = 3000;
 
 export const useV2VStore = create<V2VState>((set, get) => {
   const saved = loadJobStateFromStorage();
@@ -298,8 +300,15 @@ export const useV2VStore = create<V2VState>((set, get) => {
       if (pollingTimer) clearInterval(pollingTimer);
       set({ jobId, isProcessing: true });
       saveJobStateToStorage({ jobId });
+      currentPollPhase = "fast";
 
-      pollingTimer = setInterval(async () => {
+      const scheduleNext = () => {
+        if (pollingTimer) clearInterval(pollingTimer);
+        const interval = currentPollPhase === "fast" ? POLL_INTERVAL_FAST : POLL_INTERVAL_SLOW;
+        pollingTimer = setInterval(pollOnce, interval);
+      };
+
+      const pollOnce = async () => {
         const state = get();
         if (!jobId || !state.isProcessing) {
           if (pollingTimer) {
@@ -341,8 +350,29 @@ export const useV2VStore = create<V2VState>((set, get) => {
             });
           }
 
-          if (s.status === "done" || s.status === "error") {
-            if (!isImportingBusy) {
+          // Adaptive polling: switch to slow when waiting for import
+          const currentVideos = partial?.videos || [];
+          const hasPendingImports = currentVideos.some(
+            (v) => !get().importStatusByKey[importKeyFor(v.url, v.index)],
+          );
+
+          if (hasPendingImports && !isImportingBusy) {
+            currentPollPhase = "slow";
+            scheduleNext();
+          } else if (currentPollPhase === "slow" && !hasPendingImports) {
+            currentPollPhase = "fast";
+            scheduleNext();
+          }
+
+          if (s.status === "done" || s.status === "error" || s.status === "interrupted") {
+            if (s.status === "interrupted") {
+              console.warn(`[V2V] Job ${jobId} fue interrumpido por reinicio del servidor`);
+              get().stopPolling();
+              set({
+                isProcessing: false,
+                error: "El servidor se reinició durante el procesamiento. Revisa los jobs completados o reinicia.",
+              });
+            } else if (!isImportingBusy) {
                const stillPending = get().videos.filter(v => !get().importStatusByKey[importKeyFor(v.url, v.index)]);
                if (stillPending.length === 0) {
                  get().stopPolling();
@@ -352,7 +382,6 @@ export const useV2VStore = create<V2VState>((set, get) => {
           }
 
           if (!isImportingBusy) {
-            const currentVideos = partial?.videos || [];
             const pendingVideos = currentVideos.filter(
               (v) => !get().importStatusByKey[importKeyFor(v.url, v.index)],
             );
@@ -542,7 +571,9 @@ export const useV2VStore = create<V2VState>((set, get) => {
         } catch (err) {
           console.error("V2V Polling error:", err);
         }
-      }, POLL_INTERVAL);
+      };
+
+      scheduleNext();
     },
 
     stopPolling: () => {
@@ -550,6 +581,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
         clearInterval(pollingTimer);
         pollingTimer = null;
       }
+      currentPollPhase = "fast";
       set({ isProcessing: false });
     },
 

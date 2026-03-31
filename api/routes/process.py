@@ -1,9 +1,15 @@
 """Process and job status endpoints."""
+
 from fastapi import APIRouter, HTTPException
 
 from api.schemas import (
-    ProcessUrlsRequest, ProcessUrlsResponse, JobStatusResponse,
-    JobResultResponse, VideoResult, SegmentSchema, JobPollResponse
+    ProcessUrlsRequest,
+    ProcessUrlsResponse,
+    JobStatusResponse,
+    JobResultResponse,
+    VideoResult,
+    SegmentSchema,
+    JobPollResponse,
 )
 from api.job_store import get_job
 from api.service import start_process
@@ -15,7 +21,9 @@ router = APIRouter(prefix="/api", tags=["process"])
 def process_urls(req: ProcessUrlsRequest):
     urls = [u.strip() for u in req.urls if u.strip()]
     if not urls:
-        raise HTTPException(status_code=400, detail="Introduce al menos una URL de YouTube")
+        raise HTTPException(
+            status_code=400, detail="Introduce al menos una URL de YouTube"
+        )
 
     translate = None if req.translate_lang in ("None", "", None) else req.translate_lang
     job_id = start_process(urls, translate, req.speaker)
@@ -41,21 +49,31 @@ def get_job_result(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job no encontrado")
     if job.get("status") == "error":
-        raise HTTPException(status_code=400, detail=job.get("error", job.get("message", "Error desconocido")))
+        raise HTTPException(
+            status_code=400,
+            detail=job.get("error", job.get("message", "Error desconocido")),
+        )
+    if job.get("status") == "interrupted":
+        raise HTTPException(
+            status_code=410,
+            detail="El job fue interrumpido por un reinicio del servidor. Reinicia el proceso.",
+        )
 
     videos = []
     for v in job.get("videos", []):
-        videos.append(VideoResult(
-            index=v["index"],
-            output_name=v["output_name"],
-            video_path=v["video_path"],
-            video_only_path=v.get("video_only_path", ""),
-            instrumental_path=v.get("instrumental_path", ""),
-            original_audio_path=v.get("original_audio_path", ""),
-            vocals_path=v.get("vocals_path", ""),
-            segments=[SegmentSchema(**s) for s in v["segments"]],
-            url=v.get("url", ""),
-        ))
+        videos.append(
+            VideoResult(
+                index=v["index"],
+                output_name=v["output_name"],
+                video_path=v["video_path"],
+                video_only_path=v.get("video_only_path", ""),
+                instrumental_path=v.get("instrumental_path", ""),
+                original_audio_path=v.get("original_audio_path", ""),
+                vocals_path=v.get("vocals_path", ""),
+                segments=[SegmentSchema(**s) for s in v["segments"]],
+                url=v.get("url", ""),
+            )
+        )
     return JobResultResponse(
         job_id=job_id,
         status=job.get("status", "done"),
@@ -79,10 +97,12 @@ def get_job_poll(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job no encontrado")
 
+    status = job.get("status", "pending")
+
     # 1. Status
     status_resp = JobStatusResponse(
         job_id=job_id,
-        status=job.get("status", "pending"),
+        status=status,
         message=job.get("message"),
         progress=job.get("progress", 0),
     )
@@ -90,20 +110,22 @@ def get_job_poll(job_id: str):
     # 2. Result (videos)
     videos = []
     for v in job.get("videos", []):
-        videos.append(VideoResult(
-            index=v["index"],
-            output_name=v["output_name"],
-            video_path=v["video_path"],
-            video_only_path=v.get("video_only_path", ""),
-            instrumental_path=v.get("instrumental_path", ""),
-            original_audio_path=v.get("original_audio_path", ""),
-            vocals_path=v.get("vocals_path", ""),
-            segments=[SegmentSchema(**s) for s in v["segments"]],
-            url=v.get("url", ""),
-        ))
+        videos.append(
+            VideoResult(
+                index=v["index"],
+                output_name=v["output_name"],
+                video_path=v["video_path"],
+                video_only_path=v.get("video_only_path", ""),
+                instrumental_path=v.get("instrumental_path", ""),
+                original_audio_path=v.get("original_audio_path", ""),
+                vocals_path=v.get("vocals_path", ""),
+                segments=[SegmentSchema(**s) for s in v["segments"]],
+                url=v.get("url", ""),
+            )
+        )
     result_resp = JobResultResponse(
         job_id=job_id,
-        status=job.get("status", "done"),
+        status=status,
         videos=videos,
         log=job.get("log"),
     )
@@ -113,5 +135,32 @@ def get_job_poll(job_id: str):
         status=status_resp,
         log=job.get("log", ""),
         items=job.get("url_states", []),
-        result=result_resp
+        result=result_resp,
     )
+
+
+@router.get("/jobs/reconcile")
+def reconcile_jobs():
+    """
+    Retorna todos los jobs con estado 'done' o 'interrupted' cargados desde disco.
+    Permite al frontend reconstruir el estado después de un reinicio del servidor.
+    """
+    from api.job_store import _jobs
+    from api.job_store import _lock
+
+    with _lock:
+        jobs_summary = []
+        for job_id, job_data in _jobs.items():
+            status = job_data.get("status", "unknown")
+            if status in ("done", "interrupted", "error"):
+                jobs_summary.append(
+                    {
+                        "job_id": job_id,
+                        "status": status,
+                        "message": job_data.get("message", ""),
+                        "video_count": len(job_data.get("videos", [])),
+                        "videos": job_data.get("videos", []),
+                    }
+                )
+
+    return {"jobs": jobs_summary}

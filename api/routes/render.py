@@ -2,6 +2,7 @@
 Colab FFmpeg render endpoint.
 Renders a timeline (single or batch) using ffmpeg server-side.
 """
+
 import io
 import zipfile
 from pathlib import Path
@@ -24,33 +25,102 @@ router = APIRouter(prefix="/api", tags=["render"])
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _has_audio(path: Path) -> bool:
     """Check if a media file has at least one audio stream using ffprobe."""
     import subprocess
+
     try:
         cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "a",
-            "-show_entries", "stream=index", "-of", "csv=p=0", str(path)
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+            str(path),
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         return bool(result.stdout.strip())
     except Exception:
         return False
 
+
+def _validate_manifest_integrity(folder: Path) -> list[str]:
+    """
+    Validates that critical assets exist in both manifest and disk.
+    Returns list of warnings (missing files).
+    """
+    assets = load_assets(folder)
+    warnings = []
+
+    critical_keys = ["merged", "video_only", "vocals", "no_vocals"]
+    for key in critical_keys:
+        path_str = assets.get(key)
+        if path_str:
+            p = Path(path_str)
+            if not p.exists():
+                warnings.append(f"Asset crítico '{key}' no existe en disco: {path_str}")
+
+    # Verificar segmentos TTS
+    segments = assets.get("segments", {})
+    if isinstance(segments, dict):
+        for seg_idx, seg_path_str in segments.items():
+            if seg_path_str:
+                p = Path(seg_path_str)
+                if not p.exists():
+                    warnings.append(
+                        f"Segmento TTS #{seg_idx} no existe: {seg_path_str}"
+                    )
+
+    return warnings
+
+
+def _job_folders_from_refs(folder_refs: list[tuple[str, int]]) -> list[Path]:
+    """Resolve folders from a list of (job_id, video_index) tuples."""
+    folders = []
+    for job_id, video_index in folder_refs:
+        try:
+            folders.append(_job_folder(job_id, video_index))
+        except HTTPException:
+            continue
+    return folders
+
+
 def _job_folder(job_id: str, video_index: int) -> Path:
     """Resolve the folder for a given job/video_index."""
     job = get_job(job_id)
     if not job:
-        # NOTA: Si ves este error, es porque el servidor se reinició y el job_id ya no existe en memoria.
-        # Debes iniciar un nuevo proceso en el panel V2V.
-        raise HTTPException(status_code=404, detail=f"Job {job_id} no encontrado. Por favor, reinicia el proceso de inferencia.")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Job {job_id} no encontrado. Esto puede deberse a un reinicio del servidor. "
+                "Por favor, reinicia el proceso de inferencia desde el panel V2V."
+            ),
+        )
+
+    status = job.get("status", "")
+    if status == "interrupted":
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                f"El job {job_id} fue interrumpido por un reinicio del servidor. "
+                "Por favor, reinicia el proceso desde el panel V2V."
+            ),
+        )
+
     videos = job.get("videos", [])
     if video_index < 0 or video_index >= len(videos):
         raise HTTPException(status_code=404, detail="Video index fuera de rango")
     return Path(videos[video_index]["video_path"]).parent
 
 
-def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video_index: int = None) -> Path:
+def _resolve_media_path(
+    folder: Path, media_name: str, job_id: str = None, video_index: int = None
+) -> Path:
     """
     Resolves a media_name to an absolute path.
     Prioritizes the v2v_assets.json manifest (New Logic).
@@ -60,15 +130,15 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
 
     # 1. Cargar manifiesto
     assets = load_assets(folder)
-    
+
     # 2. Mapeo de nombres genéricos a claves del manifiesto
     name_to_asset_key = {
         "video.mp4": "video_only",
         "instrumental.wav": "no_vocals",
         "audio.wav": "audio_only",
-        "vocals.wav": "vocals"
+        "vocals.wav": "vocals",
     }
-    
+
     # Intentar resolver vía manifiesto (usando file_name sanitizado)
     asset_key = name_to_asset_key.get(file_name)
     if asset_key and assets.get(asset_key):
@@ -77,32 +147,37 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
             return path
         if asset_key == "video_only" and assets.get("merged"):
             path = Path(assets["merged"])
-            if path.exists(): return path
+            if path.exists():
+                return path
 
     # 2.5 Búsqueda exhaustiva en el manifiesto por nombre de archivo
     # Si el frontend manda el nombre real (ej. El_reductor...f137.mp4), lo buscamos en los valores
     for val in assets.values():
         if isinstance(val, str) and Path(val).name == file_name:
             p_cand = Path(val)
-            if p_cand.exists(): return p_cand
-    
+            if p_cand.exists():
+                return p_cand
+
     # Buscar también en la subsección de segmentos del manifiesto
     segments_map = assets.get("segments", {})
     for seg_path in segments_map.values():
         if isinstance(seg_path, str) and Path(seg_path).name == file_name:
             p_cand = Path(seg_path)
-            if p_cand.exists(): return p_cand
+            if p_cand.exists():
+                return p_cand
 
     # 3. Especial: Segmentos TTS (si media_name es un índice numerico o tts_..._XXXX.wav)
     import re
-    match = re.search(r'tts_.*_(\d+)\.wav$', file_name)
+
+    match = re.search(r"tts_.*_(\d+)\.wav$", file_name)
     seg_idx = match.group(1) if match else (file_name if file_name.isdigit() else None)
-    
+
     if seg_idx:
         seg_path_str = segments_map.get(str(int(seg_idx)))
         if seg_path_str:
             path = Path(seg_path_str)
-            if path.exists(): return path
+            if path.exists():
+                return path
 
     # Fallback solo para rutas absolutas existentes
     p = Path(media_name)
@@ -119,11 +194,12 @@ def _resolve_media_path(folder: Path, media_name: str, job_id: str = None, video
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class TimelineClip(BaseModel):
-    type: str           # "video" | "audio"
-    media_name: str     # relative path to media file
-    start: float        # inPoint (trim start within file, seconds)
-    end: float          # outPoint (trim end within file, seconds)
+    type: str  # "video" | "audio"
+    media_name: str  # relative path to media file
+    start: float  # inPoint (trim start within file, seconds)
+    end: float  # outPoint (trim end within file, seconds)
     track_start: float  # position on the timeline (seconds)
     volume: float = 1.0
 
@@ -151,6 +227,7 @@ class RenderBatchRequest(BaseModel):
 # Upload media (pre-upload local files before render)
 # ---------------------------------------------------------------------------
 
+
 @router.post("/render/upload-media/{job_id}/{video_index}")
 async def upload_media(
     job_id: str,
@@ -160,7 +237,7 @@ async def upload_media(
 ):
     """Upload a local file into the job folder so it can be included in render."""
     folder = _job_folder(job_id, video_index)
-    
+
     # Sanitizar subfolder para mantener la estética del sistema de archivos (save_name)
     subfolder_safe = to_safe_name(subfolder) if subfolder else ""
     target_dir = folder / subfolder_safe if subfolder_safe else folder
@@ -170,15 +247,19 @@ async def upload_media(
     raw_name = Path(file.filename or "upload.bin")
     safe_stem = to_safe_name(raw_name.stem)
     safe_filename = f"{safe_stem}{raw_name.suffix}" if raw_name.suffix else safe_stem
-    
+
     dest = target_dir / safe_filename
     content = await file.read()
     dest.write_bytes(content)
-    
+
     # Registrar el archivo en el manifiesto para que el renderizador lo encuentre
     update_assets(folder, **{safe_filename: str(dest)})
 
-    return {"media_name": f"{subfolder_safe}/{safe_filename}" if subfolder_safe else safe_filename}
+    return {
+        "media_name": f"{subfolder_safe}/{safe_filename}"
+        if subfolder_safe
+        else safe_filename
+    }
 
 
 @router.get("/render/manifest/{job_id}/{video_index}")
@@ -191,6 +272,7 @@ async def get_rendered_manifest(job_id: str, video_index: int):
 # ---------------------------------------------------------------------------
 # Single timeline render
 # ---------------------------------------------------------------------------
+
 
 def _build_ffmpeg_cmd(
     clips: list[TimelineClip],
@@ -290,36 +372,49 @@ def _build_ffmpeg_cmd(
     cmd += inputs
     cmd += ["-filter_complex", filter_complex]
 
-
     if video_map:
         cmd += ["-map", video_map]
-        
+
         # --- Lógica de Bitrate Dinámico ---
         # Intentamos obtener el bitrate del video original para ser fieles a la fuente
         assets = load_assets(folder)
         orig_path = assets.get("video_only") or assets.get("merged")
         orig_bitrate = get_video_bitrate(orig_path) if orig_path else 0
-        
+
         # Convertimos a Kbps para FFmpeg. Límites: 800k min, 8000k max.
         # Si no se detecta (0), usamos 2000k como valor seguro por defecto.
-        target_k = max(800, min(int(orig_bitrate / 1000), 8000)) if orig_bitrate > 0 else 2000
+        target_k = (
+            max(800, min(int(orig_bitrate / 1000), 8000)) if orig_bitrate > 0 else 2000
+        )
         max_k = int(target_k * 1.1)
         buf_k = int(target_k * 2.0)
 
         # Configuración optimizada para Peso/Calidad (NVENC):
         cmd += [
-            "-c:v", "h264_nvenc", 
-            "-profile:v", "high",
-            "-preset", "p7",            # Máximo análisis de calidad
-            "-rc", "vbr",               # Variable Bit Rate
-            "-cq", "28",                # Calidad constante balanceada para peso
-            "-b:v", f"{target_k}k",     # Bitrate objetivo dinámico
-            "-maxrate:v", f"{max_k}k",   # Límite máximo dinámico
-            "-bufsize:v", f"{buf_k}k",   # Buffer dinámico (2x)
-            "-multipass", "fullres",    # Análisis detallado multipass
-            "-spatial-aq", "1",         # Adaptive Quantization espacial
-            "-temporal-aq", "1",        # Adaptive Quantization temporal
-            "-pix_fmt", "yuv420p"
+            "-c:v",
+            "h264_nvenc",
+            "-profile:v",
+            "high",
+            "-preset",
+            "p7",  # Máximo análisis de calidad
+            "-rc",
+            "vbr",  # Variable Bit Rate
+            "-cq",
+            "28",  # Calidad constante balanceada para peso
+            "-b:v",
+            f"{target_k}k",  # Bitrate objetivo dinámico
+            "-maxrate:v",
+            f"{max_k}k",  # Límite máximo dinámico
+            "-bufsize:v",
+            f"{buf_k}k",  # Buffer dinámico (2x)
+            "-multipass",
+            "fullres",  # Análisis detallado multipass
+            "-spatial-aq",
+            "1",  # Adaptive Quantization espacial
+            "-temporal-aq",
+            "1",  # Adaptive Quantization temporal
+            "-pix_fmt",
+            "yuv420p",
         ]
 
     if audio_map:
@@ -336,6 +431,14 @@ async def render_timeline(req: RenderTimelineRequest):
     import subprocess
 
     folder = _job_folder(req.job_id, req.video_index)
+
+    # Validar integridad del manifiesto antes de renderizar
+    manifest_warnings = _validate_manifest_integrity(folder)
+    if manifest_warnings:
+        print(f"⚠️ Advertencias de manifiesto para {req.job_id}/{req.video_index}:")
+        for w in manifest_warnings:
+            print(f"  - {w}")
+
     safe_name = to_safe_name(req.output_name)
     output_path = folder / f"_export_{safe_name}.mp4"
 
@@ -359,6 +462,7 @@ async def render_timeline(req: RenderTimelineRequest):
 # Batch render (multi-project → ZIP)
 # ---------------------------------------------------------------------------
 
+
 @router.post("/render/batch")
 async def render_batch(req: RenderBatchRequest):
     """Render multiple project timelines and return them as a ZIP."""
@@ -373,10 +477,14 @@ async def render_batch(req: RenderBatchRequest):
             safe_name = to_safe_name(item.output_name)
             output_path = folder / f"{safe_name}.mp4"
 
-            cmd = _build_ffmpeg_cmd(item.clips, folder, output_path, item.job_id, item.video_index)
+            cmd = _build_ffmpeg_cmd(
+                item.clips, folder, output_path, item.job_id, item.video_index
+            )
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                errors.append(f"{item.output_name}: ffmpeg error – {result.stderr[-300:]}")
+                errors.append(
+                    f"{item.output_name}: ffmpeg error – {result.stderr[-300:]}"
+                )
                 continue
             results.append(output_path)
         except HTTPException as e:

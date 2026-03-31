@@ -1,4 +1,5 @@
 """Share (Catbox) and ZIP endpoints."""
+
 import zipfile
 from pathlib import Path
 
@@ -21,15 +22,29 @@ def share_to_catbox(job_id: str, video_index: int):
     videos = job.get("videos", [])
     if video_index < 0 or video_index >= len(videos):
         raise HTTPException(status_code=404, detail="Video no encontrado")
-    output_path = Path(videos[video_index]["output_video_path"])
-    if not output_path.exists():
-        raise HTTPException(status_code=404, detail="Video no encontrado")
+
+    video = videos[video_index]
+
+    output_path = None
+    for key in ("video_path", "video_only_path", "output_video_path"):
+        p = video.get(key)
+        if p:
+            candidate = Path(p)
+            if candidate.exists():
+                output_path = candidate
+                break
+
+    if output_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No se encontró ningún archivo de video para este job. El video puede no haberse procesado aún.",
+        )
+
     try:
         url = upload_to_catbox(output_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al subir a Catbox: {e}")
     if not url:
-        # Mantén un detalle útil; el stderr ya se imprime en server logs.
         raise HTTPException(
             status_code=500,
             detail="Error al subir a Catbox (curl falló o no devolvió URL).",
@@ -43,29 +58,30 @@ def download_all_zip(job_id: str):
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job no encontrado")
-    output_paths = [Path(p) for p in job.get("output_paths", []) if Path(p).exists()]
-    if not output_paths:
-        # Fallback: si no se llenó output_paths, derivar desde videos[]
-        videos = job.get("videos", [])
-        derived = []
-        for v in videos:
-            p = v.get("output_video_path") or v.get("video_path")
+
+    output_paths: list[Path] = []
+    videos = job.get("videos", [])
+
+    for video in videos:
+        for key in ("video_path", "video_only_path", "output_video_path"):
+            p = video.get(key)
             if p:
-                pp = Path(p)
-                if pp.exists():
-                    derived.append(pp)
-        output_paths = derived
+                candidate = Path(p)
+                if candidate.exists() and candidate not in output_paths:
+                    output_paths.append(candidate)
+                    break
 
     if not output_paths:
         raise HTTPException(
             status_code=404,
-            detail="No hay videos para descargar (output_paths vacío y videos sin archivos existentes).",
+            detail="No hay videos para descargar. Los videos pueden no haberse procesado aún.",
         )
 
-    # Evitar colisiones entre jobs concurrentes
     zip_path = TEMP_DIR / f"videos_inferidos_{job_id}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in output_paths:
             zf.write(p, arcname=p.name)
 
-    return FileResponse(zip_path, filename="videos_inferidos.zip", media_type="application/zip")
+    return FileResponse(
+        zip_path, filename="videos_inferidos.zip", media_type="application/zip"
+    )

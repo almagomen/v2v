@@ -1,4 +1,5 @@
 """File serving endpoints."""
+
 import os
 from pathlib import Path
 
@@ -53,14 +54,14 @@ def serve_file(job_id: str, video_index: int, filename: str):
     if not _safe_filename(filename):
         raise HTTPException(status_code=400, detail="Nombre de archivo no permitido")
     folder = _get_video_folder(job_id, video_index)
-    
+
     # Aseguramos que el path resuelto esté dentro de la carpeta permitida (seguridad real)
     base_dir = folder.resolve()
     file_path = (base_dir / filename).resolve()
-    
+
     if not str(file_path).startswith(str(base_dir)):
         raise HTTPException(status_code=403, detail="Acceso denegado")
-        
+
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
     return FileResponse(file_path, filename=filename)
@@ -83,7 +84,8 @@ def serve_file_by_index(job_id: str, video_index: int):
 def list_audio_segments(job_id: str, video_index: int):
     """List audio segment WAVs for a job/video.
 
-    WAVs are generated under `<video_folder>/Seqs_trg/vocals_XXXX.wav`.
+    WAVs are generated under `<video_folder>/Seqs_trg/tts_{speaker}_{NNNN}.wav`.
+    Also supports legacy `vocals_XXXX.wav` format for backwards compatibility.
     """
     job = get_job(job_id)
     if not job:
@@ -102,11 +104,25 @@ def list_audio_segments(job_id: str, video_index: int):
             seg = int(s.get("seg"))
         except Exception:
             continue
-        filename = f"vocals_{seg:04d}.wav"
-        wav_path = seqs_trg / filename
-        if not wav_path.exists():
-            # No listamos segmentos sin archivo (evita 404 en frontend).
+
+        # Buscar primero el formato nuevo: tts_{speaker}_{NNNN}.wav
+        wav_path = None
+        filename = None
+        for candidate in seqs_trg.glob(f"tts_*_{seg:04d}.wav"):
+            wav_path = candidate
+            filename = candidate.name
+            break
+
+        # Fallback al formato legacy: vocals_NNNN.wav
+        if wav_path is None:
+            legacy = seqs_trg / f"vocals_{seg:04d}.wav"
+            if legacy.exists():
+                wav_path = legacy
+                filename = legacy.name
+
+        if wav_path is None:
             continue
+
         items.append(
             {
                 "seg": seg,
@@ -121,13 +137,23 @@ def list_audio_segments(job_id: str, video_index: int):
 
 @router.get("/job/{job_id}/audio-segments/{video_index}/{seg}")
 def serve_audio_segment(job_id: str, video_index: int, seg: int):
-    """Serve a single WAV segment by seg index (1-based)."""
+    """Serve a single WAV segment by seg index (1-based).
+
+    Supports both formats: tts_{speaker}_{NNNN}.wav and vocals_NNNN.wav
+    """
     if seg <= 0 or seg > 9999:
         raise HTTPException(status_code=400, detail="Segmento inválido")
     folder = _get_video_folder(job_id, video_index)
     seqs_trg = folder / "Seqs_trg"
+
+    # Buscar primero formato nuevo
+    for candidate in seqs_trg.glob(f"tts_*_{seg:04d}.wav"):
+        return FileResponse(candidate, filename=candidate.name, media_type="audio/wav")
+
+    # Fallback formato legacy
     filename = f"vocals_{seg:04d}.wav"
     file_path = seqs_trg / filename
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="Archivo no encontrado")
-    return FileResponse(file_path, filename=filename, media_type="audio/wav")
+    if file_path.exists() and file_path.is_file():
+        return FileResponse(file_path, filename=filename, media_type="audio/wav")
+
+    raise HTTPException(status_code=404, detail="Archivo no encontrado")

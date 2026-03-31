@@ -1,4 +1,5 @@
 """Persistent job store for v2v processing."""
+
 import json
 import threading
 import uuid
@@ -25,14 +26,29 @@ def _save_job_to_disk(job_id: str) -> None:
 
 
 def _load_jobs_from_disk() -> None:
-    """Carga todos los jobs existentes al arrancar."""
+    """Carga todos los jobs existentes al arrancar y reconcilia estados."""
     if not JOBS_DIR.exists():
         return
     for f in JOBS_DIR.glob("*.json"):
         try:
             job_id = f.stem
             with open(f, "r", encoding="utf-8") as j:
-                _jobs[job_id] = json.load(j)
+                job_data = json.load(j)
+
+            # Reconciliación de estado: si el job estaba "processing" o "downloading"
+            # o "tts" cuando se reinició el servidor, marcarlo como "interrupted"
+            status = job_data.get("status", "")
+            if status in ("processing", "downloading", "tts", "transcribing"):
+                job_data["status"] = "interrupted"
+                job_data["message"] = (
+                    "El servidor se reinició mientras se procesaba este job. "
+                    "Por favor, reinicia el proceso desde el panel V2V."
+                )
+                # Guardar el estado reconciliado
+                with open(f, "w", encoding="utf-8") as j2:
+                    json.dump(job_data, j2, indent=2, ensure_ascii=False)
+
+            _jobs[job_id] = job_data
         except Exception:
             pass
 

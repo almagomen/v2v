@@ -29,15 +29,29 @@ type V2VParsedSegment = {
 
 function parseV2VSegmentFromName(name: string): V2VParsedSegment | null {
   const normalized = name.replace(/\\/g, "/");
-  const match = normalized.match(/^(?:(.+?)\/)?tts_(.+)_(\d+)\.wav$/);
-  if (!match) return null;
 
-  const folder = match[1];
-  const speakerToken = match[2];
-  const segIdx = parseInt(match[3], 10);
+  // Formato nuevo: tts_{speaker}_{NNNN}.wav
+  const matchNew = normalized.match(/^(?:(.+?)\/)?tts_(.+)_(\d{4})\.wav$/);
+  if (matchNew) {
+    const folder = matchNew[1];
+    const speakerToken = matchNew[2];
+    const segIdx = parseInt(matchNew[3], 10);
+    if (folder && !Number.isNaN(segIdx)) {
+      return { folder, speakerToken, segIdx };
+    }
+  }
 
-  if (!folder || Number.isNaN(segIdx)) return null;
-  return { folder, speakerToken, segIdx };
+  // Formato legacy: vocals_NNNN.wav
+  const matchLegacy = normalized.match(/^(?:(.+?)\/)?vocals_(\d{4})\.wav$/);
+  if (matchLegacy) {
+    const folder = matchLegacy[1];
+    const segIdx = parseInt(matchLegacy[2], 10);
+    if (folder && !Number.isNaN(segIdx)) {
+      return { folder, speakerToken: "SPEAKER_00", segIdx };
+    }
+  }
+
+  return null;
 }
 
 function joinNonEmpty(parts: string[]): string {
