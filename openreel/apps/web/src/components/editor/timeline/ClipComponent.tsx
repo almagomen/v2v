@@ -366,7 +366,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
   }, [isTrimming, trimEdge, clip.id, pixelsPerSecond, onTrimClip]);
 
   const thumbnailCount = Math.max(1, Math.floor(width / 60));
-  const clipName = mediaItem?.name || clip.mediaId.slice(0, 8);
+  const clipName = (mediaItem?.name || clip.mediaId.slice(0, 8)).split(/[\\/]/).pop() || "";
 
   const isInteracting = isDragging || isTrimming;
 

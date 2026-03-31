@@ -102,3 +102,92 @@ export function muteTrackInProject(
     },
   };
 }
+
+export function renameMediaInLibrary(
+  project: Project,
+  mediaId: string,
+  newName: string,
+): Project {
+  return {
+    ...project,
+    modifiedAt: Date.now(),
+    mediaLibrary: {
+      ...project.mediaLibrary,
+      items: project.mediaLibrary.items.map((m) =>
+        m.id === mediaId ? { ...m, name: newName } : m,
+      ),
+    },
+  };
+}
+
+export async function moveClipToTrack(
+  project: Project,
+  clipId: string,
+  targetTrackName: string,
+  startTime: number,
+): Promise<{ project: Project; trackId: string; success: boolean }> {
+  let sourceTrackId: string | null = null;
+  let sourceClip = null;
+  let mediaId: string | null = null;
+
+  for (const track of project.timeline.tracks) {
+    const clipIdx = track.clips.findIndex((c) => c.id === clipId);
+    if (clipIdx !== -1) {
+      sourceTrackId = track.id;
+      sourceClip = track.clips[clipIdx];
+      mediaId = sourceClip.mediaId;
+      break;
+    }
+  }
+
+  if (!sourceTrackId || !sourceClip || !mediaId) {
+    return { project, trackId: "", success: false };
+  }
+
+  let targetTrack = project.timeline.tracks.find(
+    (t) => t.name === targetTrackName,
+  );
+  let targetTrackId = targetTrack?.id;
+
+  if (!targetTrack) {
+    const existingIds = new Set(project.timeline.tracks.map((t) => t.id));
+    const addResult = await addTrackToDetachedProject(project, "audio");
+    if (!addResult.success || !addResult.project) {
+      return { project, trackId: "", success: false };
+    }
+    project = addResult.project;
+    const newTrack = project.timeline.tracks.find(
+      (t) => !existingIds.has(t.id),
+    );
+    if (!newTrack) {
+      return { project, trackId: "", success: false };
+    }
+    targetTrackId = newTrack.id;
+    project = renameTrackInProject(project, targetTrackId, targetTrackName);
+  }
+
+  const removeAction: Action = {
+    type: "clip/remove",
+    id: uuidv4(),
+    timestamp: Date.now(),
+    params: { trackId: sourceTrackId, clipId },
+  };
+  const removeResult = await executeActionOnDetachedProject(project, removeAction);
+  if (!removeResult.success || !removeResult.project) {
+    return { project, trackId: "", success: false };
+  }
+  project = removeResult.project;
+
+  const addAction: Action = {
+    type: "clip/add",
+    id: uuidv4(),
+    timestamp: Date.now(),
+    params: { trackId: targetTrackId!, mediaId, startTime },
+  };
+  const addResult = await executeActionOnDetachedProject(project, addAction);
+  if (!addResult.success || !addResult.project) {
+    return { project, trackId: "", success: false };
+  }
+
+  return { project: addResult.project, trackId: targetTrackId!, success: true };
+}

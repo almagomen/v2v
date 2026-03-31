@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { v2vApi, type SpeakerOption, type JobResultResponse } from "../../../lib/v2v-api";
 import { useProjectStore } from "../../../stores/project-store";
+import { moveClipToTrack, renameMediaInLibrary } from "../../../utils/detached-project-actions";
 
 // Cache en memoria para resultados de jobs
 const jobResultCache = new Map<string, JobResultResponse>();
@@ -106,7 +107,7 @@ async function getAudioDuration(blob: Blob): Promise<number> {
 }
 
 export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId }) => {
-  const { getClip, getMediaItem, replaceMediaAsset, forceSave } = useProjectStore();
+  const { getClip, getMediaItem, replaceMediaAsset, forceSave, loadProject } = useProjectStore();
   const clip = getClip(clipId);
   const mediaItem = clip ? getMediaItem(clip.mediaId) : undefined;
 
@@ -372,6 +373,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
     const currentText = segmentText;
     const currentSpeaker = selectedVoice;
+    const oldSpeaker = parsed.speakerToken;
 
     setRegenLoading(true);
     setRegenError(null);
@@ -392,13 +394,16 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         return { blob: regenBlob };
       })();
 
-      // Calcular la duración del nuevo audio
       const newDuration = await getAudioDuration(blob);
 
-      const file = new File([blob], mediaItem.name, { type: "audio/wav" });
+      const safeSpeakerName = currentSpeaker.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const newFileName = `tts_${safeSpeakerName}_${String(parsed.segIdx).padStart(4, "0")}.wav`;
+      const newMediaName = `${parsed.folder}/${newFileName}`;
+
+      const file = new File([blob], newMediaName, { type: "audio/wav" });
       
       const timestamp = Date.now();
-      saveToLocalStorage(mediaItem.name, {
+      saveToLocalStorage(newMediaName, {
         text: currentText,
         speaker: currentSpeaker,
         speed,
@@ -415,18 +420,39 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       }
 
       invalidateAudioCache(mediaItem.id);
-      await forceSave();
 
-      // Ajustar la duración del clip en el timeline
+      const speakerChanged = oldSpeaker !== currentSpeaker;
+
+      if (speakerChanged) {
+        const { project: renamedProject } = useProjectStore.getState();
+        const projectAfterRename = renameMediaInLibrary(
+          renamedProject,
+          mediaItem.id,
+          newMediaName,
+        );
+        const moveResult = await moveClipToTrack(
+          projectAfterRename,
+          clipId,
+          currentSpeaker,
+          effectiveTimes.start,
+        );
+        if (moveResult.success) {
+          loadProject(moveResult.project);
+        } else {
+          loadProject(projectAfterRename);
+        }
+        await forceSave();
+      } else {
+        await forceSave();
+      }
+
       const { getClip, trimClip } = useProjectStore.getState();
       const currentClip = getClip(clipId);
       if (currentClip) {
-        // Mantener el mismo inPoint, ajustar outPoint a inPoint + newDuration
         const newOutPoint = currentClip.inPoint + newDuration;
         await trimClip(clipId, currentClip.inPoint, newOutPoint);
       }
 
-      // Actualizar segmentTimes.end para que coincida con la nueva duración
       if (segmentTimes) {
         setSegmentTimes({
           start: segmentTimes.start,
@@ -434,9 +460,11 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         });
       }
 
-
-
-      setRegenStatus("Segmento regenerado");
+      if (speakerChanged) {
+        setRegenStatus(`Segmento regenerado y movido a pista "${currentSpeaker}"`);
+      } else {
+        setRegenStatus("Segmento regenerado");
+      }
     } catch (e) {
       setRegenError(e instanceof Error ? e.message : "Error al regenerar");
     } finally {
