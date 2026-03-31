@@ -299,8 +299,8 @@ def _build_ffmpeg_cmd(
             "-preset", "p7",            # Máximo análisis de calidad
             "-rc", "vbr",               # Variable Bit Rate
             "-cq", "28",                # Calidad constante balanceada para peso
-            "-b:v", 0,      # Bitrate objetivo dinámico
-            "-maxrate:v", f"{max_k}k",   # Límite máximo dinámico (1.5x)
+            "-b:v", f"{target_k}k",     # Bitrate objetivo dinámico
+            "-maxrate:v", f"{max_k}k",   # Límite máximo dinámico
             "-bufsize:v", f"{buf_k}k",   # Buffer dinámico (2x)
             "-multipass", "fullres",    # Análisis detallado multipass
             "-spatial-aq", "1",         # Adaptive Quantization espacial
