@@ -1,16 +1,14 @@
-"""Regenerate segment and video endpoints."""
+"""Regenerate segment and apply speed endpoints."""
 
 import pickle
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from api.job_store import get_job
 from api.schemas import (
     RegenerateSegmentRequest,
-    RegenerateVideoRequest,
-    SegmentSchema,
     ApplySpeedRequest,
 )
 from api.service import SPEAKER_OPTIONS
@@ -183,108 +181,3 @@ async def apply_speed(req: ApplySpeedRequest):
     torchaudio.save(str(audio_path), arr_new, sample_rate=rate)
 
     return FileResponse(audio_path, filename=audio_path.name, media_type="audio/wav")
-
-
-@router.post("/regenerate-video")
-async def regenerate_video(req: RegenerateVideoRequest):
-    """Apply segment edits and re-render the video."""
-    import torchaudio
-
-    path = _get_video_path_from_job(req.job_id, req.video_index)
-    segments = [s.model_dump() if hasattr(s, "model_dump") else s for s in req.segments]
-    pkl_path = path.with_name("result.pkl")
-    if not pkl_path.exists():
-        raise HTTPException(status_code=404, detail="result.pkl no encontrado")
-
-    with open(pkl_path, "rb") as f:
-        # Carga robusta de 7 campos para regeneración de video
-        (
-            texts_original,
-            output_name,
-            url,
-            result,
-            transcription,
-            diarization,
-            info,
-            *extra,
-        ) = pickle.load(f)
-
-    texts_edited = []
-    changed_indices = []
-    seg_by_num = {s["seg"]: s for s in segments}
-    for idx, t_orig in enumerate(texts_original):
-        seg_num = idx + 1
-        s = seg_by_num.get(seg_num, {})
-        t_edit = {
-            "start": float(s.get("start", t_orig.get("start"))),
-            "end": float(s.get("end", t_orig.get("end"))),
-            "text": str(s.get("text", t_orig.get("text"))),
-            # Si el frontend envió el speaker modificado, lo mantenemos; sino fallback al original
-            "speaker": s.get("speaker", t_orig.get("speaker", "SPEAKER_00")),
-        }
-        texts_edited.append(t_edit)
-        if str(t_orig) != str(t_edit):
-            changed_indices.append(seg_num)
-
-    from src.pipeline import split_audio_sequences
-    from src.audio_utils import clone_voice_segments, merge_cloned_audio
-    from src.render import render_video
-    from src.tts import model_tts
-
-    if changed_indices:
-        split_audio_sequences(
-            path.with_name("vocals.wav"), texts_edited, edit_indices=changed_indices
-        )
-        speaker_audio = SPEAKER_OPTIONS.get(req.speaker, req.speaker)
-        lang = (
-            req.translate_lang
-            if req.translate_lang and req.translate_lang != "None"
-            else transcription.language
-        )
-        clone_voice_segments(
-            path,
-            texts_edited,
-            lang,
-            speaker_audio,
-            model_tts,
-            only_indices=changed_indices,
-            slowdown_range=(0.5, 0.8),
-            stretch_target_ratio=0.85,
-        )
-
-    with open(pkl_path, "wb") as f:
-        pickle.dump(
-            (texts_edited, output_name, url, result, transcription, diarization, info),
-            f,
-        )
-
-    seqs_trg_dir = path.parent / "Seqs_trg"
-    all_paths_es = sorted(seqs_trg_dir.glob("*.wav"))
-    if not all_paths_es:
-        raise HTTPException(
-            status_code=500, detail="No se encontraron segmentos de audio"
-        )
-
-    _, freq = torchaudio.load(str(all_paths_es[0]))
-    all_times = [int(t["start"] * freq) for t in texts_edited]
-
-    vocals_es_path = path.with_name("vocals_es.wav")
-    merged = merge_cloned_audio(
-        path.with_name("vocals.wav"), all_paths_es, all_times, freq
-    )
-    torchaudio.save(str(vocals_es_path), merged, freq)
-
-    no_vocals_path = path.with_name("no_vocals.wav")
-    if not no_vocals_path.exists():
-        raise HTTPException(status_code=404, detail="no_vocals.wav no encontrado")
-
-    output_path = render_video(
-        path, output_name, vocals_es_path, no_vocals_path, output_dir=path.parent
-    )
-
-    # Actualizar el manifiesto con la ruta del video regenerado
-    from src.assets import update_assets
-
-    update_assets(path.parent, merged=str(output_path))
-
-    return {"output_path": str(output_path), "filename": output_path.name}

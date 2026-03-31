@@ -1,9 +1,13 @@
 """
 Colab FFmpeg render endpoint.
 Renders a timeline (single or batch) using ffmpeg server-side.
+Includes Catbox upload for shareable links.
 """
 
 import io
+import re
+import subprocess
+import unicodedata
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -13,12 +17,42 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from api.job_store import get_job
-from src.config import QUEUE_DIR
+from src.config import QUEUE_DIR, TEMP_DIR
 from src.assets import load_assets, update_assets
 from src.download import to_safe_name
 from src.edit_utils import get_video_bitrate
 
 router = APIRouter(prefix="/api", tags=["render"])
+
+
+# ---------------------------------------------------------------------------
+# Catbox upload
+# ---------------------------------------------------------------------------
+
+
+def upload_to_catbox(file_path: Path) -> str:
+    """Sube archivo a Catbox (24h). Returns URL o vacío."""
+    base = unicodedata.normalize("NFKD", file_path.stem)
+    base = base.encode("ascii", "ignore").decode("ascii")
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._-") or "video"
+    base = base[:80]
+    safe_name = f"{base}{file_path.suffix or '.mp4'}"
+
+    cmd = [
+        "curl",
+        "-F",
+        "reqtype=fileupload",
+        "-F",
+        "time=24h",
+        "-F",
+        f"fileToUpload=@{file_path};filename={safe_name}",
+        "https://litterbox.catbox.moe/resources/internals/api.php",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        return result.stdout.strip()
+    print(f"⚠️ Error al subir a Catbox: {result.stderr}")
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +243,7 @@ class RenderTimelineRequest(BaseModel):
     video_index: int
     clips: list[TimelineClip]
     output_name: str = "export"
+    upload_to_catbox: bool = False
 
 
 class BatchRenderItem(BaseModel):
@@ -221,6 +256,7 @@ class BatchRenderItem(BaseModel):
 class RenderBatchRequest(BaseModel):
     renders: list[BatchRenderItem]
     zip_name: str = "batch_export"
+    upload_to_catbox: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -427,9 +463,11 @@ def _build_ffmpeg_cmd(
 
 @router.post("/render/timeline")
 async def render_timeline(req: RenderTimelineRequest):
-    """Render a single project timeline server-side with ffmpeg."""
-    import subprocess
+    """Render a single project timeline server-side with ffmpeg.
 
+    If upload_to_catbox is True, uploads the result and returns a shareable URL.
+    Otherwise, returns the MP4 file for direct download.
+    """
     folder = _job_folder(req.job_id, req.video_index)
 
     # Validar integridad del manifiesto antes de renderizar
@@ -451,6 +489,22 @@ async def render_timeline(req: RenderTimelineRequest):
             detail=f"Error en ffmpeg: {result.stderr[-500:]}",
         )
 
+    # Si se solicitó upload a Catbox, subir y retornar URL
+    if req.upload_to_catbox:
+        catbox_url = upload_to_catbox(output_path)
+        if catbox_url:
+            return {
+                "status": "uploaded",
+                "url": catbox_url,
+                "filename": f"{safe_name}.mp4",
+                "expires_in": "24h",
+            }
+        # Si falla el upload, retornar error con detalle
+        raise HTTPException(
+            status_code=500,
+            detail="El render se completó pero falló la subida a Catbox.",
+        )
+
     return FileResponse(
         str(output_path),
         filename=f"{safe_name}.mp4",
@@ -465,11 +519,14 @@ async def render_timeline(req: RenderTimelineRequest):
 
 @router.post("/render/batch")
 async def render_batch(req: RenderBatchRequest):
-    """Render multiple project timelines and return them as a ZIP."""
-    import subprocess
+    """Render multiple project timelines and return them as a ZIP.
 
+    If upload_to_catbox is True, uploads each video individually and returns a list of URLs.
+    Otherwise, returns a ZIP file for direct download.
+    """
     results: list[Path] = []
     errors: list[str] = []
+    catbox_urls: list[dict] = []
 
     for item in req.renders:
         try:
@@ -487,6 +544,17 @@ async def render_batch(req: RenderBatchRequest):
                 )
                 continue
             results.append(output_path)
+
+            # Upload individual to Catbox if requested
+            if req.upload_to_catbox:
+                catbox_url = upload_to_catbox(output_path)
+                catbox_urls.append(
+                    {
+                        "filename": f"{safe_name}.mp4",
+                        "url": catbox_url or "",
+                        "status": "uploaded" if catbox_url else "upload_failed",
+                    }
+                )
         except HTTPException as e:
             errors.append(f"{item.output_name}: {e.detail}")
         except Exception as e:
@@ -497,6 +565,15 @@ async def render_batch(req: RenderBatchRequest):
             status_code=500,
             detail=f"No se pudo renderizar ningún video. Errores: {'; '.join(errors)}",
         )
+
+    # Si se solicitó upload a Catbox, retornar lista de URLs
+    if req.upload_to_catbox:
+        return {
+            "status": "completed",
+            "videos": catbox_urls,
+            "errors": errors,
+            "expires_in": "24h",
+        }
 
     # Build ZIP in memory
     zip_buffer = io.BytesIO()

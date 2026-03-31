@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 
 from api.job_store import get_job
 from src.config import TEMP_DIR
-from src.render import upload_to_catbox
+from api.routes.render import upload_to_catbox
 
 router = APIRouter(prefix="/api", tags=["share"])
 

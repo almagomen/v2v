@@ -126,6 +126,7 @@ export interface RenderTimelinePayload {
   video_index: number;
   clips: TimelineClipPayload[];
   output_name: string;
+  upload_to_catbox?: boolean;
 }
 
 export interface BatchRenderItemPayload {
@@ -138,6 +139,21 @@ export interface BatchRenderItemPayload {
 export interface RenderBatchPayload {
   renders: BatchRenderItemPayload[];
   zip_name?: string;
+  upload_to_catbox?: boolean;
+}
+
+export interface CatboxUploadResult {
+  status: "uploaded";
+  url: string;
+  filename: string;
+  expires_in: string;
+}
+
+export interface BatchCatboxResult {
+  status: "completed";
+  videos: Array<{ filename: string; url: string; status: string }>;
+  errors: string[];
+  expires_in: string;
 }
 
 export const v2vApi = {
@@ -389,9 +405,9 @@ export const v2vApi = {
 
   /**
    * Render a single project timeline on Colab via FFmpeg.
-   * Returns a Blob (MP4) for direct download.
+   * Returns a Blob (MP4) for direct download, or CatboxUploadResult if upload_to_catbox is true.
    */
-  async renderTimeline(payload: RenderTimelinePayload): Promise<Blob> {
+  async renderTimeline(payload: RenderTimelinePayload): Promise<Blob | CatboxUploadResult> {
     const res = await fetch(url("/api/render/timeline"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -401,14 +417,20 @@ export const v2vApi = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || "Error al renderizar en Colab");
     }
+    
+    // Si se solicitó upload a Catbox, la respuesta es JSON
+    if (payload.upload_to_catbox) {
+      return readJsonOrThrow<CatboxUploadResult>(res);
+    }
+    
     return res.blob();
   },
 
   /**
    * Render multiple projects on Colab via FFmpeg.
-   * Returns a Blob (ZIP) for direct download.
+   * Returns a Blob (ZIP) for direct download, or BatchCatboxResult if upload_to_catbox is true.
    */
-  async renderBatch(payload: RenderBatchPayload): Promise<Blob> {
+  async renderBatch(payload: RenderBatchPayload): Promise<Blob | BatchCatboxResult> {
     const res = await fetch(url("/api/render/batch"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -418,6 +440,12 @@ export const v2vApi = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || "Error al renderizar batch en Colab");
     }
+    
+    // Si se solicitó upload a Catbox, la respuesta es JSON
+    if (payload.upload_to_catbox) {
+      return readJsonOrThrow<BatchCatboxResult>(res);
+    }
+    
     return res.blob();
   },
 
