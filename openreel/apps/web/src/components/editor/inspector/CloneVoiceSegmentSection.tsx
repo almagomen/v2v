@@ -295,6 +295,14 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     const oldSpeaker = parsed.speakerToken;
     const segmentId = generateSegmentId(folderRef.jobId, folderRef.videoIndex, parsed.segIdx);
 
+    let effectiveSpeed = speed;
+    if (speedMode === "s" && segmentTimes) {
+      const currentDuration = segmentTimes.end - segmentTimes.start;
+      if (currentDuration > 0 && speed > 0) {
+        effectiveSpeed = currentDuration / speed;
+      }
+    }
+
     setRegenLoading(true);
     setRegenError(null);
     setRegenStatus(null);
@@ -308,7 +316,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         effectiveTimes.end,
         normalizeTranslateLang,
         selectedVoice,
-        speed,
+        effectiveSpeed,
       );
 
       const newDuration = await getAudioDuration(regenBlob);
@@ -325,7 +333,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       const { updateSegmentText, updateSegmentSpeaker, updateSegmentSpeed } = useV2VStore.getState();
       updateSegmentText(parsed.folder, segmentId, currentText);
       updateSegmentSpeaker(parsed.folder, segmentId, currentSpeaker);
-      updateSegmentSpeed(parsed.folder, segmentId, speed);
+      updateSegmentSpeed(parsed.folder, segmentId, effectiveSpeed);
 
       const result = await replaceMediaAsset(mediaItem.id, file);
       if (!result.success) {
@@ -398,6 +406,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     replaceMediaAsset,
     segmentTimes,
     speed,
+    speedMode,
     speakers,
   ]);
 
