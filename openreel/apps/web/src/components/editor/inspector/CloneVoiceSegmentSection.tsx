@@ -131,6 +131,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
   const [backendSpeaker, setBackendSpeaker] = useState<string | null>(null);
   const [speed, setSpeed] = useState<number>(1.0);
+  const [speedInput, setSpeedInput] = useState<string>("1.0");
   const [speedMode, setSpeedMode] = useState<"x" | "s">("x");
   const [isApplyingSpeed, setIsApplyingSpeed] = useState(false);
 
@@ -196,8 +197,10 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         
         if (typeof segmentInfo?.speed === "number") {
           setSpeed(segmentInfo.speed);
+          setSpeedInput(String(segmentInfo.speed));
         } else {
           setSpeed(1.0);
+          setSpeedInput("1.0");
         }
         
         if (seg?.speaker) {
@@ -346,6 +349,20 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
       invalidateAudioCache(mediaItem.id);
 
+      const { getClip, trimClip } = useProjectStore.getState();
+      const currentClip = getClip(clipId);
+      if (currentClip) {
+        const newOutPoint = currentClip.inPoint + newDuration;
+        await trimClip(clipId, currentClip.inPoint, newOutPoint);
+      }
+
+      if (segmentTimes) {
+        setSegmentTimes({
+          start: segmentTimes.start,
+          end: segmentTimes.start + newDuration,
+        });
+      }
+
       if (speakerChanged) {
         const { project: renamedProject } = useProjectStore.getState();
         const projectAfterRename = renameMediaInLibrary(
@@ -364,30 +381,11 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         } else {
           loadProject(projectAfterRename);
         }
-        await forceSave();
-      } else {
-        await forceSave();
-      }
-
-      const { getClip, trimClip } = useProjectStore.getState();
-      const currentClip = getClip(clipId);
-      if (currentClip) {
-        const newOutPoint = currentClip.inPoint + newDuration;
-        await trimClip(clipId, currentClip.inPoint, newOutPoint);
-      }
-
-      if (segmentTimes) {
-        setSegmentTimes({
-          start: segmentTimes.start,
-          end: segmentTimes.start + newDuration,
-        });
-      }
-
-      if (speakerChanged) {
         setRegenStatus(`Segmento regenerado y movido a pista "${trackName}"`);
       } else {
         setRegenStatus("Segmento regenerado");
       }
+      await forceSave();
     } catch (e) {
       setRegenError(e instanceof Error ? e.message : "Error al regenerar");
     } finally {
@@ -443,7 +441,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       if (!result.success) throw new Error("Error al reemplazar audio");
 
       invalidateAudioCache(mediaItem.id);
-      await forceSave();
 
       const { getClip, trimClip } = useProjectStore.getState();
       const currentClip = getClip(clipId);
@@ -459,13 +456,14 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         });
       }
 
+      await forceSave();
       setRegenStatus("Filtro de velocidad aplicado");
     } catch (e) {
       setRegenError(e instanceof Error ? e.message : "Error al aplicar filtro");
     } finally {
       setIsApplyingSpeed(false);
     }
-  }, [folderRef, parsed, mediaItem, speed, speedMode, segmentText, selectedVoice, clipId, replaceMediaAsset, segmentTimes]);
+  }, [folderRef, parsed, mediaItem, speed, speedInput, speedMode, segmentText, selectedVoice, clipId, replaceMediaAsset, segmentTimes]);
 
   if (!clip || !mediaItem) {
     return (
@@ -544,7 +542,10 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         <div className="flex items-center gap-2 mb-2">
           <div className="flex bg-background-secondary border border-border rounded overflow-hidden">
             <button
-              onClick={() => setSpeedMode("x")}
+              onClick={() => {
+                setSpeedMode("x");
+                setSpeedInput(String(speed));
+              }}
               className={`px-3 py-1 text-[10px] font-medium transition-colors ${
                 speedMode === "x"
                   ? "bg-primary/20 text-primary"
@@ -554,7 +555,10 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
               x
             </button>
             <button
-              onClick={() => setSpeedMode("s")}
+              onClick={() => {
+                setSpeedMode("s");
+                setSpeedInput(String(speed));
+              }}
               className={`px-3 py-1 text-[10px] font-medium transition-colors border-l border-border ${
                 speedMode === "s"
                   ? "bg-primary/20 text-primary"
@@ -569,8 +573,22 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
             min={speedMode === "x" ? 0.5 : 0.1}
             max={speedMode === "x" ? 2.0 : 60}
             step={speedMode === "x" ? 0.05 : 0.1}
-            value={speed}
-            onChange={(e) => setSpeed(parseFloat(e.target.value) || (speedMode === "x" ? 1.0 : 1.0))}
+            value={speedInput}
+            onChange={(e) => {
+              setSpeedInput(e.target.value);
+              const parsed = parseFloat(e.target.value);
+              if (!isNaN(parsed) && parsed > 0) {
+                setSpeed(parsed);
+              }
+            }}
+            onBlur={() => {
+              const parsed = parseFloat(speedInput);
+              if (isNaN(parsed) || parsed <= 0) {
+                const fallback = speedMode === "x" ? 1.0 : 1.0;
+                setSpeed(fallback);
+                setSpeedInput(String(fallback));
+              }
+            }}
             className="flex-1 px-2 py-1 bg-background-secondary border border-border rounded text-[11px] text-text-primary focus:outline-none focus:border-primary"
             placeholder={speedMode === "x" ? "1.0" : "2.0"}
           />
@@ -581,7 +599,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
             {speedMode === "x"
               ? `Multiplicador: ${speed}x`
               : segmentTimes
-                ? `Actual: ${(segmentTimes.end - segmentTimes.start).toFixed(2)}s → Objetivo: ${speed}s`
+                ? `Actual: ${clip.duration.toFixed(2)}s → Objetivo: ${speed}s`
                 : "Necesita tiempos del segmento"}
           </p>
           <button
