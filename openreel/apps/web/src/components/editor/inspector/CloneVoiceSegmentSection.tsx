@@ -586,9 +586,9 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
               if (isNaN(parsed) || parsed <= 0) {
                 const fallback = speedMode === "x" ? 1.0 : clip.duration;
                 setSpeed(fallback);
-                setSpeedInput(fallback.toFixed(3));
+                setSpeedInput(fallback.toFixed(2));
               } else {
-                setSpeedInput(parsed.toFixed(3));
+                setSpeedInput(parsed.toFixed(2));
               }
             }}
             className="flex-1 min-w-[60px] px-2 py-1 bg-background-secondary border border-border rounded text-[11px] text-text-primary focus:outline-none focus:border-primary"
