@@ -592,7 +592,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
               }
             }}
             className="flex-1 min-w-[60px] px-2 py-1 bg-background-secondary border border-border rounded text-[11px] text-text-primary focus:outline-none focus:border-primary"
-            placeholder={speedMode === "x" ? "1.00" : "2.00"}
+            placeholder={speedMode === "x" ? "1.00" : clip.duration.toFixed(2)}
           />
           <button
             onClick={handleApplySpeedFilter}
@@ -607,9 +607,9 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         <div className="flex items-center justify-between">
           <p className="text-[9px] text-text-muted">
             {speedMode === "x"
-              ? `Multiplicador: ${speed.toFixed(3)}x`
+              ? `Multiplicador: ${speed.toFixed(2)}x`
               : segmentTimes
-                ? `Actual: ${clip.duration.toFixed(3)}s → Objetivo: ${speed.toFixed(3)}s`
+                ? `Actual: ${clip.duration.toFixed(2)}s → Objetivo: ${speed.toFixed(2)}s`
                 : "Necesita tiempos del segmento"}
           </p>
         </div>

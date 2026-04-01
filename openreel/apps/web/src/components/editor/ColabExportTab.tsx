@@ -324,7 +324,9 @@ export const ColabExportTab: React.FC = () => {
       setStatusMsg(uploadToCatbox ? "Renderizando y subiendo a Catbox…" : "Renderizando en Colab…");
 
       const clips = buildPayloadClips(analyzed, uploadedMap);
-      const outName = jobContext.longName || project.name || "export";
+      const rawName = project.name || jobContext.longName || "export";
+      const outName = rawName.replace(/^\d+[._\s]*/, "");
+      
       const result = await v2vApi.renderTimeline({
         job_id: jobContext.jobId,
         video_index: jobContext.videoIndex,
@@ -341,6 +343,8 @@ export const ColabExportTab: React.FC = () => {
         setStatusMsg("¡Video subido a Catbox!");
       } else {
         // Normal download
+        const rawName = project.name || jobContext.longName || "export";
+        const outName = rawName.replace(/^\d+[._\s]*/, "");
         downloadBlob(result as Blob, `${outName}.mp4`);
         setStatus("done");
         setStatusMsg("¡Exportación completada!");
@@ -398,7 +402,7 @@ export const ColabExportTab: React.FC = () => {
           job_id: ctx.jobId,
           video_index: ctx.videoIndex,
           clips: buildPayloadClips(clips, uploadedMap),
-          output_name: (ctx as any).longName || fullProject.name || sp.meta.projectName,
+          output_name: (fullProject.name || sp.meta.projectName || (ctx as any).longName).replace(/^\d+[._\s]*/, ""),
         });
       }
 
