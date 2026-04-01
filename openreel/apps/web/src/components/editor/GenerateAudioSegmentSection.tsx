@@ -2,32 +2,17 @@ import React, { useCallback, useEffect, useState } from "react";
 import { AlertCircle, Loader2, RefreshCw, X } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
-import { v2vApi, type SpeakerOption } from "../../../lib/v2v-api";
+import { v2vApi } from "../../../lib/v2v-api";
 import { useProjectStore } from "../../../stores/project-store";
 import { useV2VStore } from "../../../stores/v2v-store";
 import { importMultipleMediaIntoProject } from "../../../utils/import-media-into-project";
 import { toSafeToken } from "../../../utils/v2v-utils";
 
-async function getAudioDuration(blob: Blob): Promise<number> {
-  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-  if (!AudioContextClass) {
-    throw new Error("AudioContext no soportado");
-  }
-  const audioContext = new AudioContextClass();
-  try {
-    const arrayBuffer = await blob.arrayBuffer();
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    return audioBuffer.duration;
-  } finally {
-    audioContext.close();
-  }
-}
-
 export const GenerateAudioSegmentSection: React.FC<{
   folder: string;
   onClose: () => void;
 }> = ({ folder, onClose }) => {
-  const { project, forceSave } = useProjectStore();
+  const { forceSave } = useProjectStore();
   const { speakers, fetchSpeakers, getFolderRef } = useV2VStore();
 
   useEffect(() => {
@@ -44,27 +29,23 @@ export const GenerateAudioSegmentSection: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
-  const getNextSegmentIndex = useCallback(() => {
-    const items = project.mediaLibrary.items.filter((m) => {
-      const idx = m.name.indexOf("/");
-      if (idx <= 0) return false;
-      return m.name.slice(0, idx) === folder;
-    });
-
+  const getNextSegmentIndex = useCallback((items: any[]) => {
     let maxIdx = 0;
     for (const item of items) {
-      const displayName = item.name.slice(item.name.indexOf("/") + 1);
+      const idx = item.name.indexOf("/");
+      if (idx <= 0) continue;
+      if (item.name.slice(0, idx) !== folder) continue;
+      const displayName = item.name.slice(idx + 1);
       const match = displayName.match(/^gen_.+_(\d{3})\.wav$/);
       if (match) {
-        const idx = parseInt(match[1], 10);
-        if (!Number.isNaN(idx) && idx > maxIdx) {
-          maxIdx = idx;
+        const idxNum = parseInt(match[1], 10);
+        if (!Number.isNaN(idxNum) && idxNum > maxIdx) {
+          maxIdx = idxNum;
         }
       }
     }
-
     return maxIdx + 1;
-  }, [project.mediaLibrary.items, folder]);
+  }, [folder]);
 
   const handleGenerate = useCallback(async () => {
     if (!segmentText.trim()) {
@@ -87,7 +68,6 @@ export const GenerateAudioSegmentSection: React.FC<{
     setStatus(null);
 
     try {
-      const segIdx = getNextSegmentIndex();
       const speakerToken = toSafeToken(
         speakers.find((s) => s.value === selectedVoice)?.label || selectedVoice
       );
@@ -99,16 +79,18 @@ export const GenerateAudioSegmentSection: React.FC<{
         selectedVoice
       );
 
+      const currentProject = useProjectStore.getState().project;
+      const segIdx = getNextSegmentIndex(currentProject.mediaLibrary.items);
+
       const newFileName = `gen_${speakerToken}_${String(segIdx).padStart(3, "0")}.wav`;
       const newMediaName = `${folder}/${newFileName}`;
 
       const file = new File([regenBlob], newMediaName, { type: "audio/wav" });
 
-      const refreshState = () => useProjectStore.getState();
       const batchRes = await importMultipleMediaIntoProject(
-        refreshState().project,
+        currentProject,
         [file],
-        { quick: true }
+        { quick: false }
       );
 
       if (!batchRes.success) {

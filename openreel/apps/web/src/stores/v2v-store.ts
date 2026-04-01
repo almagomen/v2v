@@ -17,6 +17,7 @@ import {
   generateFolderId,
   createSegmentInfo,
 } from "../utils/v2v-segment-ids";
+import { getMediaBridge, initializeMediaBridge } from "../bridges/media-bridge";
 
 const FOLDER_REFS_STORAGE_KEY = "openreel.v2v.folderRefs";
 const JOB_STATE_STORAGE_KEY = "openreel.v2v.jobState";
@@ -688,6 +689,34 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     }
 
                     await autoSaveManager.forceSave(workingProject);
+                    
+                    const audioSegmentsImported = workingProject.mediaLibrary.items.filter(
+                      m => m.type === "audio" && m.name.startsWith(`${folder}/tts_`) && !m.waveformData
+                    );
+                    
+                    if (audioSegmentsImported.length > 0) {
+                      const mediaBridge = getMediaBridge();
+                      if (!mediaBridge.isInitialized()) {
+                        await initializeMediaBridge();
+                      }
+                      for (const mediaItem of audioSegmentsImported) {
+                        if (!mediaItem.blob) continue;
+                        try {
+                          const waveformData = await mediaBridge.generateWaveform(mediaItem.blob, mediaItem.id);
+                          const idx = workingProject.mediaLibrary.items.findIndex(m => m.id === mediaItem.id);
+                          if (idx >= 0) {
+                            workingProject.mediaLibrary.items[idx] = {
+                              ...workingProject.mediaLibrary.items[idx],
+                              waveformData: waveformData?.peaks || null,
+                            };
+                          }
+                        } catch (e) {
+                          console.warn(`[V2V] Error generating waveform for ${mediaItem.name}:`, e);
+                        }
+                      }
+                      await autoSaveManager.forceSave(workingProject);
+                    }
+                    
                     const nativeFiles = filesToImport.map(f => f.name.split("/").pop() || "");
                     
                     get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index, outputName: v.output_name, nativeFiles });
