@@ -371,15 +371,19 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
       const { getClip, trimClip } = useProjectStore.getState();
       const currentClip = getClip(clipId);
+      let targetDuration = newDuration;
+      if (speedMode === "s" && speed > 0) {
+        targetDuration = speed;
+      }
       if (currentClip) {
-        const newOutPoint = currentClip.inPoint + newDuration;
+        const newOutPoint = currentClip.inPoint + targetDuration;
         await trimClip(clipId, currentClip.inPoint, newOutPoint);
       }
 
       if (segmentTimes) {
         setSegmentTimes({
           start: segmentTimes.start,
-          end: segmentTimes.start + newDuration,
+          end: segmentTimes.start + targetDuration,
         });
       }
 
