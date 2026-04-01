@@ -197,10 +197,10 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         
         if (typeof segmentInfo?.speed === "number") {
           setSpeed(segmentInfo.speed);
-          setSpeedInput(String(segmentInfo.speed));
+          setSpeedInput(segmentInfo.speed.toFixed(3));
         } else {
           setSpeed(1.0);
-          setSpeedInput("1.0");
+          setSpeedInput("1.000");
         }
         
         if (seg?.speaker) {
@@ -409,15 +409,15 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   ]);
 
   const handleApplySpeedFilter = useCallback(async () => {
-    if (!folderRef || !parsed || !mediaItem) return;
+    if (!clip || !folderRef || !parsed || !mediaItem) return;
     
     setIsApplyingSpeed(true);
     setRegenError(null);
     setRegenStatus(null);
     try {
       let effectiveSpeed = speed;
-      if (speedMode === "s" && segmentTimes) {
-        const currentDuration = segmentTimes.end - segmentTimes.start;
+      if (speedMode === "s") {
+        const currentDuration = clip.duration;
         if (currentDuration > 0) {
           effectiveSpeed = currentDuration / speed;
         }
@@ -427,7 +427,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         folderRef.jobId,
         folderRef.videoIndex,
         parsed.segIdx,
-        effectiveSpeed
+        Number(effectiveSpeed.toFixed(3))
       );
 
       const newDuration = await getAudioDuration(blob);
@@ -584,38 +584,35 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
             onBlur={() => {
               const parsed = parseFloat(speedInput);
               if (isNaN(parsed) || parsed <= 0) {
-                const fallback = speedMode === "x" ? 1.0 : 1.0;
+                const fallback = speedMode === "x" ? 1.0 : clip.duration;
                 setSpeed(fallback);
-                setSpeedInput(String(fallback));
+                setSpeedInput(fallback.toFixed(3));
+              } else {
+                setSpeedInput(parsed.toFixed(3));
               }
             }}
-            className="flex-1 px-2 py-1 bg-background-secondary border border-border rounded text-[11px] text-text-primary focus:outline-none focus:border-primary"
-            placeholder={speedMode === "x" ? "1.0" : "2.0"}
+            className="flex-1 min-w-[60px] px-2 py-1 bg-background-secondary border border-border rounded text-[11px] text-text-primary focus:outline-none focus:border-primary"
+            placeholder={speedMode === "x" ? "1.00" : "2.00"}
           />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <p className="text-[9px] text-text-muted">
-            {speedMode === "x"
-              ? `Multiplicador: ${speed}x`
-              : segmentTimes
-                ? `Actual: ${clip.duration.toFixed(2)}s → Objetivo: ${speed}s`
-                : "Necesita tiempos del segmento"}
-          </p>
           <button
             onClick={handleApplySpeedFilter}
             disabled={isApplyingSpeed || regenLoading || speed === 1.0}
-            className="px-3 py-1 bg-background-secondary border border-border rounded text-[10px] text-text-secondary hover:text-text-primary transition-all disabled:opacity-50"
+            className="px-3 py-1 bg-primary/10 border border-primary/30 rounded text-[10px] text-primary hover:bg-primary/20 transition-all disabled:opacity-50 h-[24px]"
             title="Aplica solo el filtro de velocidad sin regenerar TTS"
           >
             {isApplyingSpeed ? <Loader2 size={12} className="animate-spin" /> : "Aplicar"}
           </button>
         </div>
-        <p className="text-[9px] text-text-muted italic">
-          {speedMode === "x"
-            ? "x = multiplicar velocidad (1.5x = 50% más rápido)"
-            : "s = segundos objetivo (el audio durará exactamente X segundos)"}
-        </p>
+
+        <div className="flex items-center justify-between">
+          <p className="text-[9px] text-text-muted">
+            {speedMode === "x"
+              ? `Multiplicador: ${speed.toFixed(3)}x`
+              : segmentTimes
+                ? `Actual: ${clip.duration.toFixed(3)}s → Objetivo: ${speed.toFixed(3)}s`
+                : "Necesita tiempos del segmento"}
+          </p>
+        </div>
       </div>
 
       <div className="space-y-2">

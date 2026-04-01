@@ -365,7 +365,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                     <tr key={it.url} className="border-t border-border">
                       <td className="px-2 py-1 tabular-nums">{i + 1}</td>
                       <td className="px-2 py-1 max-w-[220px] truncate" title={it.url}>
-                        {it.output_name || it.url}
+                        {it.output_name?.replace(/^\d+\.\s*/, "") || it.url}
                         {typeof it.index === "number" &&
                           importStatusByKey[importKeyFor(it.url, it.index)] === "done" && (
                             <span className="ml-1 text-primary">(importado)</span>
@@ -430,7 +430,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 >
                   {videos.map((v: any, i: number) => (
                     <option key={i} value={i}>
-                      {i + 1}. {v.output_name}
+                      {v.output_name}
                     </option>
                   ))}
                 </select>
