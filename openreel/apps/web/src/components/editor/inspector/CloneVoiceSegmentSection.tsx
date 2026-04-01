@@ -19,7 +19,7 @@ type V2VParsedSegment = {
 function parseV2VSegmentFromName(name: string): V2VParsedSegment | null {
   const normalized = name.replace(/\\/g, "/");
 
-  const match = normalized.match(/^(?:(.+?)\/)?tts_(.+)_(\d{4})\.wav$/);
+  const match = normalized.match(/^(?:(.+?)\/)?tts_(.+)_(\d{3})\.wav$/);
   if (match) {
     const folder = match[1];
     const speakerToken = match[2];
@@ -328,7 +328,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       const filenameToken = getSpeakerFilenameToken();
       const trackName = getSpeakerTrackName();
 
-      const newFileName = `tts_${filenameToken}_${String(parsed.segIdx).padStart(4, "0")}.wav`;
+      const newFileName = `tts_${filenameToken}_${String(parsed.segIdx).padStart(3, "0")}.wav`;
       const newMediaName = `${parsed.folder}/${newFileName}`;
 
       const file = new File([regenBlob], newMediaName, { type: "audio/wav" });

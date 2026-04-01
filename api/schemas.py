@@ -105,6 +105,13 @@ class ApplySpeedRequest(BaseModel):
     speed: float = Field(..., description="Factor de velocidad (0.5 a 2.0)")
 
 
+class GenerateAudioSegmentRequest(BaseModel):
+    job_id: Optional[str] = Field(None, description="ID del job")
+    video_index: int = Field(0, description="Índice del video en el job")
+    text: str
+    speaker: str = "mrbeast_lmnt"
+
+
 class SpeakerOption(BaseModel):
     label: str
     value: str

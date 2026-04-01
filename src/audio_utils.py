@@ -67,7 +67,7 @@ def clone_voice_segments(
 
         seq_num = only_indices[idx] if only_indices else texts.index(text_dict) + 1
 
-        audio_en_path = seqs_src_dir / f"vocals_{seq_num:04d}.wav"
+        audio_en_path = seqs_src_dir / f"vocals_{seq_num:03d}.wav"
         if not audio_en_path.exists():
             print(f"⚠️ No se encontró: {audio_en_path}")
             continue
@@ -139,7 +139,7 @@ def clone_voice_segments(
         # Generar nombre con formato consistente: tts_{speaker}_{NNNN}.wav
         # Esto permite al frontend identificar el segmento y su speaker
         safe_speaker = speaker.replace(" ", "_").replace("/", "_").replace("\\", "_")
-        audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:04d}.wav"
+        audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.wav"
         torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
         path_es.append(audio_es_path)
         # Registrar ruta exacta del segmento en el manifiesto de activos

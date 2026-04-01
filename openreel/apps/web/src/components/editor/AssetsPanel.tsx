@@ -43,6 +43,7 @@ import { importMultipleMediaIntoProject } from "../../utils/import-media-into-pr
 import { toSafeToken } from "../../utils/v2v-utils";
 import { AspectRatioMatchDialog } from "./dialogs/AspectRatioMatchDialog";
 import { AIGenTab } from "./AIGenTab";
+import { GenerateAudioSegmentSection } from "./GenerateAudioSegmentSection";
 import {
   Button,
   Dialog,
@@ -527,6 +528,7 @@ export const AssetsPanel: React.FC = () => {
     Array<{ id: string; name: string; subtitle: string; isCurrent: boolean }>
   >([]);
   const [copyingTargetId, setCopyingTargetId] = useState<string | null>(null);
+  const [showGenerateAudio, setShowGenerateAudio] = useState(false);
 
   // Project store
   const {
@@ -906,7 +908,7 @@ export const AssetsPanel: React.FC = () => {
       }
 
       for (const seg of segments) {
-        const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(4, "0")}.wav`;
+        const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(3, "0")}.wav`;
         if (!mediaNames.has(wavName)) {
           missingFilesInfo.push({ type: 'audio', name: wavName, seg: seg.seg });
         }
@@ -1122,7 +1124,7 @@ export const AssetsPanel: React.FC = () => {
         for (const seg of segs) {
           const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
             seg.seg,
-          ).padStart(4, "0")}.wav`;
+          ).padStart(3, "0")}.wav`;
           const wm = useProjectStore
             .getState()
             .project.mediaLibrary.items.find((m) => m.name === wavName);
@@ -1465,28 +1467,39 @@ export const AssetsPanel: React.FC = () => {
                   {activeFolder}
                 </div>
                 <div className="flex items-center gap-1">
-                  <button
-                    onClick={handleRenameFolder}
-                    className="p-1 rounded bg-background-tertiary border border-border hover:border-primary/50 text-text-muted"
-                    title="Renombrar"
-                  >
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    onClick={handleDeleteFolder}
-                    className="p-1 rounded bg-background-tertiary border border-border hover:border-red-500/50 text-red-400"
-                    title="Borrar"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleCopyFolderTtsToAnotherProject()}
-                    className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary"
-                    title="Opciones de carpeta"
-                  >
-                    <Settings size={14} />
-                  </button>
+                  {showGenerateAudio ? (
+                    <div className="flex-1">
+                      <GenerateAudioSegmentSection
+                        folder={activeFolder}
+                        onClose={() => setShowGenerateAudio(false)}
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => setShowGenerateAudio(true)}
+                        className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary"
+                        title="Generar Segmento de Audio"
+                      >
+                        <RefreshCw size={14} />
+                      </button>
+                      <button
+                        onClick={handleDeleteFolder}
+                        className="p-1 rounded bg-background-tertiary border border-border hover:border-red-500/50 text-red-400"
+                        title="Borrar"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyFolderTtsToAnotherProject()}
+                        className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary"
+                        title="Opciones de carpeta"
+                      >
+                        <Settings size={14} />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ) : folders.length > 0 ? (

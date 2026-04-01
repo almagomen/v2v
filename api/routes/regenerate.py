@@ -10,6 +10,7 @@ from api.job_store import get_job
 from api.schemas import (
     RegenerateSegmentRequest,
     ApplySpeedRequest,
+    GenerateAudioSegmentRequest,
 )
 from api.service import SPEAKER_OPTIONS
 
@@ -159,10 +160,10 @@ async def apply_speed(req: ApplySpeedRequest):
     # El nombre del archivo se deduce por convención: vocals_{idx:04d}.wav para src
     # Pero aquí necesitamos el target que ya fue generado una vez: tts_..._seg.wav
     # Lo más seguro es buscarlo en el Seqs_trg según el índice
-    possible_files = list(seqs_trg_dir.glob(f"*_{req.seg_idx:04d}.wav"))
+    possible_files = list(seqs_trg_dir.glob(f"*_{req.seg_idx:03d}.wav"))
     if not possible_files:
         # Intenta tts_*_seg.wav
-        possible_files = list(seqs_trg_dir.glob(f"tts_*_{req.seg_idx:04d}.wav"))
+        possible_files = list(seqs_trg_dir.glob(f"tts_*_{req.seg_idx:03d}.wav"))
 
     if not possible_files:
         raise HTTPException(
@@ -184,3 +185,57 @@ async def apply_speed(req: ApplySpeedRequest):
     torchaudio.save(str(audio_path), arr_new, sample_rate=rate)
 
     return FileResponse(audio_path, filename=audio_path.name, media_type="audio/wav")
+
+
+@router.post("/generate-audio-segment")
+async def generate_audio_segment(req: GenerateAudioSegmentRequest):
+    """Genera un nuevo segmento de audio TTS desde texto sin necesidad de un segmento existente."""
+    path = _get_video_path_from_job(req.job_id, req.video_index)
+
+    pkl_path = path.with_name("result.pkl")
+    if not pkl_path.exists():
+        raise HTTPException(status_code=404, detail="result.pkl no encontrado")
+
+    import pickle
+
+    with open(pkl_path, "rb") as f:
+        (
+            texts_original,
+            output_name,
+            url,
+            result,
+            transcription,
+            diarization,
+            info,
+            *extra,
+        ) = pickle.load(f)
+
+    from src.audio_utils import clone_voice_segments
+    from src.tts import model_tts
+
+    speaker_audio = SPEAKER_OPTIONS.get(req.speaker, req.speaker)
+    lang = getattr(transcription, "language", None) or "es"
+
+    texts_for_tts = [
+        {
+            "text": req.text,
+            "start": 0.0,
+            "end": 1.0,
+            "speaker": "SPEAKER_00",
+        }
+    ]
+
+    paths_es, _, _ = clone_voice_segments(
+        path,
+        texts_for_tts,
+        lang,
+        speaker_audio,
+        model_tts,
+        only_indices=[1],
+        speed=1.0,
+    )
+
+    if not paths_es:
+        raise HTTPException(status_code=500, detail="No se pudo generar el audio")
+
+    return FileResponse(paths_es[0], filename=paths_es[0].name, media_type="audio/wav")

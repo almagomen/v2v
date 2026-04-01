@@ -620,7 +620,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                   const assetTasks = assets.map(fetchAssetBlob);
                   const segmentTasks = audioSegs.map(seg => {
                     const speakerToken = toSafeToken(seg.speaker || "speaker");
-                    const logicalName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                    const logicalName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(3, "0")}.wav`;
                     return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg)
                       .then(blob => ({ isSegment: true as const, seg, logicalName, blob }))
                       .catch(() => null);

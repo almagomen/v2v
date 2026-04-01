@@ -260,6 +260,29 @@ export const v2vApi = {
     return res.blob();
   },
 
+  async generateNewAudioSegment(
+    jobId: string,
+    videoIndex: number,
+    text: string,
+    speaker: string
+  ): Promise<Blob> {
+    const res = await fetch(url("/api/generate-audio-segment"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: jobId,
+        video_index: videoIndex,
+        text,
+        speaker,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al generar segmento de audio");
+    }
+    return res.blob();
+  },
+
   async regenerateVideo(
     jobId: string,
     videoIndex: number,

@@ -508,7 +508,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       const audioSegs = v.segments.filter((s: any) => s.text?.trim().length > 0);
                       for (const seg of audioSegs) {
                         const speakerToken = toSafeToken(seg.speaker || "speaker");
-                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(3, "0")}.wav`;
                         
                         // Solo importamos si no existe ya
                         if (!freshStore.project.mediaLibrary.items.some((m: any) => m.name === wavName)) {
@@ -529,7 +529,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       const importedMedia = freshStore.project.mediaLibrary.items;
                       for (const seg of audioSegs) {
                         const speakerToken = toSafeToken(seg.speaker || "speaker");
-                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(4, "0")}.wav`;
+                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(3, "0")}.wav`;
                         const mediaItem = importedMedia.find((m: any) => m.name === wavName);
                         if (mediaItem) {
                           const segmentData = createSegmentInfo({

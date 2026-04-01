@@ -108,14 +108,14 @@ def list_audio_segments(job_id: str, video_index: int):
         # Buscar primero el formato nuevo: tts_{speaker}_{NNNN}.wav
         wav_path = None
         filename = None
-        for candidate in seqs_trg.glob(f"tts_*_{seg:04d}.wav"):
+        for candidate in seqs_trg.glob(f"tts_*_{seg:03d}.wav"):
             wav_path = candidate
             filename = candidate.name
             break
 
-        # Fallback al formato legacy: vocals_NNNN.wav
+        # Fallback al formato legacy: vocals_NNN.wav
         if wav_path is None:
-            legacy = seqs_trg / f"vocals_{seg:04d}.wav"
+            legacy = seqs_trg / f"vocals_{seg:03d}.wav"
             if legacy.exists():
                 wav_path = legacy
                 filename = legacy.name
@@ -141,17 +141,17 @@ def serve_audio_segment(job_id: str, video_index: int, seg: int):
 
     Supports both formats: tts_{speaker}_{NNNN}.wav and vocals_NNNN.wav
     """
-    if seg <= 0 or seg > 9999:
+    if seg <= 0 or seg > 999:
         raise HTTPException(status_code=400, detail="Segmento inválido")
     folder = _get_video_folder(job_id, video_index)
     seqs_trg = folder / "Seqs_trg"
 
     # Buscar primero formato nuevo
-    for candidate in seqs_trg.glob(f"tts_*_{seg:04d}.wav"):
+    for candidate in seqs_trg.glob(f"tts_*_{seg:03d}.wav"):
         return FileResponse(candidate, filename=candidate.name, media_type="audio/wav")
 
     # Fallback formato legacy
-    filename = f"vocals_{seg:04d}.wav"
+    filename = f"vocals_{seg:03d}.wav"
     file_path = seqs_trg / filename
     if file_path.exists() and file_path.is_file():
         return FileResponse(file_path, filename=filename, media_type="audio/wav")
