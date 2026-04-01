@@ -2,11 +2,11 @@ import React, { useCallback, useEffect, useState } from "react";
 import { AlertCircle, Loader2, RefreshCw, X } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
-import { v2vApi } from "../../../lib/v2v-api";
-import { useProjectStore } from "../../../stores/project-store";
-import { useV2VStore } from "../../../stores/v2v-store";
-import { importMultipleMediaIntoProject } from "../../../utils/import-media-into-project";
-import { toSafeToken } from "../../../utils/v2v-utils";
+import { v2vApi } from "../../lib/v2v-api";
+import { useProjectStore } from "../../stores/project-store";
+import { useV2VStore } from "../../stores/v2v-store";
+import { importMultipleMediaIntoProject } from "../../utils/import-media-into-project";
+import { toSafeToken } from "../../utils/v2v-utils";
 
 export const GenerateAudioSegmentSection: React.FC<{
   folder: string;
