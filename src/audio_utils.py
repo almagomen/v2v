@@ -126,7 +126,7 @@ def clone_voice_segments(
                     f"Target duration: {target_duration:.2f}s -> speed={effective_speed:.2f}x",
                     end=" ",
                 )
-            target_samples = int(arr.shape[-1] / effective_speed)
+            target_samples = int(target_duration * rate)
             arr = adjust_audio_duration(arr, target_samples, rate)
         # Aplicar speed manual del usuario si es distinto de 1.0 y no se aplicó target_duration
         elif speed != 1.0:
