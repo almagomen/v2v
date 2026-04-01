@@ -61,6 +61,7 @@ async def regenerate_segment(req: RegenerateSegmentRequest):
         req.translate_lang,
         req.speaker,
         req.speed,
+        req.target_duration,
     )
 
 
@@ -73,6 +74,7 @@ def _do_regenerate_segment(
     translate_lang: str | None,
     speaker: str,
     speed: float = 1.0,
+    target_duration: float | None = None,
 ):
     from src.pipeline import split_audio_sequences
     from src.audio_utils import clone_voice_segments
@@ -129,6 +131,7 @@ def _do_regenerate_segment(
         model_tts,
         only_indices=[seg_idx],
         speed=speed,
+        target_duration=target_duration,
     )
 
     if not paths_es:

@@ -234,7 +234,8 @@ export const v2vApi = {
     end: number,
     translateLang: string | null,
     speaker: string,
-    speed: number = 1.0
+    speed: number = 1.0,
+    targetDuration?: number
   ): Promise<Blob> {
     const res = await fetch(url("/api/regenerate-segment"), {
       method: "POST",
@@ -249,6 +250,7 @@ export const v2vApi = {
         translate_lang: translateLang,
         speaker,
         speed,
+        target_duration: targetDuration,
       }),
     });
     if (!res.ok) {

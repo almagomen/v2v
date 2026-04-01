@@ -1,11 +1,14 @@
 """Pydantic schemas for v2v API."""
+
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional, Any
 
 
 class ProcessUrlsRequest(BaseModel):
     urls: list[str] = Field(..., description="URLs de YouTube (una o más)")
-    translate_lang: Optional[str] = Field(None, description="Idioma de traducción: es, pt, en, fr, de, it, o null")
+    translate_lang: Optional[str] = Field(
+        None, description="Idioma de traducción: es, pt, en, fr, de, it, o null"
+    )
     speaker: str = Field("mrbeast_lmnt", description="Nombre de voz/speaker")
 
 
@@ -68,9 +71,13 @@ class JobResultResponse(BaseModel):
 
 
 class RegenerateSegmentRequest(BaseModel):
-    job_id: Optional[str] = Field(None, description="ID del job (si se usa con video_index)")
+    job_id: Optional[str] = Field(
+        None, description="ID del job (si se usa con video_index)"
+    )
     video_index: int = Field(0, description="Índice del video en el job")
-    video_path: Optional[str] = Field(None, description="Path del video (alternativa a job_id)")
+    video_path: Optional[str] = Field(
+        None, description="Path del video (alternativa a job_id)"
+    )
     seg_idx: int = Field(..., ge=1)
     text: str
     start: float
@@ -78,6 +85,9 @@ class RegenerateSegmentRequest(BaseModel):
     translate_lang: Optional[str] = None
     speaker: str = "mrbeast_lmnt"
     speed: float = Field(1.0, description="Factor de velocidad (0.5 a 2.0)")
+    target_duration: Optional[float] = Field(
+        None, description="Duración objetivo en segundos para modo 's'"
+    )
 
 
 class RegenerateVideoRequest(BaseModel):

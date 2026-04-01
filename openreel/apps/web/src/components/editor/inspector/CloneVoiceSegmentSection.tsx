@@ -296,11 +296,10 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     const segmentId = generateSegmentId(folderRef.jobId, folderRef.videoIndex, parsed.segIdx);
 
     let effectiveSpeed = speed;
-    if (speedMode === "s" && segmentTimes) {
-      const currentDuration = segmentTimes.end - segmentTimes.start;
-      if (currentDuration > 0 && speed > 0) {
-        effectiveSpeed = currentDuration / speed;
-      }
+    let targetDuration: number | undefined;
+    if (speedMode === "s" && speed > 0) {
+      effectiveSpeed = 1.0;
+      targetDuration = speed;
     }
 
     setRegenLoading(true);
@@ -317,6 +316,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         normalizeTranslateLang,
         selectedVoice,
         effectiveSpeed,
+        targetDuration,
       );
 
       const newDuration = await getAudioDuration(regenBlob);
@@ -371,19 +371,15 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
       const { getClip, trimClip } = useProjectStore.getState();
       const currentClip = getClip(clipId);
-      let targetDuration = newDuration;
-      if (speedMode === "s" && speed > 0) {
-        targetDuration = speed;
-      }
       if (currentClip) {
-        const newOutPoint = currentClip.inPoint + targetDuration;
+        const newOutPoint = currentClip.inPoint + newDuration;
         await trimClip(clipId, currentClip.inPoint, newOutPoint);
       }
 
       if (segmentTimes) {
         setSegmentTimes({
           start: segmentTimes.start,
-          end: segmentTimes.start + targetDuration,
+          end: segmentTimes.start + newDuration,
         });
       }
 
