@@ -46,6 +46,7 @@ def clone_voice_segments(
     stretch_target_ratio: float = 1.0,
     speed: float = 1.0,
     target_duration: Optional[float] = None,
+    register: bool = True,
     **kwargs,
 ) -> Tuple[list[Path], list[int], int]:
     seqs_src_dir = path.parent / "Seqs_src"
@@ -143,7 +144,8 @@ def clone_voice_segments(
         torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
         path_es.append(audio_es_path)
         # Registrar ruta exacta del segmento en el manifiesto de activos
-        register_segment(path.parent, seq_num, audio_es_path)
+        if register:
+            register_segment(path.parent, seq_num, audio_es_path)
         start_samples = int(start_time * rate)
         times.append(start_samples)
 

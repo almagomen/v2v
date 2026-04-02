@@ -225,6 +225,8 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
         }
     ]
 
+    from src.assets import update_assets
+
     paths_es, _, _ = clone_voice_segments(
         path,
         texts_for_tts,
@@ -233,9 +235,14 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
         model_tts,
         only_indices=[1],
         speed=1.0,
+        register=False,
     )
 
     if not paths_es:
         raise HTTPException(status_code=500, detail="No se pudo generar el audio")
+
+    # Registrar en el manifiesto general con su nombre real para que el renderizador lo encuentre
+    # pero sin que colisione con el mapeo de "segments"
+    update_assets(path.parent, **{paths_es[0].name: str(paths_es[0])})
 
     return FileResponse(paths_es[0], filename=paths_es[0].name, media_type="audio/wav")

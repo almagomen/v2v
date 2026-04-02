@@ -1467,39 +1467,28 @@ export const AssetsPanel: React.FC = () => {
                   {activeFolder}
                 </div>
                 <div className="flex items-center gap-1">
-                  {showGenerateAudio ? (
-                    <div className="flex-1">
-                      <GenerateAudioSegmentSection
-                        folder={activeFolder}
-                        onClose={() => setShowGenerateAudio(false)}
-                      />
-                    </div>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => setShowGenerateAudio(true)}
-                        className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary"
-                        title="Generar Segmento de Audio"
-                      >
-                        <RefreshCw size={14} />
-                      </button>
-                      <button
-                        onClick={handleDeleteFolder}
-                        className="p-1 rounded bg-background-tertiary border border-border hover:border-red-500/50 text-red-400"
-                        title="Borrar"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyFolderTtsToAnotherProject()}
-                        className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary"
-                        title="Opciones de carpeta"
-                      >
-                        <Settings size={14} />
-                      </button>
-                    </>
-                  )}
+                  <button
+                    onClick={() => setShowGenerateAudio(true)}
+                    className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary transition-all active:scale-90"
+                    title="Generar Segmento de Audio con AI"
+                  >
+                    <RefreshCw size={14} />
+                  </button>
+                  <button
+                    onClick={handleDeleteFolder}
+                    className="p-1 rounded bg-background-tertiary border border-border hover:border-red-500/50 text-red-400 trasition-all active:scale-90"
+                    title="Borrar"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyFolderTtsToAnotherProject()}
+                    className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary transition-all active:scale-90"
+                    title="Opciones de carpeta"
+                  >
+                    <Settings size={14} />
+                  </button>
                 </div>
               </div>
             ) : folders.length > 0 ? (
@@ -1990,6 +1979,16 @@ export const AssetsPanel: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* AI Audio Generation Modal */}
+      {activeFolder && (
+        <GenerateAudioSegmentSection
+          key={activeFolder}
+          folder={activeFolder}
+          open={showGenerateAudio}
+          onOpenChange={setShowGenerateAudio}
+        />
+      )}
     </div>
   );
 };
