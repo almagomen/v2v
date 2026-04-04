@@ -80,6 +80,12 @@ def clone_voice_segments(
         if arr is None or rate is None:
             continue
 
+        # --- GUARDAR COPIA RAW INACTA PARA "APPLY SPEED" FUTURO ---
+        safe_speaker = speaker.replace(" ", "_").replace("/", "_").replace("\\", "_")
+        raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"
+        torchaudio.save(str(raw_es_path), arr, sample_rate=rate)
+        # --------------------------------------------------------
+
         dur_es = arr.shape[-1] / rate
         duration_ratio = dur_es / dur_en if dur_en > 0 else 0
         print(f"{idx+1:2d}. ", end="")

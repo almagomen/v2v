@@ -131,7 +131,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
   const [backendSpeaker, setBackendSpeaker] = useState<string | null>(null);
   const [speed, setSpeed] = useState<number>(1.0);
-  const [speedInput, setSpeedInput] = useState<string>("1.0");
+  const [speedInput, setSpeedInput] = useState<string>("");
   const [speedMode, setSpeedMode] = useState<"x" | "s">("x");
   const [isApplyingSpeed, setIsApplyingSpeed] = useState(false);
 
@@ -195,12 +195,12 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           setSegmentText(seg?.text ?? "");
         }
         
-        if (typeof segmentInfo?.speed === "number") {
+        if (typeof segmentInfo?.speed === "number" && segmentInfo.speed !== 1.0) {
           setSpeed(segmentInfo.speed);
           setSpeedInput(segmentInfo.speed.toFixed(3));
         } else {
           setSpeed(1.0);
-          setSpeedInput("1.000");
+          setSpeedInput(""); // Empty input explicitly defaults to 1x or original dur
         }
         
         if (seg?.speaker) {
@@ -298,11 +298,11 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     const oldSpeaker = parsed.speakerToken;
     const segmentId = generateSegmentId(folderRef.jobId, folderRef.videoIndex, parsed.segIdx);
 
-    let effectiveSpeed = speed;
+    let effectiveSpeed = parseFloat(speedInput) || (speedMode === "x" ? 1.0 : (effectiveTimes ? effectiveTimes.end - effectiveTimes.start : 1.0));
     let targetDuration: number | undefined;
-    if (speedMode === "s" && speed > 0) {
+    if (speedMode === "s" && effectiveSpeed > 0) {
+      targetDuration = effectiveSpeed;
       effectiveSpeed = 1.0;
-      targetDuration = speed;
     }
 
     setRegenLoading(true);
@@ -415,11 +415,12 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     setRegenError(null);
     setRegenStatus(null);
     try {
-      let effectiveSpeed = speed;
+      let actualInputVal = parseFloat(speedInput) || (speedMode === "x" ? 1.0 : clip.duration);
+      let effectiveSpeed = actualInputVal;
       if (speedMode === "s") {
         const currentDuration = clip.duration;
-        if (currentDuration > 0) {
-          effectiveSpeed = currentDuration / speed;
+        if (currentDuration > 0 && actualInputVal > 0) {
+          effectiveSpeed = currentDuration / actualInputVal;
         }
       }
 
@@ -576,27 +577,22 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
             value={speedInput}
             onChange={(e) => {
               setSpeedInput(e.target.value);
-              const parsed = parseFloat(e.target.value);
-              if (!isNaN(parsed) && parsed > 0) {
-                setSpeed(parsed);
-              }
             }}
             onBlur={() => {
+              // Permitimos que quede vacío
               const parsed = parseFloat(speedInput);
-              if (isNaN(parsed) || parsed <= 0) {
-                const fallback = speedMode === "x" ? 1.0 : clip.duration;
-                setSpeed(fallback);
-                setSpeedInput(fallback.toFixed(2));
-              } else {
+              if (!isNaN(parsed) && parsed > 0) {
                 setSpeedInput(parsed.toFixed(2));
+              } else if (speedInput !== "") {
+                setSpeedInput("");
               }
             }}
-            className="flex-1 min-w-[60px] px-2 py-1 bg-background-secondary border border-border rounded text-[11px] text-text-primary focus:outline-none focus:border-primary"
+            className="flex-1 min-w-[60px] px-2 py-1 bg-background-secondary border border-border rounded text-[11px] text-text-primary focus:outline-none focus:border-primary placeholder:text-text-muted/40 font-medium"
             placeholder={speedMode === "x" ? "1.00" : clip.duration.toFixed(2)}
           />
           <button
             onClick={handleApplySpeedFilter}
-            disabled={isApplyingSpeed || regenLoading || speed === 1.0}
+            disabled={isApplyingSpeed || regenLoading || (!speedInput && speedMode === "x")}
             className="px-3 py-1 bg-primary/10 border border-primary/30 rounded text-[10px] text-primary hover:bg-primary/20 transition-all disabled:opacity-50 h-[24px]"
             title="Aplica solo el filtro de velocidad sin regenerar TTS"
           >

@@ -172,7 +172,13 @@ async def apply_speed(req: ApplySpeedRequest):
         )
 
     audio_path = possible_files[0]
-    arr, rate = torchaudio.load(str(audio_path))
+    
+    # Intentamos leer siempre del RAW puro si existe, para no destruir fase.
+    raw_path = audio_path.with_name(f"{audio_path.stem}_raw{audio_path.suffix}")
+    if raw_path.exists():
+        arr, rate = torchaudio.load(str(raw_path))
+    else:
+        arr, rate = torchaudio.load(str(audio_path))
 
     # Aplicar la velocidad
     # atempo=1.5 -> target_duration = original_duration / 1.5
