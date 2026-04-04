@@ -82,7 +82,7 @@ def clone_voice_segments(
 
         dur_es = arr.shape[-1] / rate
         duration_ratio = dur_es / dur_en if dur_en > 0 else 0
-        print(f"{idx:2d}. ", end="")
+        print(f"{idx+1:2d}. ", end="")
 
         if slowdown_range and stretch_target_ratio != 1.0:
             if duration_ratio > 1.0:
