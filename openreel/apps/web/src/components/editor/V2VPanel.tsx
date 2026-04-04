@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect, useCallback, useMemo } from "react";
 import { Youtube, Loader2, AlertCircle, Share2, FolderDown, Trash2 } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
@@ -88,6 +88,24 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     fetchSpeakers,
     startPolling,
   } = useV2VStore();
+
+  const { project } = useProjectStore();
+
+  // Calcula cuál índice de video corresponde al proyecto activo.
+  // Si el proyecto no es V2V (no coincide con ninguno), retorna -1 para mostrar el placeholder.
+  const effectiveDropdownValue = useMemo(() => {
+    for (let i = 0; i < videos.length; i++) {
+      const v = videos[i] as any;
+      const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
+      const pos = urlItems.findIndex(
+        (it: any) => it.url === v.url && it.index === v.index,
+      );
+      const seq = pos >= 0 ? pos + 1 : v.index + 1;
+      const projectTitle = `${seq}. V2V ${shortProjectToken(v.output_name || folder)}`;
+      if (project.name === projectTitle) return i;
+    }
+    return -1;
+  }, [videos, project.name, urlItems]);
 
   useEffect(() => {
     if (speakers.length === 0) {
@@ -461,9 +479,15 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
               <div className="flex gap-2">
                 <select
                   className="flex-1 min-w-0 truncate px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg"
-                  value={selectedVideoIndex}
-                  onChange={(e) => handleVideoSelect(parseInt(e.target.value, 10))}
+                  value={effectiveDropdownValue}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (val >= 0) handleVideoSelect(val);
+                  }}
                 >
+                  {effectiveDropdownValue < 0 && (
+                    <option value={-1}>— Seleccionar video —</option>
+                  )}
                   {videos.map((v: any, i: number) => (
                     <option key={i} value={i}>
                       {v.output_name}

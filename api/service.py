@@ -9,6 +9,7 @@ from src.assets import load_assets
 
 SPEAKER_OPTIONS = {
     "mrbeast_lmnt": "d47094be-9814-4323-9000-e735e04d8732",
+    "warrick_lmnt": "warrick",
     "Dionisio Schuyler": "Dionisio Schuyler",
     "en-US-AndrewMultilingualNeural": "en-US-AndrewMultilingualNeural",
     "Chatterbox": "Chatterbox",
