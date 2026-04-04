@@ -25,6 +25,23 @@ from src.edit_utils import get_video_bitrate
 router = APIRouter(prefix="/api", tags=["render"])
 
 
+def to_zip_name(text: str, max_len: int = 200) -> str:
+    """
+    Genera un nombre de archivo apto para ZIP y Windows preservando emojis,
+    hashtags y caracteres Unicode.
+    Solo elimina los caracteres realmente prohibidos: / \\ : * ? " < > | y controles.
+    """
+    import re
+    # Eliminar caracteres de control (ASCII 0-31, 127)
+    text = re.sub(r"[\x00-\x1f\x7f]", "", text)
+    # Eliminar caracteres prohibidos en Windows/ZIP
+    text = re.sub(r'[/\\:*?"<>|]', "_", text)
+    # Colapsar espacios múltiples
+    text = re.sub(r" {2,}", " ", text).strip()
+    # Limitar longitud
+    return text[:max_len].strip() or "video"
+
+
 # ---------------------------------------------------------------------------
 # Catbox upload
 # ---------------------------------------------------------------------------
@@ -531,8 +548,9 @@ async def render_batch(req: RenderBatchRequest):
     for item in req.renders:
         try:
             folder = _job_folder(item.job_id, item.video_index)
-            safe_name = to_safe_name(item.output_name)
-            output_path = folder / f"{safe_name}.mp4"
+            safe_name = to_safe_name(item.output_name)  # para nombre de archivo en disco
+            zip_name = to_zip_name(item.output_name)     # para arcname en ZIP (preserva emojis y hashtags)
+            output_path = folder / f"_render_{safe_name}.mp4"
 
             cmd = _build_ffmpeg_cmd(
                 item.clips, folder, output_path, item.job_id, item.video_index
@@ -543,14 +561,15 @@ async def render_batch(req: RenderBatchRequest):
                     f"{item.output_name}: ffmpeg error – {result.stderr[-300:]}"
                 )
                 continue
-            results.append(output_path)
+            # Guardar también el zip_name para usarlo como arcname
+            results.append((output_path, zip_name))
 
             # Upload individual to Catbox if requested
             if req.upload_to_catbox:
                 catbox_url = upload_to_catbox(output_path)
                 catbox_urls.append(
                     {
-                        "filename": f"{safe_name}.mp4",
+                        "filename": f"{zip_name}.mp4",
                         "url": catbox_url or "",
                         "status": "uploaded" if catbox_url else "upload_failed",
                     }
@@ -578,8 +597,8 @@ async def render_batch(req: RenderBatchRequest):
     # Build ZIP in memory
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in results:
-            zf.write(path, arcname=path.name)
+        for output_path, zip_display_name in results:
+            zf.write(output_path, arcname=f"{zip_display_name}.mp4")
         if errors:
             zf.writestr("_errors.txt", "\n".join(errors))
 
