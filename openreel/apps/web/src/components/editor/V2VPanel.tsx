@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, Share2, FolderDown, Trash2 } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, FolderDown, Trash2 } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
 import { v2vApi } from "../../lib/v2v-api";
@@ -205,19 +205,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
   // Cargar en editor eliminado: ahora se importa automáticamente a Media durante el proceso.
 
-  // Cargar en editor eliminado: ahora se importa automáticamente a Media durante el proceso.
-
-  const handleShare = useCallback(async () => {
-    if (!jobId) return;
-    try {
-      toast.info("Compartiendo", "Subiendo a Catbox...");
-      const u = await v2vApi.shareToCatbox(jobId, selectedVideoIndex);
-      setShareUrl(u);
-      toast.success("Enlace listo", "El video se ha subido correctamente.");
-    } catch (e) {
-      toast.error("Error al compartir", e instanceof Error ? e.message : "Error desconocido");
-    }
-  }, [jobId, selectedVideoIndex, setShareUrl]);
 
   const handleDeleteFolder = useCallback(async (folderName: string, urlToRemove?: string) => {
     if (!confirm(`¿Estás seguro de borrar físicamente la carpeta "${folderName}"? Se perderá el caché de descarga y procesamiento para este vídeo.`)) {
@@ -599,41 +586,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 >
                   {isProcessing ? <Loader2 size={14} className="animate-spin" /> : <FolderDown size={14} />}
                 </Button>
-                <Button size="icon" variant="secondary" onClick={handleShare} title="Compartir" disabled={!jobId || isProcessing}>
-                  <Share2 size={14} />
-                </Button>
-                <Button 
-                  size="icon" 
-                  variant="secondary" 
-                  title="Borrar físicamente del servidor"
-                  className="hover:bg-red-500/20 hover:text-red-500"
-                  onClick={() => {
-                    const v = videos[selectedVideoIndex];
-                    const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
-                    handleDeleteFolder(folder);
-                  }}
-                  disabled={!jobId || isProcessing}
-                >
-                  <Trash2 size={14} />
-                </Button>
               </div>
             </div>
-
-
-
-            {shareUrl && (
-              <div className="p-2 rounded bg-background-tertiary">
-                <p className="text-[10px] text-text-muted mb-1">Enlace Catbox:</p>
-                <a
-                  href={shareUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-xs text-primary break-all"
-                >
-                  {shareUrl}
-                </a>
-              </div>
-            )}
 
           </>
         )}
