@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useRef, useState, useEffect } from "react";
 import {
   Search,
   Maximize2,
@@ -544,6 +544,11 @@ export const AssetsPanel: React.FC = () => {
     forceSave,
   } = useProjectStore();
   const mediaItems = project.mediaLibrary.items;
+
+  // Reset activeFolder when project changes
+  useEffect(() => {
+    setActiveFolder(null);
+  }, [project.id]);
 
   // UI store
   const { select, isSelected, startDrag } = useUIStore();

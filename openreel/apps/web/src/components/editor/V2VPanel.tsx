@@ -9,7 +9,6 @@ import { autoSaveManager } from "../../services/auto-save";
 import {
   toSafeToken,
   folderNameFromTitle,
-  shortProjectToken,
   importKeyFor,
 } from "../../utils/v2v-utils";
 import { createSegmentInfo } from "../../utils/v2v-segment-ids";
@@ -77,8 +76,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     setSelectedVideoIndex,
     isProcessing,
     setIsProcessing,
-    shareUrl,
-    setShareUrl,
     importStatusByKey,
     urlItems,
     urlLogs,
@@ -169,7 +166,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       if (v) {
         useV2VStore.getState().setSegments(v.segments);
       }
-      setShareUrl(null);
 
       // Cambiar al proyecto correspondiente al video seleccionado
       if (!v) return;
@@ -200,7 +196,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         // Ignorar errores de cambio de proyecto silenciosamente
       }
     },
-    [videos, setSelectedVideoIndex, setShareUrl],
+    [videos, setSelectedVideoIndex],
   );
 
   // Cargar en editor eliminado: ahora se importa automáticamente a Media durante el proceso.
