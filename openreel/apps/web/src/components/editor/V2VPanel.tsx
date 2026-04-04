@@ -96,16 +96,11 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const effectiveDropdownValue = useMemo(() => {
     for (let i = 0; i < videos.length; i++) {
       const v = videos[i] as any;
-      const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
-      const pos = urlItems.findIndex(
-        (it: any) => it.url === v.url && it.index === v.index,
-      );
-      const seq = pos >= 0 ? pos + 1 : v.index + 1;
-      const projectTitle = `${seq}. V2V ${shortProjectToken(v.output_name || folder)}`;
+      const projectTitle = folderNameFromTitle(v.output_name || `video_${v.index}`);
       if (project.name === projectTitle) return i;
     }
     return -1;
-  }, [videos, project.name, urlItems]);
+  }, [videos, project.name]);
 
   useEffect(() => {
     if (speakers.length === 0) {
@@ -178,13 +173,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
       // Cambiar al proyecto correspondiente al video seleccionado
       if (!v) return;
-      const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
-      const currentItems = useV2VStore.getState().urlItems;
-      const pos = currentItems.findIndex(
-        (it) => it.url === v.url && it.index === v.index,
-      );
-      const seq = pos >= 0 ? pos + 1 : v.index + 1;
-      const projectTitle = `${seq}. V2V ${shortProjectToken(v.output_name || folder)}`;
+      const projectTitle = folderNameFromTitle(v.output_name || `video_${v.index}`);
 
       const projectStore = useProjectStore.getState();
       // Si el proyecto ya está activo no hacemos nada
@@ -502,13 +491,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                     if (!jobId || selectedVideoIndex < 0 || !videos[selectedVideoIndex]) return;
                     const v = videos[selectedVideoIndex];
                     const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
-                    
-                    const currentItems = useV2VStore.getState().urlItems;
-                    const pos = currentItems.findIndex(
-                      (it) => it.url === v.url && it.index === v.index,
-                    );
-                    const seq = pos >= 0 ? pos + 1 : v.index + 1;
-                    const projectTitle = `${seq}. V2V ${shortProjectToken(v.output_name || folder)}`;
+                    const projectTitle = folder;
                     
                     setIsProcessing(true);
                     try {
