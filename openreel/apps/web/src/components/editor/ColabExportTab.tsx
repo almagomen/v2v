@@ -324,7 +324,8 @@ export const ColabExportTab: React.FC = () => {
       setStatusMsg(uploadToCatbox ? "Renderizando y subiendo a Catbox…" : "Renderizando en Colab…");
 
       const clips = buildPayloadClips(analyzed, uploadedMap);
-      const rawName = project.name || jobContext.longName || "export";
+      // Usar el título completo de TikTok (con hashtags) en lugar del nombre simplificado del proyecto
+      const rawName = jobContext.longName || project.name || "export";
       const outName = rawName.replace(/^\d+[._\s]*/, "");
       
       const result = await v2vApi.renderTimeline({
@@ -342,9 +343,7 @@ export const ColabExportTab: React.FC = () => {
         setStatus("done");
         setStatusMsg("¡Video subido a Catbox!");
       } else {
-        // Normal download
-        const rawName = project.name || jobContext.longName || "export";
-        const outName = rawName.replace(/^\d+[._\s]*/, "");
+        // Normal download — usar el título completo TikTok para el nombre del archivo
         downloadBlob(result as Blob, `${outName}.mp4`);
         setStatus("done");
         setStatusMsg("¡Exportación completada!");
@@ -402,7 +401,8 @@ export const ColabExportTab: React.FC = () => {
           job_id: ctx.jobId,
           video_index: ctx.videoIndex,
           clips: buildPayloadClips(clips, uploadedMap),
-          output_name: (fullProject.name || sp.meta.projectName || (ctx as any).longName).replace(/^\d+[._\s]*/, ""),
+          // Usar el título completo de TikTok (con hashtags) en lugar del nombre simplificado
+          output_name: ((ctx as any).longName || fullProject.name || sp.meta.projectName || "export").replace(/^\d+[._\s]*/, ""),
         });
       }
 

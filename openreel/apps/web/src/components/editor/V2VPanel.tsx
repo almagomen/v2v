@@ -149,15 +149,51 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   }, [urls, translateLang, speaker, urlItems, startPolling, setJobId, setError, setLog, setIsProcessing, setJobPhase]);
 
   const handleVideoSelect = useCallback(
-    (idx: number) => {
+    async (idx: number) => {
       setSelectedVideoIndex(idx);
       // Actualizamos segments en el store para que Clone Voice lo vea
-      if (videos[idx]) {
-        useV2VStore.getState().setSegments(videos[idx].segments);
+      const v = videos[idx];
+      if (v) {
+        useV2VStore.getState().setSegments(v.segments);
       }
       setShareUrl(null);
+
+      // Cambiar al proyecto correspondiente al video seleccionado
+      if (!v) return;
+      const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
+      const currentItems = useV2VStore.getState().urlItems;
+      const pos = currentItems.findIndex(
+        (it) => it.url === v.url && it.index === v.index,
+      );
+      const seq = pos >= 0 ? pos + 1 : v.index + 1;
+      const projectTitle = `${seq}. V2V ${shortProjectToken(v.output_name || folder)}`;
+
+      const projectStore = useProjectStore.getState();
+      // Si el proyecto ya está activo no hacemos nada
+      if (projectStore.project.name === projectTitle) return;
+
+      try {
+        await autoSaveManager.initialize();
+        const saves = await autoSaveManager.checkForRecovery();
+        const uniqueProjects = saves.reduce((acc: any[], save: any) => {
+          const existing = acc.find((s: any) => s.projectId === save.projectId);
+          if (!existing || save.timestamp > existing.timestamp) {
+            return [...acc.filter((s: any) => s.projectId !== save.projectId), save];
+          }
+          return acc;
+        }, [] as any[]);
+
+        const targetSave = uniqueProjects.find((s: any) => s.projectName === projectTitle);
+        if (targetSave) {
+          await projectStore.recoverFromAutoSave(targetSave.id);
+          toast.info("Proyecto cargado", `Proyecto "${projectTitle}" activo.`);
+        }
+        // Si no existe proyecto guardado, no lo creamos — el usuario lo importará manualmente
+      } catch {
+        // Ignorar errores de cambio de proyecto silenciosamente
+      }
     },
-    [videos, setSelectedVideoIndex, setShareUrl]
+    [videos, setSelectedVideoIndex, setShareUrl],
   );
 
   // Cargar en editor eliminado: ahora se importa automáticamente a Media durante el proceso.
