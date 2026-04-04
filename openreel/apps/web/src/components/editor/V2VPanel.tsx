@@ -438,7 +438,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         {log && (
           <div className="space-y-1">
             <p className="text-[10px] text-text-muted">Logs</p>
-            <pre className="p-2 rounded-lg bg-background-tertiary font-mono text-[10px] max-h-36 overflow-y-auto overflow-x-auto whitespace-pre">
+            <pre className="p-2 rounded-lg bg-background-tertiary font-mono text-[10px] max-h-40 overflow-y-auto overflow-x-auto whitespace-pre">
               {(() => {
                 let out = log || "";
 
