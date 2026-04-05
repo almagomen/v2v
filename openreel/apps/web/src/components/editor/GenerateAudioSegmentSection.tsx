@@ -14,7 +14,6 @@ import {
   Button,
 } from "@openreel/ui";
 
-import { v2vApi } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
 import { useV2VStore } from "../../stores/v2v-store";
 import { importMultipleMediaIntoProject } from "../../utils/import-media-into-project";
@@ -43,16 +42,18 @@ export const GenerateAudioSegmentSection: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
+  // Cuenta el máximo índice de segmentos ya generados por AI Generator en esta carpeta
+  // Ahora el backend usa prefijo tts_ para todo, por lo que buscamos ambos por compatibilidad
   const getNextSegmentIndex = useCallback((items: any[]) => {
     let maxIdx = 0;
     for (const item of items) {
       const idx = item.name.indexOf("/");
       if (idx <= 0) continue;
-      // IMPORTANTE: Filtrar SOLO por la carpeta actual recibida por props
       if (item.name.slice(0, idx) !== folder) continue;
       
       const displayName = item.name.slice(idx + 1);
-      const match = displayName.match(/^gen_.+_(\d{3})\.wav$/);
+      // Verifica gen_ (legacy) y tts_ (nuevo estándar)
+      const match = displayName.match(/^(?:gen_|tts_).+_(\d{3})\.wav$/);
       if (match) {
         const idxNum = parseInt(match[1], 10);
         if (!Number.isNaN(idxNum) && idxNum > maxIdx) {
@@ -84,21 +85,52 @@ export const GenerateAudioSegmentSection: React.FC<{
     setStatus(null);
 
     try {
+      // Llamar al backend — devuelve el archivo con su nombre real en Content-Disposition
+      const apiBase = (import.meta.env.VITE_V2V_API_URL || "").replace(/\/$/, "");
+      const isLocalhostLikeHost = (h: string) => h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0";
+      const apiBaseTargetsLocalhost = (base: string) => /\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?/i.test(base);
+      const resolveUrl = (path: string) => {
+        if (apiBase && typeof window !== "undefined") {
+          if (apiBaseTargetsLocalhost(apiBase) && !isLocalhostLikeHost(window.location.hostname)) return path;
+          return `${apiBase}${path}`;
+        }
+        return path;
+      };
+
+      const res = await fetch(resolveUrl("/api/generate-audio-segment"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: folderRef.jobId,
+          video_index: folderRef.videoIndex,
+          text: segmentText,
+          speaker: selectedVoice,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Error al generar audio");
+      }
+
+      const regenBlob = await res.blob();
+
+      // Leer el nombre real que asignó el backend desde Content-Disposition
+      let backendFileName: string | null = null;
+      const cd = res.headers.get("content-disposition") || "";
+      const cdMatch = cd.match(/filename[^;=\n]*=(?:(['"])([\s\S]*?)\1|([^;\n]*))/i);
+      if (cdMatch) {
+        backendFileName = (cdMatch[2] || cdMatch[3] || "").trim();
+      }
+
       const speakerLabel = speakers.find((s) => s.value === selectedVoice)?.label || selectedVoice;
       const speakerToken = toSafeToken(speakerLabel);
 
-      const regenBlob = await v2vApi.generateNewAudioSegment(
-        folderRef.jobId,
-        folderRef.videoIndex,
-        segmentText,
-        selectedVoice
-      );
-
+      // Si el backend devuelve el nombre, lo usamos; si no, construimos con el mismo patrón tts_
       const currentProject = useProjectStore.getState().project;
       const segIdx = getNextSegmentIndex(currentProject.mediaLibrary.items);
-
-      // El nombre del archivo DEBE usar la carpeta actual para evitar cruces
-      const newFileName = `gen_${speakerToken}_${String(segIdx).padStart(3, "0")}.wav`;
+      const fallbackName = `tts_${speakerToken}_${String(segIdx).padStart(3, "0")}.wav`;
+      const newFileName = backendFileName || fallbackName;
       const logicalName = `${folder}/${newFileName}`;
 
       const file = new File([regenBlob], logicalName, { type: "audio/wav" });
@@ -117,8 +149,7 @@ export const GenerateAudioSegmentSection: React.FC<{
       useProjectStore.setState({ project: batchRes.project });
       await forceSave();
 
-      // Sincronizar activos con el backend para que Colab reconozca el nuevo archivo 'gen_...'
-      // Esto evita duplicaciones al exportar porque el frontend sabrá que ya existe en el servidor
+      // Sincronizar activos con el backend para que Colab reconozca el nuevo archivo
       await syncFolderAssets(folderRef.jobId, folderRef.videoIndex, folder);
 
       setStatus(`✅ ¡Generado! "${newFileName}"`);

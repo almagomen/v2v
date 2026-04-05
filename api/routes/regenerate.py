@@ -12,7 +12,7 @@ from api.schemas import (
     ApplySpeedRequest,
     GenerateAudioSegmentRequest,
 )
-from api.service import SPEAKER_OPTIONS
+from api.service import SPEAKER_OPTIONS, resolve_speaker_key
 
 router = APIRouter(prefix="/api", tags=["regenerate"])
 
@@ -105,10 +105,12 @@ def _do_regenerate_segment(
         "start": start,
         "end": end,
         "text": text,
-        # Si el usuario mandó un speaker explícito, lo usamos, si no mantenemos el original
-        "speaker": speaker
-        if speaker
-        else texts_original[seg_idx - 1].get("speaker", "SPEAKER_00"),
+        # Resolvemos siempre a la clave legible del diccionario (ej: 'mrbeast_lmnt')
+        # aunque el frontend haya enviado el UUID (ej: 'd47094be-...') como speaker.
+        # Esto garantiza que el archivo en disco se llame tts_mrbeast_lmnt_001.wav
+        "speaker": resolve_speaker_key(speaker) if speaker else resolve_speaker_key(
+            texts_original[seg_idx - 1].get("speaker", "SPEAKER_00")
+        ),
     }
     texts_edited = list(texts_original)
     texts_edited[seg_idx - 1] = t_edit
@@ -233,12 +235,13 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     speaker_audio = SPEAKER_OPTIONS.get(req.speaker, req.speaker)
     lang = getattr(transcription, "language", None) or "es"
 
+    speaker_key = resolve_speaker_key(req.speaker)
     texts_for_tts = [
         {
             "text": req.text,
             "start": 0.0,
             "end": 1.0,
-            "speaker": "SPEAKER_00",
+            "speaker": speaker_key,  # nombre legible para el archivo en disco
         }
     ]
 

@@ -15,6 +15,26 @@ SPEAKER_OPTIONS = {
     "Chatterbox": "Chatterbox",
 }
 
+# Lookup inverso: value/UUID → clave legible del diccionario
+# Permite que aunque el frontend envíe el UUID, el archivo en disco use el nombre legible.
+_SPEAKER_VALUE_TO_KEY: dict[str, str] = {v: k for k, v in SPEAKER_OPTIONS.items()}
+
+
+def resolve_speaker_key(speaker_input: str) -> str:
+    """Devuelve la clave legible del diccionario para un speaker.
+    
+    Acepta tanto la clave directa ('mrbeast_lmnt') como el valor/UUID
+    ('d47094be-...') y devuelve siempre la clave legible para nombrar archivos.
+    """
+    # Primero intenta lookup inverso por value/UUID
+    if speaker_input in _SPEAKER_VALUE_TO_KEY:
+        return _SPEAKER_VALUE_TO_KEY[speaker_input]
+    # Si ya es la clave directa, la devuelve tal cual
+    if speaker_input in SPEAKER_OPTIONS:
+        return speaker_input
+    # Fallback: devuelve el input sanitizado
+    return speaker_input
+
 
 class JobLogWriter(io.TextIOBase):
     """Redirects stdout to job log."""

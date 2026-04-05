@@ -19,11 +19,13 @@ type V2VParsedSegment = {
 function parseV2VSegmentFromName(name: string): V2VParsedSegment | null {
   const normalized = name.replace(/\\/g, "/");
 
-  const match = normalized.match(/^(?:(.+?)\/)?tts_(.+)_(\d{3})\.wav$/);
+  // Acepta prefijos: tts_ (inferencia/regeneración) y gen_ (AI Audio Generator)
+  const match = normalized.match(/^(?:(.+?)\/)?(tts_|gen_)(.+)_(\d{3})\.wav$/);
   if (match) {
     const folder = match[1];
-    const speakerToken = match[2];
-    const segIdx = parseInt(match[3], 10);
+    // speakerToken es el grupo 3 (sin el prefijo tts_/gen_)
+    const speakerToken = match[3];
+    const segIdx = parseInt(match[4], 10);
     if (folder && !Number.isNaN(segIdx)) {
       return { folder, speakerToken, segIdx };
     }
