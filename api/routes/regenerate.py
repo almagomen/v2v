@@ -157,22 +157,34 @@ async def apply_speed(req: ApplySpeedRequest):
     seqs_trg_dir = path.parent / "Seqs_trg"
     vocals_src = path.with_name("vocals.wav")
 
-    # El nombre del archivo se deduce por convención: vocals_{idx:04d}.wav para src
-    # Pero aquí necesitamos el target que ya fue generado una vez: tts_..._seg.wav
-    # Lo más seguro es buscarlo en el Seqs_trg según el índice
-    possible_files = list(seqs_trg_dir.glob(f"*_{req.seg_idx:03d}.wav"))
-    if not possible_files:
-        # Intenta tts_*_seg.wav
-        possible_files = list(seqs_trg_dir.glob(f"tts_*_{req.seg_idx:03d}.wav"))
-
-    if not possible_files:
+    from src.assets import get_segment
+    
+    seg_file_path = get_segment(path.parent, req.seg_idx)
+    if not seg_file_path:
         raise HTTPException(
             status_code=404,
-            detail=f"No se encontró el audio del segmento {req.seg_idx}",
+            detail=f"No se encontró el audio del segmento {req.seg_idx} en los activos",
         )
 
-    audio_path = possible_files[0]
+    # Validamos que de verdad exista en disco
+    audio_path = Path(seg_file_path)
+    if not audio_path.is_absolute():
+        # si se guardó como relativo
+        audio_path = path.parent / audio_path
+
+    if not audio_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"El archivo reportado por el manifiesto no existe físicamente: {audio_path.name}",
+        )
     
+    info_current = torchaudio.info(str(audio_path))
+    current_samples = info_current.num_frames
+    
+    # El Frontend calculó req.speed asumiendo la duración del archivo actual.
+    # Por lo tanto, target_samples deriva estrictamente del audio visible en UI.
+    target_samples = int(current_samples / req.speed)
+
     # Intentamos leer siempre del RAW puro si existe, para no destruir fase.
     raw_path = audio_path.with_name(f"{audio_path.stem}_raw{audio_path.suffix}")
     if raw_path.exists():
@@ -181,9 +193,8 @@ async def apply_speed(req: ApplySpeedRequest):
         arr, rate = torchaudio.load(str(audio_path))
 
     # Aplicar la velocidad
-    # atempo=1.5 -> target_duration = original_duration / 1.5
-    # En adjust_audio_duration pasamos target_duration_samples
-    target_samples = int(arr.shape[-1] / req.speed)
+    # En adjust_audio_duration aplicará la compresión necesaria
+    # (ej. arr original 4s sobre target de 2s = 2.0x tempo)
 
     # Usamos la lógica de adjust_audio_duration que internamente usa atempo
     arr_new = adjust_audio_duration(arr, target_samples, rate)

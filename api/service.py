@@ -129,6 +129,12 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             update_job(job_id, status="tts", message=f"Clonando voz: {path.stem} [{idx + 1}/{len(urls)}]")
             split_all_sequences([path])
 
+            # ESTANDARIZACIÓN: Sobre-escribimos el tag 'speaker' devuelto por la diarizacion 
+            # (ej: SPEAKER_00) con el nombre standard del diccionario preasignado para el pipeline.
+            # Esto soluciona que archivos nazcan dispares entre Frontend y Filesystem.
+            for t in texts:
+                t["speaker"] = speaker_name
+
             print("⚡ TTS:")
             paths_es, _times, _freq = clone_voice_segments(
                 path, texts, lang, speaker_audio, model_tts,
