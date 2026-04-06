@@ -229,40 +229,72 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
             *extra,
         ) = pickle.load(f)
 
-    from src.audio_utils import clone_voice_segments
     from src.tts import model_tts
+    import torchaudio
 
     speaker_audio = SPEAKER_OPTIONS.get(req.speaker, req.speaker)
     lang = getattr(transcription, "language", None) or "es"
-
     speaker_key = resolve_speaker_key(req.speaker)
-    texts_for_tts = [
-        {
-            "text": req.text,
-            "start": 0.0,
-            "end": 1.0,
-            "speaker": speaker_key,  # nombre legible para el archivo en disco
-        }
-    ]
+    safe_speaker = speaker_key.replace(" ", "_").replace("/", "_").replace("\\", "_")
+
+    arr, rate = model_tts(req.text, lang, speaker_audio)
+    if arr is None or rate is None:
+        raise HTTPException(status_code=500, detail="Error en modelo TTS")
+
+    seqs_trg_dir = path.parent / "Seqs_trg"
+    seqs_trg_dir.mkdir(exist_ok=True)
+
+    seq_num = 1
+    while True:
+        proposed_path = seqs_trg_dir / f"gen_{safe_speaker}_{seq_num:03d}.wav"
+        if not proposed_path.exists():
+            break
+        seq_num += 1
+
+    audio_es_path = seqs_trg_dir / f"gen_{safe_speaker}_{seq_num:03d}.wav"
+    raw_es_path = seqs_trg_dir / f"gen_{safe_speaker}_{seq_num:03d}_raw.wav"
+
+    torchaudio.save(str(raw_es_path), arr, sample_rate=rate)
+    torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
 
     from src.assets import update_assets
+    # Registrar en la raíz del manifiesto porque no tiene clip original en segments
+    update_assets(path.parent, **{audio_es_path.name: str(audio_es_path)})
 
-    paths_es, _, _ = clone_voice_segments(
-        path,
-        texts_for_tts,
-        lang,
-        speaker_audio,
-        model_tts,
-        only_indices=[1],
-        speed=1.0,
-        register=False,
-    )
+    return FileResponse(audio_es_path, filename=audio_es_path.name, media_type="audio/wav")
 
-    if not paths_es:
-        raise HTTPException(status_code=500, detail="No se pudo generar el audio")
+@router.get("/segment-speed")
+async def get_segment_speed(job_id: str, video_index: int, seg_idx: int):
+    """Devuelve la relación de velocidad aplicada (Speed) calculada dinámica y directamente desde disco."""
+    try:
+        path = _get_video_path_from_job(job_id, video_index)
+        from src.assets import get_segment
+        seg_file_path = get_segment(path.parent, seg_idx)
+        
+        if not seg_file_path:
+            return {"speed": 1.0}
 
-    # Registrar en el manifiesto general con su nombre real para que el renderizador lo encuentre
-    # pero sin que colisione con el mapeo de "segments"
-    update_assets(path.parent, **{paths_es[0].name: str(paths_es[0])})
+        import torchaudio
+        audio_path = Path(seg_file_path)
+        if not audio_path.is_absolute():
+            audio_path = path.parent / audio_path
 
-    return FileResponse(paths_es[0], filename=paths_es[0].name, media_type="audio/wav")
+        if not audio_path.exists():
+            return {"speed": 1.0}
+
+        raw_path = audio_path.with_name(audio_path.stem + "_raw" + audio_path.suffix)
+        if not raw_path.exists():
+            return {"speed": 1.0}
+
+        info_current = torchaudio.info(str(audio_path))
+        info_raw = torchaudio.info(str(raw_path))
+        current_samples = info_current.num_frames
+        raw_samples = info_raw.num_frames
+        
+        if current_samples == 0:
+            return {"speed": 1.0}
+            
+        speed = raw_samples / current_samples
+        return {"speed": round(speed, 3)}
+    except Exception:
+        return {"speed": 1.0}

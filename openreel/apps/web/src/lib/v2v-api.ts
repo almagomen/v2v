@@ -395,13 +395,19 @@ export const v2vApi = {
     return url(`/api/job/${jobId}/zip`);
   },
 
-  async getManifest(jobId: string, videoIndex: number): Promise<Record<string, string>> {
+  async getManifest(jobId: string, videoIndex: number): Promise<Record<string, unknown>> {
     const res = await fetch(url(`/api/render/manifest/${jobId}/${videoIndex}`));
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || "Error al obtener manifiesto");
     }
-    return readJsonOrThrow<Record<string, string>>(res);
+    return readJsonOrThrow<Record<string, unknown>>(res);
+  },
+
+  async getSegmentSpeed(jobId: string, videoIndex: number, segIdx: number): Promise<{ speed: number }> {
+    const res = await fetch(url(`/api/segment-speed?job_id=${jobId}&video_index=${videoIndex}&seg_idx=${segIdx}`));
+    if (!res.ok) return { speed: 1.0 };
+    return readJsonOrThrow<{ speed: number }>(res);
   },
 
   /**

@@ -779,8 +779,15 @@ export const useV2VStore = create<V2VState>((set, get) => {
     syncFolderAssets: async (jobId, videoIndex, folder) => {
       try {
         const assets = await v2vApi.getManifest(jobId, videoIndex);
-        const filenames = Object.values(assets)
-          .filter((v): v is string => typeof v === "string")
+        const filenames = Object.entries(assets)
+          .flatMap(([k, v]) => {
+            if (typeof v === "string") return [v];
+            // Extraer las rutas individuales alojadas dentro del objeto literal "segments"
+            if (k === "segments" && typeof v === "object" && v !== null) {
+              return Object.values(v).filter((val): val is string => typeof val === "string");
+            }
+            return [];
+          })
           .map((v) => v.split(/[\\/]/).pop() || "");
 
         set((state) => {

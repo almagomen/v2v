@@ -197,12 +197,27 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           setSegmentText(seg?.text ?? "");
         }
         
-        if (typeof segmentInfo?.speed === "number" && segmentInfo.speed !== 1.0) {
-          setSpeed(segmentInfo.speed);
-          setSpeedInput(segmentInfo.speed.toFixed(3));
-        } else {
-          setSpeed(1.0);
-          setSpeedInput(""); // Empty input explicitly defaults to 1x or original dur
+        try {
+          const { speed: actualSpeed } = await v2vApi.getSegmentSpeed(folderRef.jobId, folderRef.videoIndex, parsed.segIdx);
+          if (cancelled) return;
+          if (actualSpeed && actualSpeed !== 1.0) {
+            setSpeed(actualSpeed);
+            if (speedMode === "x") {
+              setSpeedInput(actualSpeed.toFixed(3));
+            } else {
+              // Si estaba en 's', podemos pre-rellenar con la duración actual visual, ya que la velocidad ya se aplicó.
+              setSpeedInput(clip.duration.toFixed(3));
+            }
+          } else {
+            setSpeed(1.0);
+            setSpeedInput(""); // Empty input explicitly defaults to 1x o dur original
+          }
+        } catch (e) {
+          console.warn("[V2V] Error obteniendo speed real del segmento", e);
+          if (!cancelled) {
+            setSpeed(1.0);
+            setSpeedInput("");
+          }
         }
         
         if (seg?.speaker) {
