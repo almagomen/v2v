@@ -612,7 +612,7 @@ async def render_batch(req: RenderBatchRequest):
             zf.writestr("_errors.txt", "\n".join(errors))
 
     zip_buffer.seek(0)
-    zip_name = req.zip_name.replace("/", "_") or "batch_export"
+    zip_name = to_zip_name(req.zip_name) or "batch_export"
     return StreamingResponse(
         zip_buffer,
         media_type="application/zip",
