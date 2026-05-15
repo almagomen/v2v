@@ -40,12 +40,15 @@ export default defineConfig({
     },
   },
   server: {
+    // Colab / Codatalab: host interno cambia por sesión; sin esto Vite bloquea el Host header.
+    allowedHosts: true,
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
     },
   },
   preview: {
+    allowedHosts: true,
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
