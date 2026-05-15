@@ -9,30 +9,7 @@ import { moveClipToTrack, renameMediaInLibrary } from "../../../utils/detached-p
 import { useV2VStore } from "../../../stores/v2v-store";
 import { invalidateAudioCache } from "../../../stores/audio-cache-store";
 import { generateSegmentId } from "../../../utils/v2v-segment-ids";
-
-type V2VParsedSegment = {
-  folder: string;
-  speakerToken: string;
-  segIdx: number;
-};
-
-function parseV2VSegmentFromName(name: string): V2VParsedSegment | null {
-  const normalized = name.replace(/\\/g, "/");
-
-  // Acepta prefijos: tts_ (inferencia/regeneración) y gen_ (AI Audio Generator)
-  const match = normalized.match(/^(?:(.+?)\/)?(tts_|gen_)(.+)_(\d{3})\.wav$/);
-  if (match) {
-    const folder = match[1];
-    // speakerToken es el grupo 3 (sin el prefijo tts_/gen_)
-    const speakerToken = match[3];
-    const segIdx = parseInt(match[4], 10);
-    if (folder && !Number.isNaN(segIdx)) {
-      return { folder, speakerToken, segIdx };
-    }
-  }
-
-  return null;
-}
+import { parseV2VSegmentFromName } from "../../../utils/v2v-utils";
 
 function joinNonEmpty(parts: string[]): string {
   return parts
@@ -77,7 +54,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   }, [mediaItem?.name]);
 
   const folderRef = parsed ? getFolderRef(parsed.folder) : undefined;
-
+  
   const segmentInfo = useMemo(() => {
     if (!folderRef || !parsed || !mediaItem) return undefined;
     return getSegmentByMediaId(parsed.folder, mediaItem.id);
@@ -87,7 +64,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
   function resolveSpeakerValue(token: string, speakerList: SpeakerOption[], defaultVal?: string): string {
     if (!token || speakerList.length === 0) return defaultVal || token;
-
+    
     const byValue = speakerList.find((s) => s.value === token);
     if (byValue) return byValue.value;
     const byLabel = speakerList.find((s) => s.label === token);
@@ -188,7 +165,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         const end = seg?.end ?? clip.startTime + clip.duration;
 
         setSegmentTimes({ start, end });
-
+        
         if (segmentInfo?.editedText) {
           setSegmentText(segmentInfo.editedText);
         } else if (segmentInfo?.originalText) {
@@ -196,7 +173,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         } else {
           setSegmentText(seg?.text ?? "");
         }
-
+        
         try {
           const { speed: actualSpeed } = await v2vApi.getSegmentSpeed(folderRef.jobId, folderRef.videoIndex, parsed.segIdx);
           if (cancelled) return;
@@ -219,7 +196,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
             setSpeedInput("");
           }
         }
-
+        
         if (seg?.speaker) {
           setBackendSpeaker(seg.speaker);
         }
@@ -349,7 +326,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       const newMediaName = `${parsed.folder}/${newFileName}`;
 
       const file = new File([regenBlob], newMediaName, { type: "audio/wav" });
-
+      
       const { updateSegmentText, updateSegmentSpeaker, updateSegmentSpeed } = useV2VStore.getState();
       updateSegmentText(parsed.folder, segmentId, currentText);
       updateSegmentSpeaker(parsed.folder, segmentId, currentSpeaker);
@@ -363,6 +340,8 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
             : result.error?.message || "Error al reemplazar audio";
         throw new Error(msg);
       }
+
+      invalidateAudioCache(mediaItem.id);
 
       const { getClip, trimClip } = useProjectStore.getState();
       const currentClip = getClip(clipId);
@@ -400,7 +379,26 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       } else {
         setRegenStatus("Segmento regenerado");
       }
-      invalidateAudioCache(mediaItem.id);
+
+      try {
+        const parts = newMediaName.replace(/\\/g, "/").split("/");
+        const subfolder = parts.length > 1 ? parts[0] : "";
+        const baseName = parts[parts.length - 1] ?? newFileName;
+        await v2vApi.uploadMediaForRender(
+          folderRef.jobId,
+          folderRef.videoIndex,
+          new File([regenBlob], baseName, { type: "audio/wav" }),
+          subfolder || undefined,
+        );
+        await useV2VStore.getState().syncFolderAssets(
+          folderRef.jobId,
+          folderRef.videoIndex,
+          parsed.folder,
+        );
+      } catch (syncErr) {
+        console.warn("[V2V] No se pudo sincronizar el audio regenerado en Colab:", syncErr);
+      }
+
       await forceSave();
     } catch (e) {
       setRegenError(e instanceof Error ? e.message : "Error al regenerar");
@@ -422,13 +420,11 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     speed,
     speedMode,
     speakers,
-    loadProject,
-    forceSave,
   ]);
 
   const handleApplySpeedFilter = useCallback(async () => {
     if (!clip || !folderRef || !parsed || !mediaItem) return;
-
+    
     setIsApplyingSpeed(true);
     setRegenError(null);
     setRegenStatus(null);
@@ -451,13 +447,15 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
       const newDuration = await getAudioDuration(blob);
       const file = new File([blob], mediaItem.name, { type: "audio/wav" });
-
+      
       const segmentId = generateSegmentId(folderRef.jobId, folderRef.videoIndex, parsed.segIdx);
       const { updateSegmentSpeed } = useV2VStore.getState();
       updateSegmentSpeed(parsed.folder, segmentId, effectiveSpeed);
 
       const result = await replaceMediaAsset(mediaItem.id, file);
       if (!result.success) throw new Error("Error al reemplazar audio");
+
+      invalidateAudioCache(mediaItem.id);
 
       const { getClip, trimClip } = useProjectStore.getState();
       const currentClip = getClip(clipId);
@@ -473,7 +471,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         });
       }
 
-      invalidateAudioCache(mediaItem.id);
       await forceSave();
       setRegenStatus("Filtro de velocidad aplicado");
     } catch (e) {
@@ -481,7 +478,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     } finally {
       setIsApplyingSpeed(false);
     }
-  }, [folderRef, parsed, mediaItem, speed, speedInput, speedMode, segmentText, selectedVoice, clipId, replaceMediaAsset, segmentTimes, forceSave]);
+  }, [folderRef, parsed, mediaItem, speed, speedInput, speedMode, segmentText, selectedVoice, clipId, replaceMediaAsset, segmentTimes]);
 
   if (!clip || !mediaItem) {
     return (
@@ -556,7 +553,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         <label className="text-[10px] text-text-secondary block mb-1">
           Speed
         </label>
-
+        
         <div className="flex items-center gap-2 mb-2">
           <div className="flex bg-background-secondary border border-border rounded overflow-hidden">
             <button

@@ -1,6 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { useUIStore } from "../../stores/ui-store";
-import { Youtube, Loader2, AlertCircle, FolderDown, Trash2 } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, FolderDown, Trash2, RefreshCw } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
 import { v2vApi } from "../../lib/v2v-api";
@@ -11,10 +10,12 @@ import {
   toSafeToken,
   folderNameFromTitle,
   importKeyFor,
+  parseV2VSegmentFromName,
 } from "../../utils/v2v-utils";
 import { createSegmentInfo } from "../../utils/v2v-segment-ids";
 import { ColabExportTab } from "./ColabExportTab";
 import { CloneVoiceSegmentSection } from "./v2v/CloneVoiceSegmentSection";
+import { useUIStore } from "../../stores/ui-store";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -88,12 +89,22 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     startPolling,
   } = useV2VStore();
 
-  const { project } = useProjectStore();
-  const selectedItems = useUIStore((s) => s.selectedItems);
-  const v2vCloneClipId = useMemo(() => {
-    const ids = useUIStore.getState().getSelectedClipIds();
-    return ids.length === 1 ? ids[0]! : null;
-  }, [selectedItems]);
+  const { project, getClip, getMediaItem } = useProjectStore();
+  const getSelectedClipIds = useUIStore((s) => s.getSelectedClipIds);
+
+  const selectedV2VAudioClipId = useMemo(() => {
+    const ids = getSelectedClipIds();
+    if (ids.length !== 1) return null;
+    const clip = getClip(ids[0]);
+    if (!clip) return null;
+    const track = project.timeline.tracks.find((t) =>
+      t.clips.some((c) => c.id === clip.id),
+    );
+    if (track?.type !== "audio") return null;
+    const media = getMediaItem(clip.mediaId);
+    if (!media?.name || !parseV2VSegmentFromName(media.name)) return null;
+    return clip.id;
+  }, [getSelectedClipIds, getClip, getMediaItem, project.timeline.tracks, project.modifiedAt]);
 
   // Calcula cuál índice de video corresponde al proyecto activo.
   // Si el proyecto no es V2V (no coincide con ninguno), retorna -1 para mostrar el placeholder.
@@ -595,18 +606,20 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           </>
         )}
 
-        {/* Clonar voz: usa el clip de audio V2V seleccionado en el timeline */}
-        <div className="pt-4 mt-4 border-t border-border">
-          <p className="text-[10px] text-text-muted mb-2 font-medium uppercase tracking-wide">
-            Clonar voz (clip seleccionado)
+        <div className="pt-4 mt-4 border-t border-border space-y-3">
+          <div className="flex items-center gap-2">
+            <RefreshCw size={14} className="text-primary" />
+            <p className="text-xs font-medium text-text-primary">Clonar voz del segmento</p>
+          </div>
+          <p className="text-[10px] text-text-muted">
+            Selecciona un clip de audio TTS en el timeline (pista de segmento V2V).
           </p>
-          {!v2vCloneClipId ? (
-            <p className="text-[10px] text-text-muted p-3 bg-background-tertiary border border-border rounded-lg">
-              Selecciona un único clip de audio en el timeline (p. ej. segmento TTS importado desde
-              Video2Video) y vuelve aquí para editar texto y regenerar voz.
-            </p>
+          {selectedV2VAudioClipId ? (
+            <CloneVoiceSegmentSection clipId={selectedV2VAudioClipId} />
           ) : (
-            <CloneVoiceSegmentSection clipId={v2vCloneClipId} />
+            <div className="p-3 bg-background-tertiary border border-border rounded-lg text-[10px] text-text-muted">
+              Ningún clip de segmento V2V seleccionado.
+            </div>
           )}
         </div>
 

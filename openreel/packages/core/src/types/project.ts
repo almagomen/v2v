@@ -48,11 +48,6 @@ export interface MediaItem {
   readonly kieaiError?: boolean;
   /** KieAI task ID used to poll for completion */
   readonly kieaiTaskId?: string;
-  /**
-   * When true, local blob was updated (e.g. V2V clone voice) but Colab job folder on disk
-   * may still have the old file — export must upload before ffmpeg render.
-   */
-  readonly needsV2VServerUpload?: boolean;
 }
 
 /** Thumbnail for filmstrip display in timeline */

@@ -110,13 +110,10 @@ function analyzeProject(
       if (media.type === "image") continue;
 
       const inServer = isInV2VFolder(media.name, folderRefs);
-      const stale = media.needsV2VServerUpload === true;
       const hasBlob = !!media.blob;
 
       let status: ClipStatus;
-      if (stale && hasBlob) {
-        status = "upload_needed";
-      } else if (inServer) {
+      if (inServer) {
         status = "ok";
       } else if (hasBlob) {
         status = "upload_needed";
@@ -162,9 +159,7 @@ async function uploadPendingClips(
     const subfolder = parts.length > 1 ? parts[0] : "";
     const result = await v2vApi.uploadMediaForRender(jobId, videoIndex, file, subfolder);
     nameMap.set(clip.mediaName, result.media_name);
-
-    useProjectStore.getState().clearNeedsV2VServerUpload(clip.mediaId);
-
+    
     const folder = subfolder || (result.media_name.includes("/") ? result.media_name.split("/")[0] : "");
     if (folder) {
       await useV2VStore.getState().syncFolderAssets(jobId, videoIndex, folder);

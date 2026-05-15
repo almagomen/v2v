@@ -82,14 +82,9 @@ uvicorn api.main:app --reload --port 8000
 # Terminal 2: OpenReel (opcional, para dev del frontend)
 cd openreel && pnpm dev
 # Configura VITE_V2V_API_URL=http://localhost:8000 en openreel/apps/web/.env
-# En el mismo host que Vite, las rutas /api/* se proxifican a uvicorn (8000); ver V2V_API_PROXY_TARGET en openreel/FORK_V2V.md
 ```
 
 Si OpenReel está construido, el backend sirve el frontend en la raíz (`/`).
-
-## Fork OpenReel (V2V)
-
-Los ajustes propios del fork (Vite en Colab, proxy `/api`, clone voice, export, lista de archivos sensibles al merge con upstream) están descritos en **[`openreel/FORK_V2V.md`](openreel/FORK_V2V.md)**.
 
 ## Estructura del repo
 

@@ -174,23 +174,10 @@ def _resolve_media_path(
 ) -> Path:
     """
     Resolves a media_name to an absolute path.
-    Prefers an existing file at folder/<relative media_name>, then v2v_assets.json.
+    Prioritizes the v2v_assets.json manifest (New Logic).
     """
     # 0. Normalizar media_name para extraer solo el nombre base (el frontend manda Carpeta/Archivo.mp4)
     file_name = Path(media_name).name
-
-    # 0.1 Archivo bajo la carpeta del job con la misma ruta relativa (prioridad sobre manifiesto por índice)
-    clean_rel = media_name.replace("\\", "/").lstrip("/")
-    if clean_rel and not Path(clean_rel).is_absolute():
-        folder_resolved = folder.resolve()
-        cand = (folder_resolved / clean_rel).resolve()
-        if cand.is_file():
-            try:
-                cand.relative_to(folder_resolved)
-            except ValueError:
-                pass
-            else:
-                return cand
 
     # 1. Cargar manifiesto
     assets = load_assets(folder)
@@ -214,34 +201,43 @@ def _resolve_media_path(
             if path.exists():
                 return path
 
-    # 2.5 Búsqueda exhaustiva en el manifiesto por nombre de archivo
-    # Si el frontend manda el nombre real (ej. El_reductor...f137.mp4), lo buscamos en los valores
+    segments_map = assets.get("segments", {}) or {}
+
+    # 2.5 Segmentos TTS/gen por índice (antes que búsqueda por basename: evita copias
+    # obsoletas en claves sueltas del manifiesto tras upload o regeneración)
+    import re
+
+    tts_match = re.search(r"(?:tts_|gen_).*_(\d+)\.wav$", file_name, re.I)
+    seg_idx = (
+        str(int(tts_match.group(1)))
+        if tts_match
+        else (file_name if file_name.isdigit() else None)
+    )
+    if seg_idx:
+        seg_path_str = segments_map.get(seg_idx)
+        if seg_path_str:
+            path = Path(seg_path_str)
+            if not path.is_absolute():
+                path = folder / path
+            if path.exists():
+                return path
+
+    # 2.6 Búsqueda exhaustiva en el manifiesto por nombre de archivo
     for val in assets.values():
         if isinstance(val, str) and Path(val).name == file_name:
             p_cand = Path(val)
+            if not p_cand.is_absolute():
+                p_cand = folder / p_cand
             if p_cand.exists():
                 return p_cand
 
-    # Buscar también en la subsección de segmentos del manifiesto
-    segments_map = assets.get("segments", {})
     for seg_path in segments_map.values():
         if isinstance(seg_path, str) and Path(seg_path).name == file_name:
             p_cand = Path(seg_path)
+            if not p_cand.is_absolute():
+                p_cand = folder / p_cand
             if p_cand.exists():
                 return p_cand
-
-    # 3. Especial: Segmentos TTS (si media_name es un índice numerico o tts_..._XXXX.wav)
-    import re
-
-    match = re.search(r"tts_.*_(\d+)\.wav$", file_name)
-    seg_idx = match.group(1) if match else (file_name if file_name.isdigit() else None)
-
-    if seg_idx:
-        seg_path_str = segments_map.get(str(int(seg_idx)))
-        if seg_path_str:
-            path = Path(seg_path_str)
-            if path.exists():
-                return path
 
     # Fallback solo para rutas absolutas existentes
     p = Path(media_name)

@@ -35,6 +35,26 @@ export function folderNameFromTitle(outputName: string): string {
   return sanitizeFolderName(withoutHashtags) || "Video";
 }
 
+export type V2VParsedSegment = {
+  folder: string;
+  speakerToken: string;
+  segIdx: number;
+};
+
+/** Parsea nombres de medios importados desde V2V (tts_/gen_ en carpeta de job). */
+export function parseV2VSegmentFromName(name: string): V2VParsedSegment | null {
+  const normalized = name.replace(/\\/g, "/");
+  const match = normalized.match(/^(?:(.+?)\/)?(tts_|gen_)(.+)_(\d{3})\.wav$/);
+  if (!match) return null;
+  const folder = match[1];
+  const speakerToken = match[3];
+  const segIdx = parseInt(match[4], 10);
+  if (folder && !Number.isNaN(segIdx)) {
+    return { folder, speakerToken, segIdx };
+  }
+  return null;
+}
+
 export function shortProjectToken(name: string): string {
   const s = (name || "video")
     .normalize("NFKD")
