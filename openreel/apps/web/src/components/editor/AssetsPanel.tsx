@@ -1,31 +1,9 @@
-﻿import React, { useCallback, useRef, useState, useEffect } from "react";
+﻿import React, { useCallback, useRef, useState } from "react";
 import {
-  Search,
-  Maximize2,
-  X,
-  Image as ImageIcon,
-  Film,
-  Music,
-  Folder,
-  Plus,
-  Pencil,
-  Upload,
-  Trash2,
-  Square,
-  Circle,
-  Triangle,
-  Star,
-  ArrowRight,
-  ArrowLeft,
-  Hexagon,
-  FileCode,
-  AlertTriangle,
-  RefreshCw,
-  Palette,
-  LayoutGrid,
-  Grid2x2,
-  List,
-  Settings,
+  Search, Image as ImageIcon, Film, Music, Plus, Upload, Trash2, 
+  Square, Circle, Triangle, Star, ArrowRight, Hexagon, FileCode, AlertTriangle, 
+  RefreshCw, Palette, LayoutGrid, Grid2x2, List, Sparkles, Video, 
+  Type, Shapes, Wand2, LayoutTemplate
 } from "lucide-react";
 import {
   BACKGROUND_PRESETS,
@@ -35,26 +13,34 @@ import {
 import type { ShapeType } from "@openreel/core";
 import { useProjectStore } from "../../stores/project-store";
 import { useUIStore } from "../../stores/ui-store";
-import { useV2VStore } from "../../stores/v2v-store";
 import type { MediaItem } from "@openreel/core";
-import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
-import { autoSaveManager } from "../../services/auto-save";
-import { importMultipleMediaIntoProject } from "../../utils/import-media-into-project";
-import { toSafeToken } from "../../utils/v2v-utils";
 import { AspectRatioMatchDialog } from "./dialogs/AspectRatioMatchDialog";
 import { AIGenTab } from "./AIGenTab";
-import { GenerateAudioSegmentSection } from "./GenerateAudioSegmentSection";
+import { RecipesTab } from "./panels/RecipesTab";
+import { TemplatesTab } from "./panels/TemplatesTab";
+import { useTtsAudioStore } from "../../stores/tts-store";
+import { toast } from "../../stores/notification-store";
+import { saveFileHandle, saveDirectoryHandle } from "../../services/media-storage";
 import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
   IconButton,
   Input,
   ScrollArea,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+  
+  
+  
 } from "@openreel/ui";
+import { KieAIImageDialog } from "./kieai/KieAIImageDialog";
+import { loadMediaBlob } from "../../services/media-storage";
+import { useKieAIStore } from "../../stores/kieai-store";
+import { useV2VMediaFolders } from "../../v2v/assets-integration/useV2VMediaFolders";
+import {
+  V2VMediaFolderModals,
+  V2VMediaFolderRails,
+} from "../../v2v/assets-integration/V2VMediaFolderChrome";
 
 const formatDuration = (seconds: number): string => {
   const mins = Math.floor(seconds / 60);
@@ -64,134 +50,63 @@ const formatDuration = (seconds: number): string => {
     .padStart(2, "0")}`;
 };
 
-
-/** Copia blobs de Media de una carpeta `folder/ΓÇª` a archivos para importar en otro proyecto. */
-function collectFolderMediaFiles(items: MediaItem[], folder: string): File[] {
-  const out: File[] = [];
-  for (const m of items) {
-    const idx = m.name.indexOf("/");
-    if (idx <= 0) continue;
-    if (m.name.slice(0, idx) !== folder) continue;
-    if (!m.blob) continue;
-    out.push(
-      new File([m.blob], m.name, {
-        type: m.blob.type || "application/octet-stream",
-      }),
-    );
-  }
-  return out;
-}
-
-function renameTimelineTrack(trackId: string, name: string) {
-  useProjectStore.setState((state) => ({
-    project: {
-      ...state.project,
-      timeline: {
-        ...state.project.timeline,
-        tracks: state.project.timeline.tracks.map((t) =>
-          t.id === trackId ? { ...t, name } : t,
-        ),
-      },
-    },
-  }));
-}
-
-/** === Folder Timeline Snapshot Helpers === */
-
-type FolderClipSnapshot = {
-  mediaName: string; // nombre relativo (sin prefijo de carpeta) p.ej. "tts_voice_0001.wav"
-  startTime: number;
-  inPoint: number;
-  outPoint: number;
-  volume: number;
-};
-
-type FolderTrackSnapshot = {
-  type: string;
-  name: string;
-  clips: FolderClipSnapshot[];
-};
-
-type FolderTimelineSnapshot = {
-  folderName: string;
-  tracks: FolderTrackSnapshot[];
-  savedAt: number;
-};
-
-const SNAPSHOT_PREFIX = "or_folder_snapshot_";
-
-function getFolderSnapshotKey(folder: string) {
-  return `${SNAPSHOT_PREFIX}${folder.replace(/[^a-zA-Z0-9]/g, "_")}`;
-}
-
-function saveFolderSnapshot(snapshot: FolderTimelineSnapshot) {
-  try {
-    localStorage.setItem(
-      getFolderSnapshotKey(snapshot.folderName),
-      JSON.stringify(snapshot),
-    );
-  } catch (_) {}
-}
-
-function loadFolderSnapshot(folder: string): FolderTimelineSnapshot | null {
-  try {
-    const raw = localStorage.getItem(getFolderSnapshotKey(folder));
-    return raw ? (JSON.parse(raw) as FolderTimelineSnapshot) : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-/**
- * Extrae los Tracks y Clips del proyecto actual que corresponden a archivos de la carpeta,
- * mapeando mediaId -> nombre relativo para que sobreviva al proyecto destino.
- */
-function extractFolderTimelineSnapshot(
-  folder: string,
-): FolderTimelineSnapshot {
-  const { project } = useProjectStore.getState();
-
-  // Conjunto de mediaIds que pertenecen a esta carpeta
-  const folderMediaMap = new Map<string, string>(); // id -> name relativo
-  for (const m of project.mediaLibrary.items) {
-    const idx = m.name.indexOf("/");
-    if (idx <= 0) continue;
-    if (m.name.slice(0, idx) !== folder) continue;
-    folderMediaMap.set(m.id, m.name.slice(idx + 1)); // nombre sin el prefijo carpeta
-  }
-
-  const tracks: FolderTrackSnapshot[] = [];
-
-  for (const track of project.timeline.tracks) {
-    const filteredClips: FolderClipSnapshot[] = [];
-    for (const clip of track.clips) {
-      const relName = folderMediaMap.get(clip.mediaId);
-      if (!relName) continue;
-      filteredClips.push({
-        mediaName: relName,
-        startTime: clip.startTime,
-        inPoint: clip.inPoint,
-        outPoint: clip.outPoint,
-        volume: clip.volume ?? 1,
-      });
-    }
-    if (filteredClips.length > 0) {
-      tracks.push({
-        type: track.type,
-        name: track.name,
-        clips: filteredClips,
-      });
-    }
-  }
-
-  return { folderName: folder, tracks, savedAt: Date.now() };
-}
-
 /**
  * Media Item Thumbnail Component
  * Shows thumbnail with metadata below (not overlaid)
  */
 type MediaViewMode = "large" | "small" | "list";
+type AssetsTab = "media" | "text" | "graphics" | "ai" | "recipes" | "templates";
+
+const ASSETS_TABS: ReadonlyArray<{
+  value: AssetsTab;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "media",
+    label: "Media",
+    description: "Import footage, audio, and stills.",
+  },
+  {
+    value: "text",
+    label: "Text",
+    description: "Add title presets and caption elements.",
+  },
+  {
+    value: "graphics",
+    label: "Graphics",
+    description: "Create shapes, arrows, and SVG overlays.",
+  },
+  {
+    value: "ai",
+    label: "AI Generate",
+    description: "Generate clips, captions, and assisted edits.",
+  },
+  {
+    value: "recipes",
+    label: "Recipes",
+    description: "Apply clip-scoped looks, overlays, and text stacks.",
+  },
+  {
+    value: "templates",
+    label: "Project Templates",
+    description: "Load full-project starter layouts and presets.",
+  },
+] as const;
+
+const TAB_ICONS: Record<AssetsTab, React.ElementType> = {
+  media: Video,
+  text: Type,
+  graphics: Shapes,
+  ai: Sparkles,
+  recipes: Wand2,
+  templates: LayoutTemplate,
+};
+
+
+
+
+
 
 const MediaThumbnail: React.FC<{
   item: MediaItem;
@@ -202,6 +117,8 @@ const MediaThumbnail: React.FC<{
   onReplace: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onAddToTimeline: () => void;
+  onKieAI?: () => void;
+  onRetryKieAI?: () => void;
 }> = ({
   item,
   isSelected,
@@ -211,6 +128,8 @@ const MediaThumbnail: React.FC<{
   onReplace,
   onDragStart,
   onAddToTimeline,
+  onKieAI,
+  onRetryKieAI,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
 
@@ -249,24 +168,58 @@ const MediaThumbnail: React.FC<{
       ? "text-primary/50"
       : "text-status-info/50";
 
-  const borderClass = item.isPlaceholder
-    ? "border-yellow-500 ring-1 ring-yellow-500/50 shadow-[0_0_10px_rgba(234,179,8,0.3)]"
-    : isSelected
-      ? "border-primary ring-1 ring-primary/50 shadow-[0_0_10px_rgba(34,197,94,0.2)]"
-      : "border-border hover:border-text-secondary";
+  const borderClass = item.kieaiError
+    ? "border-red-500 ring-1 ring-red-500/50 shadow-[0_0_10px_rgba(239,68,68,0.3)]"
+    : item.isPending
+    ? "border-purple-500 ring-1 ring-purple-500/50 shadow-[0_0_10px_rgba(168,85,247,0.3)]"
+    : item.isPlaceholder
+      ? "border-yellow-500 ring-1 ring-yellow-500/50 shadow-[0_0_10px_rgba(234,179,8,0.3)]"
+      : isSelected
+        ? "border-primary ring-1 ring-primary/50 shadow-[0_0_10px_rgba(34,197,94,0.2)]"
+        : "border-border hover:border-text-secondary";
 
   const hoverOverlay = (
     <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] flex items-center justify-center gap-2 animate-in fade-in duration-200">
-      {item.isPlaceholder ? (
+      {item.kieaiError ? (
         <button
-          onClick={(e) => { e.stopPropagation(); onReplace(); }}
-          title="Replace asset"
-          className="p-2 bg-yellow-500/20 rounded-full hover:bg-yellow-500/40 backdrop-blur-sm transition-colors"
+          onClick={(e) => { e.stopPropagation(); onRetryKieAI?.(); }}
+          title="Generation failed ΓÇö click to retry"
+          className="p-2 bg-red-500/20 rounded-full hover:bg-red-500/40 backdrop-blur-sm transition-colors"
         >
-          <RefreshCw size={14} className="text-yellow-500" />
+          <RefreshCw size={14} className="text-red-400" />
         </button>
+      ) : item.isPending ? (
+        <div title="KieAI generation in progressΓÇª" className="p-2">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-purple-400 border-t-transparent" />
+        </div>
+      ) : item.isPlaceholder ? (
+        <>
+          <button
+            onClick={(e) => { e.stopPropagation(); onReplace(); }}
+            title="Replace asset"
+            className="p-2 bg-yellow-500/20 rounded-full hover:bg-yellow-500/40 backdrop-blur-sm transition-colors"
+          >
+            <RefreshCw size={14} className="text-yellow-500" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            title="Delete"
+            className="p-2 bg-red-500/20 rounded-full hover:bg-red-500/40 backdrop-blur-sm transition-colors"
+          >
+            <Trash2 size={14} className="text-red-400" />
+          </button>
+        </>
       ) : (
         <>
+          {item.type === "image" && onKieAI && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onKieAI(); }}
+              title="Create with KieAI"
+              className="p-2 bg-purple-500/20 rounded-full hover:bg-purple-500/40 backdrop-blur-sm transition-colors"
+            >
+              <Sparkles size={14} className="text-purple-300" />
+            </button>
+          )}
           <button
             onClick={(e) => { e.stopPropagation(); onAddToTimeline(); }}
             title="Add to timeline"
@@ -289,6 +242,8 @@ const MediaThumbnail: React.FC<{
   // --- List view ---
   if (viewMode === "list") {
     return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
       <div
         draggable
         onDragStart={onDragStart}
@@ -307,7 +262,17 @@ const MediaThumbnail: React.FC<{
               <Icon size={14} className={iconColor} />
             </div>
           )}
-          {item.isPlaceholder && (
+          {item.kieaiError && (
+            <div className="absolute inset-0 flex items-center justify-center bg-red-500/10">
+              <AlertTriangle size={12} className="text-red-400" />
+            </div>
+          )}
+          {!item.kieaiError && item.isPending && (
+            <div className="absolute inset-0 flex items-center justify-center bg-purple-500/10">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-purple-400 border-t-transparent" />
+            </div>
+          )}
+          {!item.kieaiError && !item.isPending && item.isPlaceholder && (
             <div className="absolute inset-0 flex items-center justify-center bg-yellow-500/10">
               <AlertTriangle size={12} className="text-yellow-500/70" />
             </div>
@@ -334,16 +299,46 @@ const MediaThumbnail: React.FC<{
         {/* Hover actions */}
         {isHovered && (
           <div className="flex items-center gap-1 flex-shrink-0">
-            {item.isPlaceholder ? (
+            {item.kieaiError ? (
               <button
-                onClick={(e) => { e.stopPropagation(); onReplace(); }}
-                title="Replace asset"
-                className="p-1 bg-yellow-500/20 rounded hover:bg-yellow-500/40 transition-colors"
+                onClick={(e) => { e.stopPropagation(); onRetryKieAI?.(); }}
+                title="Retry generation"
+                className="p-1 bg-red-500/20 rounded hover:bg-red-500/40 transition-colors"
               >
-                <RefreshCw size={12} className="text-yellow-500" />
+                <RefreshCw size={12} className="text-red-400" />
               </button>
+            ) : item.isPending ? (
+              <div className="p-1" title="GeneratingΓÇª">
+                <div className="h-3 w-3 animate-spin rounded-full border-2 border-purple-400 border-t-transparent" />
+              </div>
+            ) : item.isPlaceholder ? (
+              <>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onReplace(); }}
+                  title="Replace asset"
+                  className="p-1 bg-yellow-500/20 rounded hover:bg-yellow-500/40 transition-colors"
+                >
+                  <RefreshCw size={12} className="text-yellow-500" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                  title="Delete"
+                  className="p-1 bg-red-500/20 rounded hover:bg-red-500/40 transition-colors"
+                >
+                  <Trash2 size={12} className="text-red-400" />
+                </button>
+              </>
             ) : (
               <>
+                {item.type === "image" && onKieAI && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onKieAI(); }}
+                    title="Create with KieAI"
+                    className="p-1 bg-purple-500/20 rounded hover:bg-purple-500/40 transition-colors"
+                  >
+                    <Sparkles size={12} className="text-purple-300" />
+                  </button>
+                )}
                 <button
                   onClick={(e) => { e.stopPropagation(); onAddToTimeline(); }}
                   title="Add to timeline"
@@ -367,6 +362,24 @@ const MediaThumbnail: React.FC<{
           <div className="w-2 h-2 bg-primary rounded-full shadow-[0_0_8px_#22c55e] flex-shrink-0" />
         )}
       </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          {item.type === "image" && onKieAI && (
+            <ContextMenuItem onClick={onKieAI}>
+              <Sparkles size={13} className="mr-2 text-primary" />
+              Create with KieAI
+            </ContextMenuItem>
+          )}
+          <ContextMenuItem onClick={(e) => { (e as React.MouseEvent).stopPropagation?.(); onAddToTimeline(); }}>
+            <Plus size={13} className="mr-2" />
+            Add to Timeline
+          </ContextMenuItem>
+          <ContextMenuItem onClick={(e) => { (e as React.MouseEvent).stopPropagation?.(); onDelete(); }} className="text-red-400 focus:text-red-400">
+            <Trash2 size={13} className="mr-2" />
+            Delete
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     );
   }
 
@@ -374,6 +387,8 @@ const MediaThumbnail: React.FC<{
   const thumbnailIconSize = viewMode === "small" ? 16 : 24;
 
   return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
     <div className="flex flex-col">
       {/* Thumbnail container */}
       <div
@@ -414,8 +429,24 @@ const MediaThumbnail: React.FC<{
           </div>
         )}
 
+        {/* KieAI Error Badge */}
+        {item.kieaiError && (
+          <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-red-500 rounded text-[8px] text-white font-bold flex items-center gap-1">
+            <AlertTriangle size={8} />
+            Failed
+          </div>
+        )}
+
+        {/* Pending KieAI Badge */}
+        {!item.kieaiError && item.isPending && (
+          <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-purple-500 rounded text-[8px] text-white font-bold flex items-center gap-1">
+            <div className="h-2 w-2 animate-spin rounded-full border border-white border-t-transparent" />
+            AI
+          </div>
+        )}
+
         {/* Missing Asset Badge */}
-        {item.isPlaceholder && (
+        {!item.kieaiError && !item.isPending && item.isPlaceholder && (
           <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-yellow-500 rounded text-[8px] text-black font-bold flex items-center gap-1">
             <AlertTriangle size={10} />
             Missing
@@ -429,8 +460,22 @@ const MediaThumbnail: React.FC<{
           </div>
         )}
 
+        {/* Error overlay */}
+        {item.kieaiError && !isHovered && (
+          <div className="absolute inset-0 flex items-center justify-center bg-red-500/10">
+            <AlertTriangle size={viewMode === "small" ? 20 : 32} className="text-red-400/60" />
+          </div>
+        )}
+
+        {/* Pending overlay */}
+        {!item.kieaiError && item.isPending && !isHovered && (
+          <div className="absolute inset-0 flex items-center justify-center bg-purple-500/10">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-purple-400 border-t-transparent" />
+          </div>
+        )}
+
         {/* Warning icon overlay for placeholders */}
-        {item.isPlaceholder && !isHovered && (
+        {!item.kieaiError && !item.isPending && item.isPlaceholder && !isHovered && (
           <div className="absolute inset-0 flex items-center justify-center bg-yellow-500/10">
             <AlertTriangle size={viewMode === "small" ? 20 : 32} className="text-yellow-500/50" />
           </div>
@@ -468,6 +513,24 @@ const MediaThumbnail: React.FC<{
         )}
       </div>
     </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        {item.type === "image" && onKieAI && (
+          <ContextMenuItem onClick={onKieAI}>
+            <Sparkles size={13} className="mr-2 text-primary" />
+            Create with KieAI
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem onClick={() => onAddToTimeline()}>
+          <Plus size={13} className="mr-2" />
+          Add to Timeline
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => onDelete()} className="text-red-400 focus:text-red-400">
+          <Trash2 size={13} className="mr-2" />
+          Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 };
 
@@ -501,12 +564,17 @@ const LoadingIndicator: React.FC<{ message: string }> = ({ message }) => (
 export const AssetsPanel: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<
-    "media" | "text" | "graphics" | "ai"
-  >("media");
-  const [activeFolder, setActiveFolder] = useState<string | null>(null);
+  const [activeTab, setActiveTabRaw] = useState<AssetsTab>("media");
+  const ttsHasUnsaved = useTtsAudioStore((s) => s.generatedAudio !== null && !s.isAudioSaved);
+
+  const setActiveTab = useCallback((tab: AssetsTab) => {
+    if (activeTab === "ai" && tab !== "ai" && ttsHasUnsaved) {
+      toast.warning("Unsaved audio discarded", "Save to media or download next time to keep it.");
+    }
+    setActiveTabRaw(tab);
+  }, [activeTab, ttsHasUnsaved]);
+
   const [isDragOver, setIsDragOver] = useState(false);
-  const [draggedOverFolder, setDraggedOverFolder] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState("");
   const [showOnlyMissing, setShowOnlyMissing] = useState(false);
@@ -523,12 +591,9 @@ export const AssetsPanel: React.FC = () => {
   const [backgroundCategory, setBackgroundCategory] = useState<
     "all" | "solid" | "gradient" | "pattern" | "mesh"
   >("all");
-  const [showCopyProjectModal, setShowCopyProjectModal] = useState(false);
-  const [copyTargets, setCopyTargets] = useState<
-    Array<{ id: string; name: string; subtitle: string; isCurrent: boolean }>
-  >([]);
-  const [copyingTargetId, setCopyingTargetId] = useState<string | null>(null);
-  const [showGenerateAudio, setShowGenerateAudio] = useState(false);
+
+  // KieAI image generation dialog
+  const [kieaiDialog, setKieaiDialog] = useState<{ file: File; previewUrl: string | null } | null>(null);
 
   // Project store
   const {
@@ -536,19 +601,22 @@ export const AssetsPanel: React.FC = () => {
     importMedia,
     deleteMedia,
     replaceMediaAsset,
-    renameMedia,
     updateSettings,
-    addTrack,
-    addClip,
-    trimClip,
-    forceSave,
+    setKieAIItemState,
   } = useProjectStore();
   const mediaItems = project.mediaLibrary.items;
 
-  // Reset activeFolder when project changes
-  useEffect(() => {
-    setActiveFolder(null);
-  }, [project.id]);
+  const v2v = useV2VMediaFolders({
+    projectId: project.id,
+    mediaItems,
+    searchQuery,
+    showOnlyMissing,
+    setIsImporting,
+    setImportProgress,
+  });
+
+  // KieAI store
+  const { retryTask } = useKieAIStore();
 
   // UI store
   const { select, isSelected, startDrag } = useUIStore();
@@ -558,221 +626,49 @@ export const AssetsPanel: React.FC = () => {
     (item) => item.isPlaceholder,
   ).length;
 
-  const getFolderName = (name: string): string | null => {
-    const idx = name.indexOf("/");
-    if (idx <= 0) return null;
-    return name.slice(0, idx);
-  };
-
-  const getDisplayName = (name: string): string => {
-    const idx = name.indexOf("/");
-    return idx >= 0 ? name.slice(idx + 1) : name;
-  };
-
-  const folders = Array.from(
-    new Set(
-      mediaItems
-        .map((m) => getFolderName(m.name))
-        .filter((x): x is string => Boolean(x)),
-    ),
-  ).sort((a, b) => a.localeCompare(b));
-
-  const folderItems = activeFolder
-    ? mediaItems.filter((m) => getFolderName(m.name) === activeFolder)
-    : [];
-
-  const baseItems = activeFolder
-    ? folderItems
-    : mediaItems.filter((m) => !getFolderName(m.name));
-
-  // Filter media items by search query and missing assets toggle
-  const filteredItems = baseItems.filter((item) => {
-    const matchesSearch = item.name
-      .toLowerCase()
-      .includes(searchQuery.toLowerCase());
-    const matchesFilter = showOnlyMissing ? item.isPlaceholder : true;
-    return matchesSearch && matchesFilter;
-  });
-
-  const handleRenameFolder = useCallback(async () => {
-    if (!activeFolder) return;
-    const next = window.prompt("Nuevo nombre de carpeta", activeFolder);
-    if (!next || !next.trim() || next.trim() === activeFolder) return;
-    const newName = next.trim();
-    const items = mediaItems.filter((m) => getFolderName(m.name) === activeFolder);
-    for (const it of items) {
-      const rest = getDisplayName(it.name);
-      await renameMedia(it.id, `${newName}/${rest}`);
-    }
-    // Re-map de referencia para el bot├│n "A├▒adir a la timeline".
-    useV2VStore.getState().renameFolderRef(activeFolder, newName);
-    setActiveFolder(newName);
-  }, [activeFolder, mediaItems, renameMedia]);
-
-  const handleDeleteFolder = useCallback(async () => {
-    if (!activeFolder) return;
-    const ok = window.confirm(`┬┐Borrar la carpeta "${activeFolder}" y todos sus archivos?`);
-    if (!ok) return;
-    const items = mediaItems.filter((m) => getFolderName(m.name) === activeFolder);
-    for (const it of items) {
-      await deleteMedia(it.id);
-    }
-    useV2VStore.getState().removeFolderRef(activeFolder);
-    setActiveFolder(null);
-  }, [activeFolder, mediaItems, deleteMedia]);
-
   // Handle file import with loading state
   const handleFileImport = useCallback(
-    async (files: FileList | null, targetFolderOverride?: string) => {
-      if (!files || files.length === 0) return;
-
-      setIsImporting(true);
-      const fileArray = Array.from(files);
-
-      try {
-        for (let i = 0; i < fileArray.length; i++) {
-          let file = fileArray[i];
-          
-          const folderPrefix = targetFolderOverride || activeFolder;
-          if (folderPrefix) {
-            file = new File([file], `${folderPrefix}/${file.name}`, { type: file.type });
-          }
-          
-          setImportProgress(
-            `Importing ${file.name} (${i + 1}/${fileArray.length})...`,
-          );
-
-          const result = await importMedia(file);
-
-          // If it's a video with audio, extract audio to separate track
-          if (result.success && file.type.startsWith("video/")) {
-            setImportProgress(`Extracting audio from ${file.name}...`);
-            // Audio extraction is handled by the importMedia function
-            // The audio track is created automatically when adding to timeline
-          }
-        }
-      } catch (error) {
-        console.error("Import failed:", error);
-      } finally {
-        setIsImporting(false);
-        setImportProgress("");
-      }
+    async (files: FileList | null) => {
+      await v2v.importDroppedFiles(files);
     },
-    [importMedia, activeFolder],
+    [v2v],
   );
 
-  const handleFolderDrop = useCallback(
-    async (e: React.DragEvent, targetFolder: string) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setDraggedOverFolder(null);
-
-      // Check external files first
-      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        return handleFileImport(e.dataTransfer.files, targetFolder);
-      }
-
-      // Handle internal media item
-      const dataStr = e.dataTransfer.getData("application/json");
-      if (!dataStr) return;
-      
-      try {
-        const { mediaId } = JSON.parse(dataStr);
-        if (mediaId && mediaId.length > 0) {
-          const mediaItem = project.mediaLibrary.items.find(m => m.id === mediaId);
-          if (!mediaItem) return;
-          
-          // Recreate proper file path inside chosen folder
-          const currentName = mediaItem.name;
-          const nameWithoutPrefix = currentName.includes("/") 
-            ? currentName.substring(currentName.lastIndexOf("/") + 1) 
-            : currentName;
-            
-          const newName = `${targetFolder}/${nameWithoutPrefix}`;
-          if (currentName !== newName) {
-            await renameMedia(mediaId, newName);
-          }
-        }
-      } catch (err) {
-        console.error("Failed to parse dragged media", err);
-      }
-    },
-    [handleFileImport, project.mediaLibrary.items, renameMedia]
-  );
-
-  const handleRootDrop = useCallback(
+  // Handle drag and drop import — capture FileSystemFileHandle for each dropped file
+  const handleDrop = useCallback(
     async (e: React.DragEvent) => {
       e.preventDefault();
-      e.stopPropagation();
-      setDraggedOverFolder(null);
-
-      const dataStr = e.dataTransfer.getData("application/json");
-      if (!dataStr) return;
-      
-      try {
-        const { mediaId } = JSON.parse(dataStr);
-        if (mediaId && mediaId.length > 0) {
-          const mediaItem = project.mediaLibrary.items.find(m => m.id === mediaId);
-          if (!mediaItem) return;
-          
-          const currentName = mediaItem.name;
-          const nameWithoutPrefix = currentName.includes("/") 
-            ? currentName.substring(currentName.lastIndexOf("/") + 1) 
-            : currentName;
-            
-          const newName = nameWithoutPrefix;
-          if (currentName !== newName) {
-            await renameMedia(mediaId, newName);
-          }
-        }
-      } catch (err) {
-        console.error("Failed to parse dragged media", err);
-      }
-    },
-    [project.mediaLibrary.items, renameMedia]
-  );
-
-  const handleFolderDragOver = useCallback((e: React.DragEvent, folder: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDraggedOverFolder(folder);
-  }, []);
-
-  const handleFolderDragLeave = useCallback(() => {
-    setDraggedOverFolder(null);
-  }, []);
-
-  // Handle drag and drop import
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
       setIsDragOver(false);
-      handleFileImport(e.dataTransfer.files);
+
+      // Snapshot dataTransfer synchronously — it becomes inert after the first await.
+      const droppedFiles = e.dataTransfer.files;
+      const handlePromises =
+        "getAsFileSystemHandle" in DataTransferItem.prototype
+          ? Array.from(e.dataTransfer.items)
+              .filter((item) => item.kind === "file")
+              .map(async (item) => {
+                try {
+                  const handle = await (item as DataTransferItem & { getAsFileSystemHandle(): Promise<FileSystemHandle> }).getAsFileSystemHandle();
+                  if (handle.kind === "file") {
+                    const fileHandle = handle as FileSystemFileHandle;
+                    const file = await fileHandle.getFile();
+                    await saveFileHandle(file.name, file.size, fileHandle);
+                  }
+                } catch {
+                  // Ignore — handle capture is best-effort
+                }
+              })
+          : [];
+
+      await Promise.all(handlePromises);
+      await v2v.importDroppedFiles(droppedFiles);
     },
-    [handleFileImport],
+    [v2v],
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(true);
-
-    const container = e.currentTarget as HTMLElement;
-    const viewport = container.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement || container;
-    
-    const rect = container.getBoundingClientRect();
-    const threshold = 60;
-    const maxSpeed = 15;
-
-    const distTop = e.clientY - rect.top;
-    const distBottom = rect.bottom - e.clientY;
-
-    if (distTop < threshold && distTop > 0) {
-      const speed = maxSpeed * (1 - distTop / threshold);
-      viewport.scrollTop -= speed;
-    } else if (distBottom < threshold && distBottom > 0) {
-      const speed = maxSpeed * (1 - distBottom / threshold);
-      viewport.scrollTop += speed;
-    }
   }, []);
 
   const handleDragLeave = useCallback(() => {
@@ -820,6 +716,66 @@ export const AssetsPanel: React.FC = () => {
     },
     [replaceMediaAsset],
   );
+
+  const handleRelinkFromFolder = useCallback(async () => {
+    if (!("showDirectoryPicker" in window)) {
+      toast.error("Folder picker not supported", "Please relink assets individually using the refresh button on each missing asset.");
+      return;
+    }
+    let dirHandle: FileSystemDirectoryHandle;
+    try {
+      dirHandle = await (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker();
+    } catch {
+      return; // user cancelled
+    }
+
+    const { project } = useProjectStore.getState();
+    const placeholders = project.mediaLibrary.items.filter((item) => item.isPlaceholder);
+    if (placeholders.length === 0) return;
+
+    // Persist the directory handle for future auto-restore
+    try { await saveDirectoryHandle(project.id, dirHandle); } catch { /* best-effort */ }
+
+    // Build a name:size ΓåÆ {File, handle} map for reliable matching
+    const fileMap = new Map<string, { file: File; handle: FileSystemFileHandle }>();
+    const entries = (dirHandle as unknown as { entries: () => AsyncIterableIterator<[string, FileSystemHandle]> }).entries();
+    for await (const [, fh] of entries) {
+      if ((fh as FileSystemHandle).kind === "file") {
+        const fileHandle = fh as FileSystemFileHandle;
+        const file = await fileHandle.getFile();
+        fileMap.set(`${file.name.toLowerCase()}:${file.size}`, { file, handle: fileHandle });
+      }
+    }
+
+    setIsImporting(true);
+    let linked = 0;
+    for (const item of placeholders) {
+      // Match on original source file name + size (same strategy as auto-restore)
+      const key = item.sourceFile
+        ? `${item.sourceFile.name.toLowerCase()}:${item.sourceFile.size}`
+        : null;
+      const entry = key ? fileMap.get(key) : null;
+      if (entry) {
+        setImportProgress(`Relinking ${item.name}ΓÇª`);
+        try {
+          // Save individual file handle for future auto-restore
+          try { await saveFileHandle(entry.file.name, entry.file.size, entry.handle); } catch { /* best-effort */ }
+          await replaceMediaAsset(item.id, entry.file, dirHandle.name);
+          linked++;
+        } catch (err) {
+          console.error(`[AssetsPanel] Failed to relink ${item.name}:`, err);
+        }
+      }
+    }
+    setIsImporting(false);
+    setImportProgress("");
+
+    if (linked > 0) {
+      toast.success(`Relinked ${linked} of ${placeholders.length} asset${placeholders.length !== 1 ? "s" : ""}`);
+    } else {
+      toast.error("No matches found", "None of the files in the selected folder matched the missing assets by filename.");
+    }
+  }, [replaceMediaAsset]);
 
   // Handle drag start for timeline placement
   const handleItemDragStart = useCallback(
@@ -893,370 +849,6 @@ export const AssetsPanel: React.FC = () => {
     [addMediaToTimeline],
   );
 
-  /** Descarga/importa a Media el video y WAV del job V2V. Devuelve los segmentos del backend. */
-  const ensureV2VMediaInProject = useCallback(
-    async (folder: string, ref: { jobId: string; videoIndex: number }) => {
-      const segments: AudioSegmentItem[] = await v2vApi.getAudioSegments(
-        ref.jobId,
-        ref.videoIndex,
-      );
-
-      const videoMediaName = `${folder}/video.mp4`;
-      const refreshState = () => useProjectStore.getState();
-      const currentItems = refreshState().project.mediaLibrary.items;
-      const mediaNames = new Set(currentItems.map((m) => m.name));
-
-      // 1) Identificamos qu├⌐ archivos faltan
-      const missingFilesInfo: { type: 'video' | 'audio', name: string, seg?: number }[] = [];
-      if (!mediaNames.has(videoMediaName)) {
-        missingFilesInfo.push({ type: 'video', name: videoMediaName });
-      }
-
-      for (const seg of segments) {
-        const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(3, "0")}.wav`;
-        if (!mediaNames.has(wavName)) {
-          missingFilesInfo.push({ type: 'audio', name: wavName, seg: seg.seg });
-        }
-      }
-
-      if (missingFilesInfo.length > 0) {
-        // 2) Descarga en paralelo
-        const downloadTasks = missingFilesInfo.map(info => {
-          if (info.type === 'video') {
-            return v2vApi.fetchOutputVideoBlob(ref.jobId, ref.videoIndex)
-              .then(blob => new File([blob], info.name, { type: "video/mp4" }));
-          } else {
-            return v2vApi.fetchAudioSegmentBlob(ref.jobId, ref.videoIndex, info.seg!)
-              .then(blob => new File([blob], info.name, { type: "audio/wav" }));
-          }
-        });
-
-        const filesToImport = await Promise.all(downloadTasks);
-        
-        // 3) Importaci├│n masiva
-        const batchRes = await importMultipleMediaIntoProject(refreshState().project, filesToImport, { quick: true });
-        if (!batchRes.success) {
-           throw new Error("Error en la importaci├│n masiva de la carpeta");
-        }
-        // Actualizamos el proyecto en el store (ya que importMultiple lo crea desconectado)
-        // NOTA: Como estamos en un callback de AssetsPanel, usamos importMedia o similar si queremos persistencia, 
-        // pero aqu├¡ el patr├│n es que importMultiple devuelve el nuevo proyecto y nosotros lo inyectamos.
-        // En AssetsPanel no tenemos un setProject directo, dependemos de importMedia. 
-        // Sin embargo, podemos usar el patr├│n de 'ProjectStore.setState({ project: batchRes.project })' o similar si es accesible.
-        // Revisando useProjectStore...
-        useProjectStore.setState({ project: batchRes.project });
-      }
-
-      return segments;
-    },
-    [importMedia],
-  );
-
-  const importFolderTtsViaApi = useCallback(
-    async (folder: string, ref: { jobId: string; videoIndex: number }) => {
-      setIsImporting(true);
-      setImportProgress("Copiando carpeta al proyecto seleccionado...");
-      try {
-        await ensureV2VMediaInProject(folder, ref);
-      } catch (e) {
-        window.alert(e instanceof Error ? e.message : "Error al importar media");
-      } finally {
-        setIsImporting(false);
-        setImportProgress("");
-      }
-    },
-    [ensureV2VMediaInProject],
-  );
-
-  /**
-   * A├▒ade nuevas pistas al timeline actual: video a t=0 y audios por speaker con start/end del backend.
-   */
-  const handleAddV2VFolderAsNewTracks = useCallback(async () => {
-    if (!activeFolder) return;
-    const ref = useV2VStore.getState().getFolderRef(activeFolder);
-
-    // Comprobar si existe un snapshot guardado para esta carpeta
-    const snapshot = loadFolderSnapshot(activeFolder);
-    if (snapshot && snapshot.tracks.length > 0) {
-      setIsImporting(true);
-      setImportProgress("Restaurando pistas desde snapshot guardadoΓÇª");
-      try {
-        if (ref) {
-          await ensureV2VMediaInProject(activeFolder, ref);
-        }
-        const folder = activeFolder;
-
-        for (const trackSnap of snapshot.tracks) {
-          // Crear la pista
-          const beforeIds = new Set(
-            useProjectStore.getState().project.timeline.tracks.map((t) => t.id),
-          );
-          const rT = await addTrack(trackSnap.type as "video" | "audio" | "image");
-          if (!rT.success) continue;
-
-          const proj = useProjectStore.getState().project;
-          const newTrack = proj.timeline.tracks.find(
-            (t) => !beforeIds.has(t.id),
-          );
-          if (!newTrack) continue;
-
-          renameTimelineTrack(newTrack.id, trackSnap.name);
-
-          // A├▒adir clips
-          for (const clipSnap of trackSnap.clips) {
-            const mediaName = `${folder}/${clipSnap.mediaName}`;
-            const wm = useProjectStore
-              .getState()
-              .project.mediaLibrary.items.find((m) => m.name === mediaName);
-            if (!wm) continue;
-
-            const addR = await addClip(newTrack.id, wm.id, clipSnap.startTime);
-            if (!addR.success) continue;
-
-            // Restaurar recorte
-            const updatedClip = useProjectStore
-              .getState()
-              .project.timeline.tracks.find((t) => t.id === newTrack.id)
-              ?.clips.find(
-                (c) =>
-                  c.mediaId === wm.id &&
-                  Math.abs(c.startTime - clipSnap.startTime) < 0.05,
-              );
-            if (updatedClip) {
-              await trimClip(updatedClip.id, clipSnap.inPoint, clipSnap.outPoint);
-            }
-          }
-        }
-        await forceSave();
-      } catch (e) {
-        window.alert(e instanceof Error ? e.message : "Error al restaurar snapshot");
-      } finally {
-        setIsImporting(false);
-        setImportProgress("");
-      }
-      return; // salir despu├⌐s de restaurar desde snapshot
-    }
-
-    if (!ref) {
-      window.alert(
-        `No hay referencia V2V para "${activeFolder}". Procesa el video desde Video2Video (icono YouTube) o vuelve a ejecutar la inferencia.`,
-      );
-      return;
-    }
-
-    setIsImporting(true);
-    setImportProgress("Sincronizando Media y a├▒adiendo pistas al timelineΓÇª");
-    try {
-      const segments = await ensureV2VMediaInProject(activeFolder, ref);
-      const folder = activeFolder;
-      const videoName = `${folder}/video.mp4`;
-
-      const videoMedia = useProjectStore
-        .getState()
-        .project.mediaLibrary.items.find((m) => m.name === videoName);
-      if (!videoMedia) {
-        window.alert(`No se encuentra "${videoName}" en Media.`);
-        return;
-      }
-
-      let proj = useProjectStore.getState().project;
-      const beforeVideo = new Set(proj.timeline.tracks.map((t) => t.id));
-      const rVideo = await addTrack("video");
-      if (!rVideo.success) {
-        window.alert("No se pudo crear la pista de video.");
-        return;
-      }
-      proj = useProjectStore.getState().project;
-      const videoTrack = proj.timeline.tracks.find(
-        (t) => t.type === "video" && !beforeVideo.has(t.id),
-      );
-      if (!videoTrack) {
-        window.alert("No se encontr├│ la pista de video nueva.");
-        return;
-      }
-
-      const folderLabel = folder.length > 52 ? `${folder.slice(0, 49)}ΓÇª` : folder;
-      renameTimelineTrack(videoTrack.id, `V2V ┬╖ ${folderLabel}`);
-
-      const addV = await addClip(videoTrack.id, videoMedia.id, 0);
-      if (!addV.success) {
-        window.alert("No se pudo a├▒adir el clip de video.");
-        return;
-      }
-
-      const vDur =
-        videoMedia.metadata?.duration && videoMedia.metadata.duration > 0
-          ? videoMedia.metadata.duration
-          : undefined;
-      if (vDur) {
-        proj = useProjectStore.getState().project;
-        const vt = proj.timeline.tracks.find((t) => t.id === videoTrack.id);
-        const vClip = vt?.clips.find((c) => c.mediaId === videoMedia.id);
-        if (vClip) await trimClip(vClip.id, 0, vDur);
-      }
-
-      const bySpeaker: Record<string, AudioSegmentItem[]> = {};
-      for (const seg of segments) {
-        const raw = (seg.speaker || "").trim();
-        const key = raw || `TTS_${toSafeToken(seg.speaker || "speaker")}_seg${seg.seg}`;
-        (bySpeaker[key] ||= []).push(seg);
-      }
-
-      for (const speakerKey of Object.keys(bySpeaker)) {
-        const segs = bySpeaker[speakerKey].slice().sort((a, b) => a.seg - b.seg);
-        const beforeA = new Set(
-          useProjectStore.getState().project.timeline.tracks.map((t) => t.id),
-        );
-        const rA = await addTrack("audio");
-        if (!rA.success) continue;
-
-        proj = useProjectStore.getState().project;
-        const audioTrack = proj.timeline.tracks.find(
-          (t) => t.type === "audio" && !beforeA.has(t.id),
-        );
-        if (!audioTrack) continue;
-
-        const displaySpeaker = (segs[0]?.speaker || "").trim();
-        const trackTitle =
-          displaySpeaker.length > 0
-            ? displaySpeaker.length > 80
-              ? `${displaySpeaker.slice(0, 77)}ΓÇª`
-              : displaySpeaker
-            : speakerKey;
-
-        renameTimelineTrack(audioTrack.id, trackTitle);
-
-        for (const seg of segs) {
-          const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
-            seg.seg,
-          ).padStart(3, "0")}.wav`;
-          const wm = useProjectStore
-            .getState()
-            .project.mediaLibrary.items.find((m) => m.name === wavName);
-          if (!wm) continue;
-
-          const addW = await addClip(audioTrack.id, wm.id, seg.start);
-          if (!addW.success) continue;
-
-          proj = useProjectStore.getState().project;
-          const tr = proj.timeline.tracks.find((t) => t.id === audioTrack.id);
-          const clipOnTrack = tr?.clips.find(
-            (c) => c.mediaId === wm.id && Math.abs(c.startTime - seg.start) < 0.05,
-          );
-          if (!clipOnTrack) continue;
-
-          const mediaDur =
-            wm.metadata?.duration && wm.metadata.duration > 0
-              ? wm.metadata.duration
-              : clipOnTrack.duration;
-          if (mediaDur > 0) {
-            await trimClip(clipOnTrack.id, 0, mediaDur);
-          }
-        }
-      }
-
-      await forceSave();
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : "Error al montar en el timeline");
-    } finally {
-      setIsImporting(false);
-      setImportProgress("");
-    }
-  }, [activeFolder, addTrack, addClip, trimClip, ensureV2VMediaInProject, forceSave]);
-
-  const handleCopyFolderTtsToAnotherProject = useCallback(async () => {
-    if (!activeFolder) return;
-
-    try {
-      await autoSaveManager.initialize();
-      const saves = await autoSaveManager.checkForRecovery();
-
-      // Deduplicamos por projectId y nos quedamos con el m├ís reciente.
-      const unique = saves.reduce((acc, save) => {
-        const existing = acc.find((x) => x.projectId === save.projectId);
-        if (!existing || save.timestamp > existing.timestamp) {
-          return [...acc.filter((x) => x.projectId !== save.projectId), save];
-        }
-        return acc;
-      }, [] as typeof saves);
-
-      const ordered = unique.sort((a, b) => b.timestamp - a.timestamp);
-      const currentProjectId = useProjectStore.getState().project.id;
-      const targets: Array<{ id: string; name: string; subtitle: string; isCurrent: boolean }> = [];
-
-      for (const p of ordered) {
-        if (p.projectId === currentProjectId) continue;
-        targets.push({
-          id: p.id,
-          name: p.projectName,
-          subtitle: "Proyecto reciente",
-          isCurrent: false,
-        });
-      }
-
-      if (targets.length === 0) {
-        window.alert("No hay proyectos disponibles para copiar.");
-        return;
-      }
-
-      setCopyTargets(targets);
-      setShowCopyProjectModal(true);
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : "Error al copiar a proyecto");
-    }
-  }, [activeFolder]);
-
-  const handleConfirmCopyToTarget = useCallback(
-    async (targetId: string) => {
-      if (!activeFolder) return;
-      setCopyingTargetId(targetId);
-      try {
-        // Guardar el snapshot de Timeline de la carpeta ANTES de cambiar de proyecto
-        const snapshot = extractFolderTimelineSnapshot(activeFolder);
-        saveFolderSnapshot(snapshot);
-
-        const snapshotFiles = collectFolderMediaFiles(
-          useProjectStore.getState().project.mediaLibrary.items,
-          activeFolder,
-        );
-        const ref = useV2VStore.getState().getFolderRef(activeFolder);
-
-        if (targetId !== "__current__") {
-          await useProjectStore.getState().recoverFromAutoSave(targetId);
-        }
-
-        if (ref) {
-          await importFolderTtsViaApi(activeFolder, ref);
-        } else {
-          if (snapshotFiles.length === 0) {
-            window.alert(
-              "No hay archivos locales en esta carpeta (o faltan blobs). Ejecuta otra vez la inferencia desde Video2Video para registrar la referencia, o importa los archivos manualmente.",
-            );
-            return;
-          }
-          
-          const filesToImport = snapshotFiles.filter(file => {
-            return !useProjectStore.getState().project.mediaLibrary.items.some(m => m.name === file.name);
-          });
-
-          if (filesToImport.length > 0) {
-            const batchRes = await importMultipleMediaIntoProject(useProjectStore.getState().project, filesToImport, { quick: true });
-            if (batchRes.success) {
-              useProjectStore.setState({ project: batchRes.project });
-            }
-          }
-        }
-
-        setShowCopyProjectModal(false);
-      } catch (e) {
-        window.alert(e instanceof Error ? e.message : "Error al copiar a proyecto");
-      } finally {
-        setCopyingTargetId(null);
-      }
-    },
-    [activeFolder, importFolderTtsViaApi],
-  );
-
   const triggerFileInput = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
@@ -1289,606 +881,387 @@ export const AssetsPanel: React.FC = () => {
       backgroundCategory === "all" || preset.category === backgroundCategory,
   );
 
-  return (
-    <div
-      data-tour="assets"
-      className="w-80 bg-background-secondary border-r border-border flex flex-col h-full relative"
-    >
-      {/* Loading overlay */}
-      {isImporting && (
-        <LoadingIndicator message={importProgress || "Importing media..."} />
-      )}
-      {/* Panel Header */}
-      <div className="px-5 py-4 flex items-center justify-between">
-        <span className="font-bold text-lg text-text-primary tracking-tight">
-          Assets
-        </span>
-        <div className="flex gap-1">
-          <IconButton
-            icon={Plus}
-            onClick={triggerFileInput}
-            title="Import media"
-          />
-          <IconButton icon={Maximize2} title="Maximize panel" />
-          <IconButton icon={X} title="Close panel" />
-        </div>
-      </div>
+  // Open KieAI dialog for an image asset
+  const handleOpenKieAI = useCallback(async (item: MediaItem) => {
+    try {
+      const blob = await loadMediaBlob(item.id);
+      if (!blob) {
+        toast.error("Asset not found", "Cannot load the image data for this asset.");
+        return;
+      }
+      const mimeType = blob.type || (item.name.match(/\.png$/i) ? "image/png" : "image/jpeg");
+      const file = new File([blob], item.name, { type: mimeType as string });
+      setKieaiDialog({ file, previewUrl: item.thumbnailUrl });
+    } catch (err) {
+      console.error("[KieAI] Failed to load media blob:", err);
+      toast.error("Failed to open KieAI", err instanceof Error ? err.message : "Unknown error");
+    }
+  }, []);
 
-      {/* Tabs */}
-      <div className="flex px-5 gap-6 border-b border-border text-xs font-medium text-text-muted mb-5">
-        <button
-          onClick={() => setActiveTab("media")}
-          className={`pb-3 transition-all relative ${
-            activeTab === "media"
-              ? "text-text-primary"
-              : "hover:text-text-secondary"
-          }`}
-        >
-          Media
-          {activeTab === "media" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(34,197,94,0.5)]" />
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab("text")}
-          className={`pb-3 transition-all relative ${
-            activeTab === "text"
-              ? "text-text-primary"
-              : "hover:text-text-secondary"
-          }`}
-        >
-          Text
-          {activeTab === "text" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(34,197,94,0.5)]" />
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab("graphics")}
-          className={`pb-3 transition-all relative ${
-            activeTab === "graphics"
-              ? "text-text-primary"
-              : "hover:text-text-secondary"
-          }`}
-        >
-          Graphics
-          {activeTab === "graphics" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(34,197,94,0.5)]" />
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab("ai")}
-          className={`pb-3 transition-all relative ${
-            activeTab === "ai"
-              ? "text-primary"
-              : "text-primary/70 hover:text-primary"
-          }`}
-        >
-          AI Gen
-          {activeTab === "ai" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(34,197,94,0.5)]" />
-          )}
-        </button>
-      </div>
+  const handleRetryKieAI = useCallback((item: MediaItem) => {
+    if (!item.kieaiTaskId) return;
+    // Reset error state and re-activate polling
+    setKieAIItemState(item.id, true, false);
+    retryTask(item.kieaiTaskId);
+  }, [retryTask, setKieAIItemState]);
 
-      {/* Search & view toggle - only show for media tab */}
-      {activeTab === "media" && (
-        <div className="px-5 mb-3 flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted z-10" />
-            <Input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={activeFolder ? `Buscar en ${activeFolder}` : "Search media"}
-              className="pl-9 text-xs bg-background-tertiary border-border text-text-primary h-9"
-            />
-          </div>
-          <div className="flex items-center bg-background-tertiary border border-border rounded-lg p-0.5">
-            {([
-              { mode: "large" as const, icon: LayoutGrid, title: "Large icons" },
-              { mode: "small" as const, icon: Grid2x2, title: "Small icons" },
-              { mode: "list" as const, icon: List, title: "List view" },
-            ]).map(({ mode, icon: ViewIcon, title }) => (
-              <button
-                key={mode}
-                onClick={() => setMediaViewMode(mode)}
-                title={title}
-                className={`p-1.5 rounded transition-colors ${
-                  mediaViewMode === mode
-                    ? "bg-background-elevated text-text-primary"
-                    : "text-text-muted hover:text-text-secondary"
-                }`}
-              >
-                <ViewIcon size={13} />
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Missing Assets Filter and Badge */}
-      {activeTab === "media" && missingAssetsCount > 0 && (
-        <div className="px-5 mb-5 space-y-2">
-          <button
-            onClick={() => setShowOnlyMissing(!showOnlyMissing)}
-            className={`w-full px-3 py-2 rounded-lg border text-xs font-medium transition-all flex items-center justify-between ${
-              showOnlyMissing
-                ? "bg-yellow-500/10 border-yellow-500 text-yellow-500"
-                : "bg-background-tertiary border-border text-text-secondary hover:border-yellow-500/50"
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <AlertTriangle size={14} />
-              <span>Show Only Missing Assets</span>
-            </div>
-            <div className="px-2 py-0.5 rounded-full bg-yellow-500 text-black text-[10px] font-bold">
-              {missingAssetsCount}
-            </div>
-          </button>
-        </div>
-      )}
-
-      {/* Hidden file input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        accept="video/*,audio/*,image/*"
-        onChange={(e) => handleFileImport(e.target.files)}
-        className="hidden"
-      />
-
-      {/* Content based on active tab */}
-      {activeTab === "media" && (
-        <ScrollArea
-          className={`flex-1 ${isDragOver ? "bg-primary/5" : ""}`}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-        >
-          <div className="px-5 pb-5">
-            {/* Folder bar */}
-            {activeFolder ? (
-              <div className="flex items-center gap-2 mb-3">
-                <button
-                  onClick={() => setActiveFolder(null)}
-                  onDrop={handleRootDrop}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setDraggedOverFolder("__root__");
-                  }}
-                  onDragLeave={() => setDraggedOverFolder(null)}
-                  className={`p-1 rounded transition-colors border ${
-                    draggedOverFolder === "__root__"
-                      ? "bg-primary/10 border-primary text-primary"
-                      : "hover:bg-background-tertiary border-transparent text-text-muted"
-                  }`}
-                  title="Volver a la ra├¡z (Suelta archivos aqu├¡ para sacarlos)"
-                >
-                  <ArrowLeft size={14} />
-                </button>
-                <div className="flex-1 text-[11px] text-text-primary truncate" title={activeFolder}>
-                  {activeFolder}
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => void handleRenameFolder()}
-                    className="p-1 rounded bg-background-tertiary border border-border hover:border-primary/50 text-text-muted hover:text-primary transition-all active:scale-90"
-                    title="Renombrar carpeta"
-                  >
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    onClick={() => setShowGenerateAudio(true)}
-                    className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary transition-all active:scale-90"
-                    title="Generar Segmento de Audio con AI"
-                  >
-                    <RefreshCw size={14} />
-                  </button>
-                  <button
-                    onClick={handleDeleteFolder}
-                    className="p-1 rounded bg-background-tertiary border border-border hover:border-red-500/50 text-red-400 trasition-all active:scale-90"
-                    title="Borrar"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleCopyFolderTtsToAnotherProject()}
-                    className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary transition-all active:scale-90"
-                    title="Opciones de carpeta"
-                  >
-                    <Settings size={14} />
-                  </button>
-                </div>
+  const renderSectionContent = (tab: AssetsTab): React.ReactNode => {
+    switch (tab) {
+      case "media":
+        return (
+          <div className="flex min-h-0 flex-1 flex-col border-t border-border/70">
+            <div className="px-4 pt-3 pb-3 flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted z-10" />
+                <Input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={v2v.activeFolder ? `Buscar en ${v2v.activeFolder}` : "Search media"}
+                  className="pl-9 text-xs bg-background-tertiary border-border text-text-primary h-9"
+                />
               </div>
-            ) : folders.length > 0 ? (
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                {folders.map((f) => (
+              <div className="flex items-center bg-background-tertiary border border-border rounded-lg p-0.5">
+                {([
+                  { mode: "large" as const, icon: LayoutGrid, title: "Large icons" },
+                  { mode: "small" as const, icon: Grid2x2, title: "Small icons" },
+                  { mode: "list" as const, icon: List, title: "List view" },
+                ]).map(({ mode, icon: ViewIcon, title }) => (
                   <button
-                    key={f}
-                    onClick={() => setActiveFolder(f)}
-                    onDragOver={(e) => handleFolderDragOver(e, f)}
-                    onDragLeave={handleFolderDragLeave}
-                    onDrop={(e) => handleFolderDrop(e, f)}
-                    className={`aspect-video bg-background-tertiary rounded-lg border-2 transition-all flex flex-col items-center justify-center gap-1.5 ${
-                      draggedOverFolder === f 
-                        ? "border-primary bg-primary/10 shadow-[0_0_15px_rgba(108,99,255,0.4)]" 
-                        : "border-border hover:border-primary/50"
+                    key={mode}
+                    onClick={() => setMediaViewMode(mode)}
+                    title={title}
+                    className={`p-1.5 rounded transition-colors ${
+                      mediaViewMode === mode
+                        ? "bg-background-elevated text-text-primary"
+                        : "text-text-muted hover:text-text-secondary"
                     }`}
-                    title={f}
                   >
-                    <Folder size={22} className={draggedOverFolder === f ? "text-primary" : "text-text-muted"} />
-                    <span className={`text-[10px] truncate max-w-[120px] ${draggedOverFolder === f ? "text-primary" : "text-text-secondary"}`}>
-                      {f}
-                    </span>
-                    <span className="text-[9px] text-text-muted">
-                      {mediaItems.filter((m) => getFolderName(m.name) === f).length} items
-                    </span>
+                    <ViewIcon size={13} />
                   </button>
                 ))}
               </div>
-            ) : null}
+            </div>
 
-            {filteredItems.length === 0 ? (
-              <EmptyState onImport={triggerFileInput} />
-            ) : (
-              <div className={
-                mediaViewMode === "list"
-                  ? "flex flex-col gap-1.5"
-                  : mediaViewMode === "small"
-                    ? "grid grid-cols-3 gap-2"
-                    : "grid grid-cols-2 gap-3"
-              }>
-                {filteredItems.map((item) => (
-                  <MediaThumbnail
-                    key={item.id}
-                    item={{ ...item, name: getDisplayName(item.name) }}
-                    isSelected={isSelected(item.id)}
-                    viewMode={mediaViewMode}
-                    onSelect={() => handleSelectItem(item.id)}
-                    onDelete={() => handleDeleteItem(item.id)}
-                    onReplace={() => handleReplaceAsset(item.id)}
-                    onDragStart={(e) => handleItemDragStart(e, item)}
-                    onAddToTimeline={() => handleAddToTimeline(item)}
-                  />
-                ))}
-                {/* Add more media tile */}
-                {mediaViewMode === "list" ? (
-                  <button
-                    onClick={triggerFileInput}
-                    className="flex items-center gap-3 px-2 py-1.5 rounded-lg border-2 border-dashed border-border hover:border-text-secondary cursor-pointer transition-all group"
-                  >
-                    <div className="w-12 h-8 rounded bg-background-tertiary flex items-center justify-center flex-shrink-0">
-                      <Upload size={14} className="text-text-muted group-hover:text-text-secondary transition-colors" />
-                    </div>
-                    <span className="text-[11px] text-text-muted group-hover:text-text-secondary transition-colors font-medium">Add media</span>
-                  </button>
+            <div className="px-4 pb-2">
+              <V2VMediaFolderRails {...v2v} mediaItems={mediaItems} />
+            </div>
+
+            {missingAssetsCount > 0 && (
+              <div className="px-4 pb-3 space-y-2">
+                <button
+                  onClick={() => setShowOnlyMissing(!showOnlyMissing)}
+                  className={`w-full px-3 py-2 rounded-lg border text-xs font-medium transition-all flex items-center justify-between ${
+                    showOnlyMissing
+                      ? "bg-yellow-500/10 border-yellow-500 text-yellow-500"
+                      : "bg-background-tertiary border-border text-text-secondary hover:border-yellow-500/50"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle size={14} />
+                    <span>Show Only Missing Assets</span>
+                  </div>
+                  <div className="px-2 py-0.5 rounded-full bg-yellow-500 text-black text-[10px] font-bold">
+                    {missingAssetsCount}
+                  </div>
+                </button>
+                <button
+                  onClick={handleRelinkFromFolder}
+                  className="w-full px-3 py-2 rounded-lg border border-yellow-500/40 bg-yellow-500/5 text-yellow-500 text-xs font-medium transition-all hover:bg-yellow-500/15 flex items-center gap-2"
+                >
+                  <RefreshCw size={14} />
+                  <span>Relink from FolderΓÇª</span>
+                </button>
+              </div>
+            )}
+
+            <ScrollArea
+              className={`min-h-0 flex-1 ${isDragOver ? "bg-primary/5" : ""}`}
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+            >
+              <div className="px-4 pb-4 relative">
+                {v2v.filteredItems.length === 0 ? (
+                  <EmptyState onImport={triggerFileInput} />
                 ) : (
-                  <div className="flex flex-col">
-                    <button
-                      onClick={triggerFileInput}
-                      className="aspect-video bg-background-tertiary rounded-lg border-2 border-dashed border-border hover:border-text-secondary relative flex items-center justify-center cursor-pointer transition-all overflow-hidden shadow-sm group"
-                    >
-                      <div className="flex flex-col items-center gap-1.5">
-                        <Upload size={mediaViewMode === "small" ? 16 : 20} className="text-text-muted group-hover:text-text-secondary transition-colors" />
-                        <span className="text-[10px] text-text-muted group-hover:text-text-secondary transition-colors">Add media</span>
+                  <div className={
+                    mediaViewMode === "list"
+                      ? "flex flex-col gap-1.5"
+                      : mediaViewMode === "small"
+                        ? "grid grid-cols-3 gap-2"
+                        : "grid grid-cols-2 gap-3"
+                  }>
+                    {v2v.filteredItems.map((item) => (
+                      <MediaThumbnail
+                        key={item.id}
+                        item={v2v.itemForThumbnail(item)}
+                        isSelected={isSelected(item.id)}
+                        viewMode={mediaViewMode}
+                        onSelect={() => handleSelectItem(item.id)}
+                        onDelete={() => handleDeleteItem(item.id)}
+                        onReplace={() => handleReplaceAsset(item.id)}
+                        onDragStart={(e) => handleItemDragStart(e, item)}
+                        onAddToTimeline={() => handleAddToTimeline(item)}
+                        onKieAI={item.type === "image" && !item.isPending && !item.kieaiError ? () => handleOpenKieAI(item) : undefined}
+                        onRetryKieAI={item.kieaiError && item.kieaiTaskId ? () => handleRetryKieAI(item) : undefined}
+                      />
+                    ))}
+                    {mediaViewMode === "list" ? (
+                      <button
+                        onClick={triggerFileInput}
+                        className="flex items-center gap-3 px-2 py-1.5 rounded-lg border-2 border-dashed border-border hover:border-text-secondary cursor-pointer transition-all group"
+                      >
+                        <div className="w-12 h-8 rounded bg-background-tertiary flex items-center justify-center flex-shrink-0">
+                          <Upload size={14} className="text-text-muted group-hover:text-text-secondary transition-colors" />
+                        </div>
+                        <span className="text-[11px] text-text-muted group-hover:text-text-secondary transition-colors font-medium">Add media</span>
+                      </button>
+                    ) : (
+                      <div className="flex flex-col">
+                        <button
+                          onClick={triggerFileInput}
+                          className="aspect-video bg-background-tertiary rounded-lg border-2 border-dashed border-border hover:border-text-secondary relative flex items-center justify-center cursor-pointer transition-all overflow-hidden shadow-sm group"
+                        >
+                          <div className="flex flex-col items-center gap-1.5">
+                            <Upload size={mediaViewMode === "small" ? 16 : 20} className="text-text-muted group-hover:text-text-secondary transition-colors" />
+                            <span className="text-[10px] text-text-muted group-hover:text-text-secondary transition-colors">Add media</span>
+                          </div>
+                        </button>
                       </div>
-                    </button>
+                    )}
+                  </div>
+                )}
+
+                {isDragOver && (
+                  <div className="absolute inset-4 border-2 border-dashed border-primary rounded-xl flex items-center justify-center bg-primary/5 pointer-events-none z-50 backdrop-blur-sm">
+                    <div className="text-primary text-sm font-bold bg-background-secondary px-4 py-2 rounded-full shadow-lg">
+                      Drop files to import
+                    </div>
                   </div>
                 )}
               </div>
-            )}
+            </ScrollArea>
+          </div>
+        );
+      case "graphics":
+        return (
+          <div className="min-h-0 flex-1 border-t border-border/70">
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="px-4 py-4">
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-xs font-medium text-text-secondary flex items-center gap-1.5">
+                      <Palette size={12} />
+                      Backgrounds
+                    </h4>
+                  </div>
+                  <div className="flex gap-1.5 mb-3 flex-wrap">
+                    {(["all", "solid", "gradient", "mesh", "pattern"] as const).map(
+                      (cat) => (
+                        <button
+                          key={cat}
+                          onClick={() => setBackgroundCategory(cat)}
+                          className={`px-2.5 py-1 text-[10px] rounded-md transition-all ${
+                            backgroundCategory === cat
+                              ? "bg-primary text-white"
+                              : "bg-background-tertiary text-text-muted hover:text-text-secondary"
+                          }`}
+                        >
+                          {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                        </button>
+                      ),
+                    )}
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {filteredBackgrounds.map((preset) => (
+                      <button
+                        key={preset.id}
+                        onClick={() => handleImportBackground(preset)}
+                        disabled={generatingBackground !== null}
+                        className="aspect-square rounded-lg border border-border hover:border-primary/50 transition-all overflow-hidden relative group disabled:opacity-50"
+                        title={preset.name}
+                        style={{ background: preset.thumbnail }}
+                      >
+                        {generatingBackground === preset.id && (
+                          <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100">
+                          <Plus size={16} className="text-white" />
+                        </div>
+                        <span className="absolute bottom-0 left-0 right-0 text-[8px] text-white bg-black/60 py-0.5 px-1 truncate opacity-0 group-hover:opacity-100 transition-opacity">
+                          {preset.name}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-            {/* Drop zone indicator */}
-            {isDragOver && (
-              <div className="absolute inset-4 border-2 border-dashed border-primary rounded-xl flex items-center justify-center bg-primary/5 pointer-events-none z-50 backdrop-blur-sm">
-                <div className="text-primary text-sm font-bold bg-background-secondary px-4 py-2 rounded-full shadow-lg">
-                  Drop files to import
+                <div className="mb-6">
+                  <h4 className="text-xs font-medium text-text-secondary mb-3">
+                    Shapes
+                  </h4>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[
+                      {
+                        type: "rectangle" as ShapeType,
+                        icon: Square,
+                        label: "Rectangle",
+                      },
+                      { type: "circle" as ShapeType, icon: Circle, label: "Circle" },
+                      {
+                        type: "triangle" as ShapeType,
+                        icon: Triangle,
+                        label: "Triangle",
+                      },
+                      { type: "star" as ShapeType, icon: Star, label: "Star" },
+                      {
+                        type: "arrow" as ShapeType,
+                        icon: ArrowRight,
+                        label: "Arrow",
+                      },
+                      {
+                        type: "polygon" as ShapeType,
+                        icon: Hexagon,
+                        label: "Polygon",
+                      },
+                    ].map((shape) => (
+                      <button
+                        key={shape.type}
+                        onClick={async () => {
+                          const state = useProjectStore.getState();
+                          const { createShapeClip, addTrack } = state;
+                          const tracksBefore = state.project.timeline.tracks;
+                          await addTrack("graphics", 0);
+                          const tracksAfter =
+                            useProjectStore.getState().project.timeline.tracks;
+                          const newGraphicsTrack = tracksAfter.find(
+                            (t) =>
+                              t.type === "graphics" &&
+                              !tracksBefore.some((bt) => bt.id === t.id),
+                          );
+                          if (newGraphicsTrack) {
+                            createShapeClip(newGraphicsTrack.id, 0, shape.type);
+                          }
+                        }}
+                        className="aspect-square bg-background-tertiary rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all flex flex-col items-center justify-center gap-1 group"
+                        title={shape.label}
+                      >
+                        <shape.icon
+                          size={20}
+                          className="text-text-secondary group-hover:text-primary transition-colors"
+                        />
+                        <span className="text-[9px] text-text-muted group-hover:text-text-secondary">
+                          {shape.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mb-6">
+                  <h4 className="text-xs font-medium text-text-secondary mb-3">
+                    SVG Import
+                  </h4>
+                  <button
+                    onClick={() => {
+                      const input = document.createElement("input");
+                      input.type = "file";
+                      input.accept = ".svg";
+                      input.onchange = async (e) => {
+                        const file = (e.target as HTMLInputElement).files?.[0];
+                        if (file) {
+                          const content = await file.text();
+                          const state = useProjectStore.getState();
+                          const { importSVG, addTrack } = state;
+                          const tracksBefore = state.project.timeline.tracks;
+                          await addTrack("graphics", 0);
+                          const tracksAfter =
+                            useProjectStore.getState().project.timeline.tracks;
+                          const newGraphicsTrack = tracksAfter.find(
+                            (t) =>
+                              t.type === "graphics" &&
+                              !tracksBefore.some((bt) => bt.id === t.id),
+                          );
+                          if (newGraphicsTrack) {
+                            importSVG(content, newGraphicsTrack.id, 0);
+                          }
+                        }
+                      };
+                      input.click();
+                    }}
+                    className="w-full py-3 bg-background-tertiary rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all flex items-center justify-center gap-2 group"
+                  >
+                    <FileCode
+                      size={16}
+                      className="text-text-secondary group-hover:text-primary transition-colors"
+                    />
+                    <span className="text-xs text-text-secondary group-hover:text-text-primary">
+                      Import SVG File
+                    </span>
+                  </button>
+                </div>
+
+                <div className="mb-6">
+                  <h4 className="text-xs font-medium text-text-secondary mb-3">
+                    Stickers & Emojis
+                  </h4>
+                  <div className="grid grid-cols-4 gap-2">
+                    {["≡ƒÿÇ", "≡ƒÄë", "Γ¥ñ∩╕Å", "Γ¡É", "≡ƒöÑ", "≡ƒæì", "≡ƒÄ¼", "≡ƒÄ╡"].map(
+                      (emoji, i) => (
+                        <button
+                          key={i}
+                          onClick={async () => {
+                            const state = useProjectStore.getState();
+                            const { createStickerClip, addTrack } = state;
+                            const { stickerLibrary } = await import("@openreel/core");
+
+                            const tracksBefore = state.project.timeline.tracks;
+                            await addTrack("graphics", 0);
+                            const tracksAfter =
+                              useProjectStore.getState().project.timeline.tracks;
+                            const newGraphicsTrack = tracksAfter.find(
+                              (t) =>
+                                t.type === "graphics" &&
+                                !tracksBefore.some((bt) => bt.id === t.id),
+                            );
+
+                            if (newGraphicsTrack) {
+                              const emojiItem = {
+                                id: `emoji-${i}`,
+                                emoji,
+                                name: emoji,
+                                category: "emojis",
+                              };
+                              const clip = stickerLibrary.createEmojiClip(
+                                emojiItem,
+                                newGraphicsTrack.id,
+                                0,
+                                5,
+                              );
+                              createStickerClip(clip);
+                            }
+                          }}
+                          className="aspect-square bg-background-tertiary rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all flex items-center justify-center text-xl cursor-pointer"
+                        >
+                          {emoji}
+                        </button>
+                      ),
+                    )}
+                  </div>
                 </div>
               </div>
-            )}
+            </ScrollArea>
           </div>
-        </ScrollArea>
-      )}
-
-      {/* Graphics Tab Content (Task 16) */}
-      {activeTab === "graphics" && (
-        <ScrollArea className="flex-1">
-          <div className="px-5 pb-5">
-          {/* Backgrounds Section */}
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-xs font-medium text-text-secondary flex items-center gap-1.5">
-                <Palette size={12} />
-                Backgrounds
-              </h4>
-            </div>
-            <div className="flex gap-1.5 mb-3 flex-wrap">
-              {(["all", "solid", "gradient", "mesh", "pattern"] as const).map(
-                (cat) => (
-                  <button
-                    key={cat}
-                    onClick={() => setBackgroundCategory(cat)}
-                    className={`px-2.5 py-1 text-[10px] rounded-md transition-all ${
-                      backgroundCategory === cat
-                        ? "bg-primary text-white"
-                        : "bg-background-tertiary text-text-muted hover:text-text-secondary"
-                    }`}
-                  >
-                    {cat.charAt(0).toUpperCase() + cat.slice(1)}
-                  </button>
-                ),
-              )}
-            </div>
-            <div className="grid grid-cols-4 gap-2">
-              {filteredBackgrounds.map((preset) => (
+        );
+      case "text":
+        return (
+          <div className="min-h-0 flex-1 border-t border-border/70">
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="px-4 py-4 space-y-3">
                 <button
-                  key={preset.id}
-                  onClick={() => handleImportBackground(preset)}
-                  disabled={generatingBackground !== null}
-                  className="aspect-square rounded-lg border border-border hover:border-primary/50 transition-all overflow-hidden relative group disabled:opacity-50"
-                  title={preset.name}
-                  style={{ background: preset.thumbnail }}
-                >
-                  {generatingBackground === preset.id && (
-                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    </div>
-                  )}
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100">
-                    <Plus size={16} className="text-white" />
-                  </div>
-                  <span className="absolute bottom-0 left-0 right-0 text-[8px] text-white bg-black/60 py-0.5 px-1 truncate opacity-0 group-hover:opacity-100 transition-opacity">
-                    {preset.name}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Shapes Section */}
-          <div className="mb-6">
-            <h4 className="text-xs font-medium text-text-secondary mb-3">
-              Shapes
-            </h4>
-            <div className="grid grid-cols-4 gap-2">
-              {[
-                {
-                  type: "rectangle" as ShapeType,
-                  icon: Square,
-                  label: "Rectangle",
-                },
-                { type: "circle" as ShapeType, icon: Circle, label: "Circle" },
-                {
-                  type: "triangle" as ShapeType,
-                  icon: Triangle,
-                  label: "Triangle",
-                },
-                { type: "star" as ShapeType, icon: Star, label: "Star" },
-                {
-                  type: "arrow" as ShapeType,
-                  icon: ArrowRight,
-                  label: "Arrow",
-                },
-                {
-                  type: "polygon" as ShapeType,
-                  icon: Hexagon,
-                  label: "Polygon",
-                },
-              ].map((shape) => (
-                <button
-                  key={shape.type}
-                  onClick={async () => {
-                    const state = useProjectStore.getState();
-                    const { createShapeClip, addTrack } = state;
-                    const tracksBefore = state.project.timeline.tracks;
-                    await addTrack("graphics", 0);
-                    const tracksAfter =
-                      useProjectStore.getState().project.timeline.tracks;
-                    const newGraphicsTrack = tracksAfter.find(
-                      (t) =>
-                        t.type === "graphics" &&
-                        !tracksBefore.some((bt) => bt.id === t.id),
-                    );
-                    if (newGraphicsTrack) {
-                      createShapeClip(newGraphicsTrack.id, 0, shape.type);
-                    }
-                  }}
-                  className="aspect-square bg-background-tertiary rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all flex flex-col items-center justify-center gap-1 group"
-                  title={shape.label}
-                >
-                  <shape.icon
-                    size={20}
-                    className="text-text-secondary group-hover:text-primary transition-colors"
-                  />
-                  <span className="text-[9px] text-text-muted group-hover:text-text-secondary">
-                    {shape.label}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* SVG Import Section */}
-          <div className="mb-6">
-            <h4 className="text-xs font-medium text-text-secondary mb-3">
-              SVG Import
-            </h4>
-            <button
-              onClick={() => {
-                const input = document.createElement("input");
-                input.type = "file";
-                input.accept = ".svg";
-                input.onchange = async (e) => {
-                  const file = (e.target as HTMLInputElement).files?.[0];
-                  if (file) {
-                    const content = await file.text();
-                    const state = useProjectStore.getState();
-                    const { importSVG, addTrack } = state;
-                    const tracksBefore = state.project.timeline.tracks;
-                    await addTrack("graphics", 0);
-                    const tracksAfter =
-                      useProjectStore.getState().project.timeline.tracks;
-                    const newGraphicsTrack = tracksAfter.find(
-                      (t) =>
-                        t.type === "graphics" &&
-                        !tracksBefore.some((bt) => bt.id === t.id),
-                    );
-                    if (newGraphicsTrack) {
-                      importSVG(content, newGraphicsTrack.id, 0);
-                    }
-                  }
-                };
-                input.click();
-              }}
-              className="w-full py-3 bg-background-tertiary rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all flex items-center justify-center gap-2 group"
-            >
-              <FileCode
-                size={16}
-                className="text-text-secondary group-hover:text-primary transition-colors"
-              />
-              <span className="text-xs text-text-secondary group-hover:text-text-primary">
-                Import SVG File
-              </span>
-            </button>
-          </div>
-
-          {/* Stickers Section (placeholder) */}
-          <div className="mb-6">
-            <h4 className="text-xs font-medium text-text-secondary mb-3">
-              Stickers & Emojis
-            </h4>
-            <div className="grid grid-cols-4 gap-2">
-              {["≡ƒÿÇ", "≡ƒÄë", "Γ¥ñ∩╕Å", "Γ¡É", "≡ƒöÑ", "≡ƒæì", "≡ƒÄ¼", "≡ƒÄ╡"].map(
-                (emoji, i) => (
-                  <button
-                    key={i}
-                    onClick={async () => {
-                      const state = useProjectStore.getState();
-                      const { createStickerClip, addTrack } = state;
-                      const { stickerLibrary } = await import("@openreel/core");
-
-                      const tracksBefore = state.project.timeline.tracks;
-                      await addTrack("graphics", 0);
-                      const tracksAfter =
-                        useProjectStore.getState().project.timeline.tracks;
-                      const newGraphicsTrack = tracksAfter.find(
-                        (t) =>
-                          t.type === "graphics" &&
-                          !tracksBefore.some((bt) => bt.id === t.id),
-                      );
-
-                      if (newGraphicsTrack) {
-                        const emojiItem = {
-                          id: `emoji-${i}`,
-                          emoji,
-                          name: emoji,
-                          category: "emojis",
-                        };
-                        const clip = stickerLibrary.createEmojiClip(
-                          emojiItem,
-                          newGraphicsTrack.id,
-                          0,
-                          5,
-                        );
-                        createStickerClip(clip);
-                      }
-                    }}
-                    className="aspect-square bg-background-tertiary rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all flex items-center justify-center text-xl cursor-pointer"
-                  >
-                    {emoji}
-                  </button>
-                ),
-              )}
-            </div>
-          </div>
-          </div>
-        </ScrollArea>
-      )}
-
-      {/* Text Tab Content */}
-      {activeTab === "text" && (
-        <ScrollArea className="flex-1">
-          <div className="px-5 pb-5 space-y-3">
-            <button
-              onClick={async () => {
-                const state = useProjectStore.getState();
-                const { createTextClip, addTrack } = state;
-                const tracksBefore = state.project.timeline.tracks;
-                await addTrack("text", 0);
-                const tracksAfter =
-                  useProjectStore.getState().project.timeline.tracks;
-                const newTextTrack = tracksAfter.find(
-                  (t) =>
-                    t.type === "text" &&
-                    !tracksBefore.some((bt) => bt.id === t.id),
-                );
-                if (newTextTrack) {
-                  createTextClip(newTextTrack.id, 0, "New Title");
-                }
-              }}
-              className="w-full py-4 bg-background-tertiary rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all text-center"
-            >
-              <span className="text-lg font-bold text-text-primary">
-                Add Title
-              </span>
-              <p className="text-xs text-text-muted mt-1">
-                Click to add text to timeline
-              </p>
-            </button>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                {
-                  name: "Heading",
-                  text: "Heading",
-                  style: {
-                    fontSize: 72,
-                    fontWeight: 700 as const,
-                    textAlign: "center" as const,
-                    verticalAlign: "middle" as const,
-                  },
-                },
-                {
-                  name: "Subtitle",
-                  text: "Subtitle text",
-                  style: {
-                    fontSize: 36,
-                    fontWeight: 400 as const,
-                    textAlign: "center" as const,
-                    verticalAlign: "middle" as const,
-                  },
-                },
-                {
-                  name: "Lower Third",
-                  text: "Name Here",
-                  style: {
-                    fontSize: 32,
-                    fontWeight: 600 as const,
-                    textAlign: "left" as const,
-                    verticalAlign: "bottom" as const,
-                    backgroundColor: "rgba(0, 0, 0, 0.7)",
-                  },
-                },
-                {
-                  name: "Caption",
-                  text: "Caption text here",
-                  style: {
-                    fontSize: 24,
-                    fontWeight: 400 as const,
-                    textAlign: "center" as const,
-                    verticalAlign: "bottom" as const,
-                    shadowColor: "rgba(0, 0, 0, 0.8)",
-                    shadowBlur: 4,
-                    shadowOffsetX: 1,
-                    shadowOffsetY: 1,
-                  },
-                },
-              ].map((preset) => (
-                <button
-                  key={preset.name}
                   onClick={async () => {
                     const state = useProjectStore.getState();
                     const { createTextClip, addTrack } = state;
@@ -1902,27 +1275,195 @@ export const AssetsPanel: React.FC = () => {
                         !tracksBefore.some((bt) => bt.id === t.id),
                     );
                     if (newTextTrack) {
-                      createTextClip(
-                        newTextTrack.id,
-                        0,
-                        preset.text,
-                        5,
-                        preset.style,
-                      );
+                      createTextClip(newTextTrack.id, 0, "New Title");
                     }
                   }}
-                  className="py-3 bg-background-tertiary rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all text-xs text-text-secondary hover:text-text-primary"
+                  className="w-full py-4 bg-background-tertiary rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all text-center"
                 >
-                  {preset.name}
+                  <span className="text-lg font-bold text-text-primary">
+                    Add Title
+                  </span>
+                  <p className="text-xs text-text-muted mt-1">
+                    Click to add text to timeline
+                  </p>
                 </button>
-              ))}
-            </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    {
+                      name: "Heading",
+                      text: "Heading",
+                      style: {
+                        fontSize: 72,
+                        fontWeight: 700 as const,
+                        textAlign: "center" as const,
+                        verticalAlign: "middle" as const,
+                      },
+                    },
+                    {
+                      name: "Subtitle",
+                      text: "Subtitle text",
+                      style: {
+                        fontSize: 36,
+                        fontWeight: 400 as const,
+                        textAlign: "center" as const,
+                        verticalAlign: "middle" as const,
+                      },
+                    },
+                    {
+                      name: "Lower Third",
+                      text: "Name Here",
+                      style: {
+                        fontSize: 32,
+                        fontWeight: 600 as const,
+                        textAlign: "left" as const,
+                        verticalAlign: "bottom" as const,
+                        backgroundColor: "rgba(0, 0, 0, 0.7)",
+                      },
+                    },
+                    {
+                      name: "Caption",
+                      text: "Caption text here",
+                      style: {
+                        fontSize: 24,
+                        fontWeight: 400 as const,
+                        textAlign: "center" as const,
+                        verticalAlign: "bottom" as const,
+                        shadowColor: "rgba(0, 0, 0, 0.8)",
+                        shadowBlur: 4,
+                        shadowOffsetX: 1,
+                        shadowOffsetY: 1,
+                      },
+                    },
+                  ].map((preset) => (
+                    <button
+                      key={preset.name}
+                      onClick={async () => {
+                        const state = useProjectStore.getState();
+                        const { createTextClip, addTrack } = state;
+                        const tracksBefore = state.project.timeline.tracks;
+                        await addTrack("text", 0);
+                        const tracksAfter =
+                          useProjectStore.getState().project.timeline.tracks;
+                        const newTextTrack = tracksAfter.find(
+                          (t) =>
+                            t.type === "text" &&
+                            !tracksBefore.some((bt) => bt.id === t.id),
+                        );
+                        if (newTextTrack) {
+                          createTextClip(
+                            newTextTrack.id,
+                            0,
+                            preset.text,
+                            5,
+                            preset.style,
+                          );
+                        }
+                      }}
+                      className="py-3 bg-background-tertiary rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all text-xs text-text-secondary hover:text-text-primary"
+                    >
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </ScrollArea>
           </div>
-        </ScrollArea>
-      )}
+        );
+      case "ai":
+        return (
+          <div className="flex min-h-0 flex-1 flex-col border-t border-border/70 bg-background-secondary content-area-fix">
+            <AIGenTab />
+          </div>
+        );
+      case "recipes":
+        return (
+          <div className="flex min-h-0 flex-1 flex-col border-t border-border/70 bg-background-secondary content-area-fix">
+            <RecipesTab />
+          </div>
+        );
+      case "templates":
+        return (
+          <div className="flex min-h-0 flex-1 flex-col border-t border-border/70 bg-background-secondary content-area-fix">
+            <TemplatesTab />
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
 
-      {/* AI Tab Content */}
-      {activeTab === "ai" && <AIGenTab />}
+  return (
+    <div
+      data-tour="assets"
+      className="w-full min-w-0 bg-background-secondary border-r border-border flex h-full relative"
+    >
+      {/* Left Sidebar / Activity Bar */}
+      <div className="w-[64px] shrink-0 flex flex-col items-center py-4 gap-4 border-r border-border bg-background-tertiary z-10 overflow-y-auto">
+        {ASSETS_TABS.map((tab) => {
+          const Icon = TAB_ICONS[tab.value];
+          const isActive = activeTab === tab.value;
+          return (
+            <button
+              key={tab.value}
+              onClick={() => setActiveTab(tab.value)}
+              title={tab.description}
+              className={`relative flex flex-col items-center justify-center w-11 h-11 rounded-xl transition-all group ${
+                isActive
+                  ? "bg-background-elevated text-primary shadow-sm ring-1 ring-primary/20"
+                  : "text-text-muted hover:bg-background-elevated/50 hover:text-text-secondary"
+              }`}
+            >
+              <Icon size={20} strokeWidth={isActive ? 2.5 : 2} />
+              {isActive && (
+                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-primary rounded-r-full" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-w-0 h-full bg-background-secondary relative">
+        {/* Loading overlay */}
+        {isImporting && (
+          <LoadingIndicator message={importProgress || "Importing media..."} />
+        )}
+        
+        {/* Panel Header */}
+        <div className="px-5 py-4 flex items-center justify-between border-b border-border/40 shrink-0">
+          <div>
+            <h2 className="font-bold text-sm text-text-primary tracking-tight">
+              {ASSETS_TABS.find((t) => t.value === activeTab)?.label}
+            </h2>
+            <p className="text-[11px] text-text-muted mt-0.5 line-clamp-1">
+              {ASSETS_TABS.find((t) => t.value === activeTab)?.description}
+            </p>
+          </div>
+          <div className="flex gap-1 shrink-0">
+            {activeTab === "media" && (
+              <IconButton
+                icon={Plus}
+                onClick={triggerFileInput}
+                title="Import media"
+              />
+            )}
+          </div>
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="video/*,audio/*,image/*"
+          onChange={(e) => handleFileImport(e.target.files)}
+          className="hidden"
+        />
+
+        {/* Dynamic Section Content */}
+        <div className="flex-1 min-h-0 relative flex flex-col overflow-hidden">
+          {renderSectionContent(activeTab)}
+        </div>
+      </div>
 
       {aspectRatioDialogData && (
         <AspectRatioMatchDialog
@@ -1936,72 +1477,16 @@ export const AssetsPanel: React.FC = () => {
         />
       )}
 
-      <Dialog open={showCopyProjectModal} onOpenChange={setShowCopyProjectModal}>
-        <DialogContent className="max-w-md p-0 gap-0 bg-background-secondary border-border overflow-hidden">
-          <DialogHeader className="p-4 border-b border-border space-y-1">
-            <DialogTitle className="text-base font-semibold text-text-primary">
-              Opciones de carpeta
-            </DialogTitle>
-            <DialogDescription className="text-xs text-text-muted">
-              A├▒adir al timeline o copiar a otro proyecto.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="p-3 space-y-2 max-h-[320px] overflow-y-auto">
-            <button
-              onClick={() => {
-                setShowCopyProjectModal(false);
-                handleAddV2VFolderAsNewTracks();
-              }}
-              className="w-full text-left p-3 mb-2 rounded-lg border border-primary/40 bg-primary/10 hover:border-primary transition-colors flex items-center justify-between"
-            >
-              <div>
-                <div className="text-sm font-medium text-primary">A├▒adir al timeline</div>
-                <div className="text-[11px] text-text-muted mt-0.5">En nuevas pistas sincronizadas con job V2V</div>
-              </div>
-              <Plus size={18} className="text-primary" />
-            </button>
-            
-            {copyTargets.length > 0 && (
-              <div className="text-[10px] font-bold text-text-muted uppercase mb-1 tracking-wider mt-4 px-1">
-                Copiar a otro proyecto
-              </div>
-            )}
-            {copyTargets.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => handleConfirmCopyToTarget(t.id)}
-                disabled={Boolean(copyingTargetId)}
-                className="w-full text-left p-3 rounded-lg border border-border bg-background-tertiary hover:border-primary/50 transition-colors disabled:opacity-60"
-              >
-                <div className="text-sm font-medium text-text-primary">{t.name}</div>
-                <div className="text-[11px] text-text-muted">{t.subtitle}</div>
-              </button>
-            ))}
-          </div>
-
-          <div className="p-3 border-t border-border flex justify-end">
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => setShowCopyProjectModal(false)}
-              disabled={Boolean(copyingTargetId)}
-            >
-              Cerrar
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* AI Audio Generation Modal */}
-      {activeFolder && (
-        <GenerateAudioSegmentSection
-          key={activeFolder}
-          folder={activeFolder}
-          open={showGenerateAudio}
-          onOpenChange={setShowGenerateAudio}
+      {kieaiDialog && (
+        <KieAIImageDialog
+          open={true}
+          onClose={() => setKieaiDialog(null)}
+          sourceFile={kieaiDialog.file}
+          previewUrl={kieaiDialog.previewUrl}
         />
       )}
+
+      <V2VMediaFolderModals {...v2v} />
     </div>
   );
 };

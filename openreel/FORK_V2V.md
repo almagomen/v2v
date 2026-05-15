@@ -13,11 +13,12 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 | UI | `apps/web/src/components/editor/V2VPanel.tsx`, `ColabExportTab.tsx` |
 | Inspector | `apps/web/src/components/editor/inspector/CloneVoiceSegmentSection.tsx` |
 | Env | `apps/web/.env.example` (bloque `VITE_V2V_API_URL`) |
+| Carpetas / timeline V2V en Assets | `apps/web/src/v2v/assets-integration/` (`v2v-folder-utils.ts`, `useV2VMediaFolders.ts`, `V2VMediaFolderChrome.tsx`) |
 
 ## Archivos compartidos con upstream (revisar en cada merge)
 
 - `apps/web/src/components/editor/Toolbar.tsx` — icono YouTube, drawer `V2VPanel`, guardado manual.
-- `apps/web/src/components/editor/AssetsPanel.tsx` — carpetas `nombre/carpeta`, import V2V, diálogos de carpeta.
+- `apps/web/src/components/editor/AssetsPanel.tsx` — **solo enganches** en la pestaña Media: hook `useV2VMediaFolders`, componentes `V2VMediaFolderRails` / `V2VMediaFolderModals`, import y drop delegados en `v2v.importDroppedFiles`, rejilla con `v2v.filteredItems` e `itemForThumbnail`. La lógica pesada está en `v2v/assets-integration/`.
 - `apps/web/src/components/editor/InspectorPanel.tsx` — sección **Clone Voice (V2V)** en clips de audio.
 - `apps/web/src/components/editor/inspector/index.ts` — export de `CloneVoiceSegmentSection`.
 - `apps/web/src/stores/project-store.ts` — `v2vFolderRefs` en `forceSave` y al recuperar autosave.
@@ -37,7 +38,7 @@ Si aparecen muchos conflictos `AA` (add/add), una estrategia que funcionó aquí
 1. `git checkout --theirs openreel` y `git add openreel` para tomar la base upstream.
 2. Restaurar desde la rama anterior los archivos **solo V2V** de la tabla de arriba (`git checkout <rama-base>:openreel/apps/web/...`).
 3. Reaplicar a mano los parches en Toolbar, InspectorPanel, `inspector/index.ts`, `project-store.ts` y `.env.example`.
-4. Para **AssetsPanel**: el upstream añadió pestañas (p. ej. Recipes/Templates) y KieAI; la versión con V2V completo puede ser la anterior del fork — conviene fusionar después las nuevas pestañas si las necesitas.
+4. **AssetsPanel**: conservar el archivo upstream y volver a insertar el bloque V2V (imports de `useV2VMediaFolders` y `V2VMediaFolderRails` / `V2VMediaFolderModals`, `v2v.filteredItems` en la rejilla, delegación de import/drop en `v2v.importDroppedFiles`). Si upstream cambió la pestaña Media, edita solo el `case "media"` y deja intacto Recipes/Templates/KieAI.
 
 5. `pnpm install && pnpm run build` dentro de `openreel/`.
 
