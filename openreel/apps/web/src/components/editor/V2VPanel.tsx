@@ -16,6 +16,7 @@ import {
 import { createSegmentInfo } from "../../utils/v2v-segment-ids";
 import { ColabExportTab } from "./ColabExportTab";
 import { CloneVoiceSegmentSection } from "./v2v/CloneVoiceSegmentSection";
+import { V2VSegmentBulkEditor } from "./v2v/V2VSegmentBulkEditor";
 import { useUIStore } from "../../stores/ui-store";
 
 const TRANSLATE_OPTIONS = [
@@ -88,6 +89,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     speakers,
     fetchSpeakers,
     startPolling,
+    getFolderRef,
   } = useV2VStore();
 
   const { project, getClip, getMediaItem } = useProjectStore();
@@ -117,6 +119,21 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     }
     return -1;
   }, [videos, project.name]);
+
+  const bulkEditorContext = useMemo(() => {
+    const videoIdx =
+      selectedVideoIndex >= 0 ? selectedVideoIndex : effectiveDropdownValue;
+    if (!jobId || videoIdx < 0 || !videos[videoIdx]) return null;
+    const v = videos[videoIdx] as { index: number; output_name?: string; url?: string };
+    const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
+    if (!getFolderRef(folder)) return null;
+    return {
+      jobId,
+      videoIndex: v.index,
+      folder,
+      targetLang: translateLang === "None" ? null : translateLang,
+    };
+  }, [jobId, selectedVideoIndex, effectiveDropdownValue, videos, getFolderRef, translateLang]);
 
   useEffect(() => {
     if (speakers.length === 0) {
@@ -584,7 +601,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                             videoIndex: v.index,
                             segIdx: seg.seg,
                             folder: folder,
-                            originalText: seg.text || "",
+                            originalText:
+                              v.segments?.find((s) => s.seg === seg.seg)?.text || "",
                             speaker: seg.speaker,
                           });
                           useV2VStore.getState().setSegmentInfo(folder, segmentData);
@@ -606,6 +624,17 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             </div>
 
           </>
+        )}
+
+        {bulkEditorContext && (
+          <div className="pt-4 mt-4 border-t border-border">
+            <V2VSegmentBulkEditor
+              jobId={bulkEditorContext.jobId}
+              videoIndex={bulkEditorContext.videoIndex}
+              folder={bulkEditorContext.folder}
+              targetLang={bulkEditorContext.targetLang}
+            />
+          </div>
         )}
 
         <div className="pt-4 mt-4 border-t border-border space-y-3">

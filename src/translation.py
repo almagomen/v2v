@@ -21,9 +21,11 @@ def translate_text_list(
     list_sentences: list[str],
     target_lang: str,
     source_lang: str = "en",
+    mode: str = "similar_length",
 ) -> list[str] | None:
     """
     Traduce una lista de frases a un idioma objetivo usando Gemini.
+    mode: "similar_length" | "shorter"
     """
     if not list_sentences:
         return []
@@ -39,6 +41,12 @@ def translate_text_list(
     source_lang_name = LANGUAGE_NAMES.get(source_lang, "español")
     target_lang_name = LANGUAGE_NAMES.get(target_lang, "ingles")
 
+    length_hint = (
+        "Cada string traducida debe ser MÁS CORTA o igual que el original: prioriza encajar en la misma duración de voz (menos palabras si hace falta), sin perder el sentido principal."
+        if mode == "shorter"
+        else "Cada string traducida debe tener una longitud similar a la del lenguaje original."
+    )
+
     prompt = f"""
 Eres un traductor experto. Traduce el siguiente texto del {source_lang_name} al {target_lang_name}.
 El texto original está compuesto por varias frases que forman un párrafo o una secuencia lógica.
@@ -52,7 +60,7 @@ Texto original en {source_lang_name}:
 
 Por favor, devuelve la traducción como una LISTA JSON de strings, donde cada string
 corresponda a una frase traducida, manteniendo el mismo orden que las frases originales.
-Cada string traducida debe tener una longitud similar a la del lenguaje original.
+{length_hint}
 Asegúrate de que la salida sea únicamente la lista JSON y nada más.
 """
 

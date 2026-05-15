@@ -103,6 +103,27 @@ export interface AudioSegmentItem {
   filename: string;
 }
 
+export interface SegmentEditorRow {
+  seg: number;
+  start: number;
+  end: number;
+  slot_duration: number;
+  original_text: string;
+  tts_text: string;
+  speaker?: string | null;
+  filename?: string | null;
+}
+
+export interface SegmentsEditorResponse {
+  job_id: string;
+  video_index: number;
+  source_lang?: string | null;
+  target_lang?: string | null;
+  segments: SegmentEditorRow[];
+}
+
+export type RetranslateMode = "shorter" | "similar_length";
+
 export interface JobUrlItem {
   url: string;
   status: string;
@@ -408,6 +429,40 @@ export const v2vApi = {
     const res = await fetch(url(`/api/segment-speed?job_id=${jobId}&video_index=${videoIndex}&seg_idx=${segIdx}`));
     if (!res.ok) return { speed: 1.0 };
     return readJsonOrThrow<{ speed: number }>(res);
+  },
+
+  async getSegmentsEditor(jobId: string, videoIndex: number): Promise<SegmentsEditorResponse> {
+    const res = await fetch(url(`/api/job/${jobId}/segments-editor/${videoIndex}`));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al cargar segmentos para edición");
+    }
+    return readJsonOrThrow<SegmentsEditorResponse>(res);
+  },
+
+  async retranslateSegments(
+    jobId: string,
+    videoIndex: number,
+    segIndices: number[],
+    mode: RetranslateMode,
+    targetLang?: string | null,
+  ): Promise<{ segments: Array<{ seg: number; text: string }> }> {
+    const res = await fetch(url("/api/retranslate-segments"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: jobId,
+        video_index: videoIndex,
+        seg_indices: segIndices,
+        mode,
+        target_lang: targetLang ?? null,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al retraducir segmentos");
+    }
+    return readJsonOrThrow<{ segments: Array<{ seg: number; text: string }> }>(res);
   },
 
   /**

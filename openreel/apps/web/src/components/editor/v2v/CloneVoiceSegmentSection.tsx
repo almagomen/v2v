@@ -4,12 +4,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { v2vApi, type SpeakerOption } from "../../../lib/v2v-api";
 import { useProjectStore } from "../../../stores/project-store";
-import { moveClipToTrack, renameMediaInLibrary } from "../../../utils/detached-project-actions";
-
 import { useV2VStore } from "../../../stores/v2v-store";
 import { invalidateAudioCache } from "../../../stores/audio-cache-store";
 import { generateSegmentId } from "../../../utils/v2v-segment-ids";
 import { parseV2VSegmentFromName } from "../../../utils/v2v-utils";
+import {
+  applyRegeneratedSegmentToTimeline,
+  getAudioDuration,
+} from "../../../utils/v2v-segment-regen";
 
 function joinNonEmpty(parts: string[]): string {
   return parts
@@ -20,23 +22,8 @@ function joinNonEmpty(parts: string[]): string {
     .trim();
 }
 
-async function getAudioDuration(blob: Blob): Promise<number> {
-  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-  if (!AudioContextClass) {
-    throw new Error("AudioContext no soportado");
-  }
-  const audioContext = new AudioContextClass();
-  try {
-    const arrayBuffer = await blob.arrayBuffer();
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    return audioBuffer.duration;
-  } finally {
-    audioContext.close();
-  }
-}
-
 export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId }) => {
-  const { getClip, getMediaItem, replaceMediaAsset, forceSave, loadProject } = useProjectStore();
+  const { getClip, getMediaItem, replaceMediaAsset, forceSave } = useProjectStore();
   const clip = getClip(clipId);
   const mediaItem = clip ? getMediaItem(clip.mediaId) : undefined;
 
@@ -113,16 +100,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const [speedInput, setSpeedInput] = useState<string>("");
   const [speedMode, setSpeedMode] = useState<"x" | "s">("x");
   const [isApplyingSpeed, setIsApplyingSpeed] = useState(false);
-
-  function getSpeakerFilenameToken(): string {
-    if (!parsed) return "unknown";
-    const speakerChanged = parsed.speakerToken !== selectedVoice;
-    if (!speakerChanged) {
-      return parsed.speakerToken;
-    }
-    const speakerLabel = speakers.find((s) => s.value === selectedVoice)?.label || selectedVoice;
-    return speakerLabel.replace(/[^a-zA-Z0-9_-]/g, "_");
-  }
 
   function getSpeakerTrackName(): string {
     return speakers.find((s) => s.value === selectedVoice)?.label || selectedVoice;
@@ -290,7 +267,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
     const currentText = segmentText;
     const currentSpeaker = selectedVoice;
     const oldSpeaker = parsed.speakerToken;
-    const segmentId = generateSegmentId(folderRef.jobId, folderRef.videoIndex, parsed.segIdx);
 
     let effectiveSpeed = parseFloat(speedInput) || (speedMode === "x" ? 1.0 : (effectiveTimes ? effectiveTimes.end - effectiveTimes.start : 1.0));
     let targetDuration: number | undefined;
@@ -316,40 +292,29 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         targetDuration,
       );
 
+      const applyResult = await applyRegeneratedSegmentToTimeline({
+        folder: parsed.folder,
+        jobId: folderRef.jobId,
+        videoIndex: folderRef.videoIndex,
+        segIdx: parsed.segIdx,
+        regenBlob,
+        text: currentText,
+        speaker: currentSpeaker,
+        speakerLabel: getSpeakerTrackName(),
+        previousSpeakerToken: oldSpeaker,
+        start: effectiveTimes.start,
+        end: effectiveTimes.end,
+        effectiveSpeed,
+        mediaId: mediaItem.id,
+        clipId,
+        trackStart: clip.startTime,
+      });
+
+      if (!applyResult.success) {
+        throw new Error(applyResult.message);
+      }
+
       const newDuration = await getAudioDuration(regenBlob);
-
-      const speakerChanged = oldSpeaker !== currentSpeaker;
-      const filenameToken = getSpeakerFilenameToken();
-      const trackName = getSpeakerTrackName();
-
-      const newFileName = `tts_${filenameToken}_${String(parsed.segIdx).padStart(3, "0")}.wav`;
-      const newMediaName = `${parsed.folder}/${newFileName}`;
-
-      const file = new File([regenBlob], newMediaName, { type: "audio/wav" });
-      
-      const { updateSegmentText, updateSegmentSpeaker, updateSegmentSpeed } = useV2VStore.getState();
-      updateSegmentText(parsed.folder, segmentId, currentText);
-      updateSegmentSpeaker(parsed.folder, segmentId, currentSpeaker);
-      updateSegmentSpeed(parsed.folder, segmentId, effectiveSpeed);
-
-      const result = await replaceMediaAsset(mediaItem.id, file);
-      if (!result.success) {
-        const msg =
-          typeof result.error === "string"
-            ? result.error
-            : result.error?.message || "Error al reemplazar audio";
-        throw new Error(msg);
-      }
-
-      invalidateAudioCache(mediaItem.id);
-
-      const { getClip, trimClip } = useProjectStore.getState();
-      const currentClip = getClip(clipId);
-      if (currentClip) {
-        const newOutPoint = currentClip.inPoint + newDuration;
-        await trimClip(clipId, currentClip.inPoint, newOutPoint);
-      }
-
       if (segmentTimes) {
         setSegmentTimes({
           start: segmentTimes.start,
@@ -357,49 +322,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         });
       }
 
-      if (speakerChanged) {
-        const { project: renamedProject } = useProjectStore.getState();
-        const projectAfterRename = renameMediaInLibrary(
-          renamedProject,
-          mediaItem.id,
-          newMediaName,
-        );
-        const moveResult = await moveClipToTrack(
-          projectAfterRename,
-          clipId,
-          trackName,
-          effectiveTimes.start,
-        );
-        if (moveResult.success) {
-          loadProject(moveResult.project);
-        } else {
-          loadProject(projectAfterRename);
-        }
-        setRegenStatus(`Segmento regenerado y movido a pista "${trackName}"`);
-      } else {
-        setRegenStatus("Segmento regenerado");
-      }
-
-      try {
-        const parts = newMediaName.replace(/\\/g, "/").split("/");
-        const subfolder = parts.length > 1 ? parts[0] : "";
-        const baseName = parts[parts.length - 1] ?? newFileName;
-        await v2vApi.uploadMediaForRender(
-          folderRef.jobId,
-          folderRef.videoIndex,
-          new File([regenBlob], baseName, { type: "audio/wav" }),
-          subfolder || undefined,
-        );
-        await useV2VStore.getState().syncFolderAssets(
-          folderRef.jobId,
-          folderRef.videoIndex,
-          parsed.folder,
-        );
-      } catch (syncErr) {
-        console.warn("[V2V] No se pudo sincronizar el audio regenerado en Colab:", syncErr);
-      }
-
-      await forceSave();
+      setRegenStatus(applyResult.message);
     } catch (e) {
       setRegenError(e instanceof Error ? e.message : "Error al regenerar");
     } finally {

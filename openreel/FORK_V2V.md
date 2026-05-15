@@ -12,6 +12,7 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 | Import masivo | `apps/web/src/utils/import-media-into-project.ts` |
 | UI principal | `apps/web/src/components/editor/V2VPanel.tsx`, `ColabExportTab.tsx` |
 | Clonar voz segmento | `apps/web/src/components/editor/v2v/CloneVoiceSegmentSection.tsx` |
+| Editor masivo segmentos | `apps/web/src/components/editor/v2v/V2VSegmentBulkEditor.tsx`, `apps/web/src/utils/v2v-segment-regen.ts` |
 | Caché audio preview | `apps/web/src/stores/audio-cache-store.ts` (dispara `openreel:preview-invalidate`) |
 | Env / dev | `apps/web/.env.example` (`VITE_V2V_API_URL`), `apps/web/vite.config.ts` (`allowedHosts`, proxy `/api` → FastAPI) |
 | Carpetas / timeline V2V en Assets | `apps/web/src/v2v/assets-integration/` |
@@ -23,6 +24,7 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 - `apps/web/src/stores/project-store.ts` — `v2vFolderRefs` en `forceSave`; `replaceMediaAsset` persiste blob + invalida preview.
 - `apps/web/src/components/editor/GenerateAudioSegmentSection.tsx` — TTS por carpeta y API v2v.
 - Repo padre: `api/routes/render.py` — resolución de medios TTS por índice en `v2v_assets.json` (prioridad sobre copias obsoletas).
+- Repo padre: `api/routes/segments.py` — editor masivo (`GET segments-editor`, `POST retranslate-segments`); `src/translation.py` modos `shorter` / `similar_length`.
 
 **Ya no tocar en upstream:** `InspectorPanel.tsx` no incluye Clone Voice (vive solo en `V2VPanel`).
 
@@ -46,6 +48,14 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 1. Seleccionar clip de audio TTS en el timeline → panel **Video2Video** → sección **Clonar voz del segmento**.
 2. Tras regenerar: `replaceMediaAsset` actualiza blob/waveform, invalida caché de preview (`openreel:preview-invalidate`), sube WAV a Colab (`uploadMediaForRender`) y `syncFolderAssets`.
 3. Export FFmpeg en Colab resuelve segmentos por índice en `segments` del manifiesto, no por copias antiguas en otras claves.
+
+### Editor masivo de segmentos
+
+1. Con job activo y video importado (`v2vFolderRefs`), panel **Video2Video** → **Editar segmentos** (entre “Video procesado” y “Clonar voz”).
+2. `GET /api/job/{job_id}/segments-editor/{video_index}` lee `result.pkl`: columna **Original (STT)** vs **TTS**; fusiona textos editados del store.
+3. **Proponer traducción** → `POST /api/retranslate-segments` con modo **Más corto** o **Longitud similar** (solo filas seleccionadas).
+4. **Aplicar** llama `regenerate-segment` por fila modificada y `applyRegeneratedSegmentToTimeline` (misma lógica que Clone Voice). **Encajar slot** usa `target_duration` (modo velocidad `s`).
+5. Filtro “Solo problemáticos”: ratio texto TTS/original > 1.15 o speed > 1.05.
 
 ## Cómo actualizar desde `Augani/openreel-video`
 

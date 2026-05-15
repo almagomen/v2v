@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import process, files, regenerate, speakers, share, transcribe_audio, render, video_ops
+from api.routes import process, files, regenerate, speakers, share, transcribe_audio, render, video_ops, segments
 
 app = FastAPI(
     title="v2v API",
@@ -34,6 +34,7 @@ app.include_router(share.router)
 app.include_router(transcribe_audio.router)
 app.include_router(render.router)
 app.include_router(video_ops.router)
+app.include_router(segments.router)
 
 
 @app.get("/health")

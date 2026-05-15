@@ -1,7 +1,7 @@
 """Pydantic schemas for v2v API."""
 
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 
 
 class ProcessUrlsRequest(BaseModel):
@@ -135,3 +135,39 @@ class JobPollResponse(BaseModel):
     log: str = ""
     items: list[dict] = []
     result: Optional[JobResultResponse] = None
+
+
+class SegmentEditorRow(BaseModel):
+    seg: int
+    start: float
+    end: float
+    slot_duration: float
+    original_text: str
+    tts_text: str
+    speaker: Optional[str] = None
+    filename: Optional[str] = None
+
+
+class SegmentsEditorResponse(BaseModel):
+    job_id: str
+    video_index: int
+    source_lang: Optional[str] = None
+    target_lang: Optional[str] = None
+    segments: list[SegmentEditorRow]
+
+
+class RetranslateSegmentsRequest(BaseModel):
+    job_id: str
+    video_index: int = 0
+    seg_indices: list[int] = Field(..., min_length=1)
+    mode: Literal["shorter", "similar_length"] = "similar_length"
+    target_lang: Optional[str] = None
+
+
+class RetranslateSegmentItem(BaseModel):
+    seg: int
+    text: str
+
+
+class RetranslateSegmentsResponse(BaseModel):
+    segments: list[RetranslateSegmentItem]
