@@ -3,7 +3,13 @@ import { v2vApi, type Segment, type VideoResult, type JobUrlItem, type AudioSegm
 import { useProjectStore } from "./project-store";
 import { createEmptyProject } from "./project";
 import { importMultipleMediaIntoProject } from "../utils/import-media-into-project";
-import { toSafeToken, folderNameFromTitle, importKeyFor } from "../utils/v2v-utils";
+import {
+  folderNameFromTitle,
+  importKeyFor,
+  segmentLogicalName,
+  findSegmentMediaInLibrary,
+} from "../utils/v2v-utils";
+import { toast } from "./notification-store";
 import {
   addClipToDetachedProject,
   addTrackAndGetId,
@@ -619,11 +625,11 @@ export const useV2VStore = create<V2VState>((set, get) => {
                   };
 
                   const assetTasks = assets.map(fetchAssetBlob);
-                  const segmentTasks = audioSegs.map(seg => {
-                    const speakerToken = toSafeToken(seg.speaker || "speaker");
-                    const logicalName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(3, "0")}.wav`;
-                    return v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg)
-                      .then(blob => ({ isSegment: true as const, seg, logicalName, blob }))
+                  const segmentTasks = audioSegs.map((seg) => {
+                    const logicalName = segmentLogicalName(folder, seg);
+                    return v2vApi
+                      .fetchAudioSegmentBlob(jobId, v.index, seg.seg)
+                      .then((blob) => ({ isSegment: true as const, seg, logicalName, blob }))
                       .catch(() => null);
                   });
 
@@ -634,6 +640,20 @@ export const useV2VStore = create<V2VState>((set, get) => {
 
                   const downloadedAssets = downloadedAssetsRaw.filter((d): d is { asset: V2VAssetDef, blob: Blob } => d !== null);
                   const downloadedSegs = downloadedSegsRaw.filter((d): d is { isSegment: true, seg: AudioSegmentItem, logicalName: string, blob: Blob } => d !== null);
+
+                  if (audioSegs.length > 0 && downloadedSegs.length === 0) {
+                    console.warn(
+                      `[V2V] ${audioSegs.length} segmentos listados pero ningún WAV descargado para ${folder}`,
+                    );
+                    get().setImportStatus(key, "error");
+                    if (urlForLog) {
+                      get().appendUrlLog(
+                        urlForLog,
+                        "❌ No se pudieron descargar los audios TTS; reintenta o usa Re-importar.",
+                      );
+                    }
+                    continue;
+                  }
 
                   const filesToImport = [
                     ...downloadedAssets.map(d => new File([d.blob], d.asset.logicalName, { type: d.asset.type === 'video' ? 'video/mp4' : 'audio/wav' })),
@@ -680,11 +700,24 @@ export const useV2VStore = create<V2VState>((set, get) => {
 
                       workingProject = renameTrackInProject(workingProject, trackId, sKey);
                       for (const d of segs) {
-                        const media = workingProject.mediaLibrary.items.find(m => m.name === d.logicalName);
-                        if (media) {
-                          const clipRes = (await addClipToDetachedProject(workingProject, trackId, media.id, d.seg.start)) as any;
-                          workingProject = clipRes.project!;
+                        const media = findSegmentMediaInLibrary(
+                          workingProject.mediaLibrary.items,
+                          folder,
+                          d.seg,
+                        );
+                        if (!media) {
+                          console.warn(
+                            `[V2V] Segmento ${d.seg.seg} no montado: logicalName=${d.logicalName}, filename=${d.seg.filename}`,
+                          );
+                          continue;
                         }
+                        const clipRes = (await addClipToDetachedProject(
+                          workingProject,
+                          trackId,
+                          media.id,
+                          d.seg.start,
+                        )) as { project?: typeof workingProject };
+                        if (clipRes.project) workingProject = clipRes.project;
                       }
                     }
 
@@ -721,9 +754,13 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     
                     get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index, outputName: v.output_name, nativeFiles });
                     
-                    const segsWithMediaInfo = downloadedSegs.map(d => {
-                      const media = workingProject.mediaLibrary.items.find(m => m.name === d.logicalName);
-                      const videoSegment = v.segments.find(s => s.seg === d.seg.seg);
+                    const segsWithMediaInfo = downloadedSegs.map((d) => {
+                      const media = findSegmentMediaInLibrary(
+                        workingProject.mediaLibrary.items,
+                        folder,
+                        d.seg,
+                      );
+                      const videoSegment = v.segments.find((s) => s.seg === d.seg.seg);
                       return {
                         seg: d.seg,
                         mediaId: media?.id || "",
@@ -750,6 +787,20 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     
                     get().setImportStatus(key, "done");
                     if (urlForLog) get().appendUrlLog(urlForLog, `✅ Importación completada por activos.`);
+
+                    const activeProject = useProjectStore.getState().project;
+                    if (activeProject.name === folder) {
+                      useProjectStore.getState().loadProject(workingProject);
+                      toast.success(
+                        "Timeline V2V actualizado",
+                        "Video, instrumental y voces TTS montados en el timeline.",
+                      );
+                    } else {
+                      toast.info(
+                        "Importación guardada en autosave",
+                        `Abre el proyecto "${folder}" o recupera el autosave más reciente para ver el timeline completo.`,
+                      );
+                    }
                   }
                 }
               } catch (err) {

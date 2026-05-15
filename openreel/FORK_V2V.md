@@ -8,7 +8,7 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 |------|------|
 | Cliente API | `apps/web/src/lib/v2v-api.ts` |
 | Estado V2V | `apps/web/src/stores/v2v-store.ts` |
-| Utilidades / IDs | `apps/web/src/utils/v2v-utils.ts` (`parseV2VSegmentFromName`, etc.), `apps/web/src/utils/v2v-segment-ids.ts` |
+| Utilidades / IDs | `apps/web/src/utils/v2v-utils.ts` (`segmentLogicalName`, `findSegmentMediaInLibrary`, `parseV2VSegmentFromName`), `apps/web/src/utils/v2v-segment-ids.ts` |
 | Import masivo | `apps/web/src/utils/import-media-into-project.ts` |
 | UI principal | `apps/web/src/components/editor/V2VPanel.tsx`, `ColabExportTab.tsx` |
 | Clonar voz segmento | `apps/web/src/components/editor/v2v/CloneVoiceSegmentSection.tsx` |
@@ -32,6 +32,14 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 
 - Vite (`:5173`) hace proxy de `/api/*` a FastAPI (`V2V_API_PROXY_TARGET`, por defecto `http://127.0.0.1:8000`).
 - `allowedHosts: true` evita bloqueo del host variable de Colab/Codatalab.
+
+### Import automático al timeline (tras inferencia)
+
+1. Al terminar el job (`status === done`), `v2v-store` descarga video, instrumental y segmentos TTS.
+2. Los WAV TTS usan el **`filename` real** del API (`GET /audio-segments`), vía `segmentLogicalName()` — no se reconstruye solo desde `speaker`.
+3. Se montan pistas por speaker con `addClip` en `seg.start`; si falla la descarga de todos los TTS, el import queda en `error` (no `done` con timeline incompleto).
+4. El proyecto se guarda en **autosave**. Si el proyecto activo ya se llama igual que la carpeta V2V, se aplica `loadProject` al editor; si no, toast para abrir/recuperar ese proyecto.
+5. Al elegir el video en el dropdown V2V, se recupera el **autosave más reciente** de ese nombre (también si ya era el proyecto activo).
 
 ### Clonar voz de un segmento
 
@@ -58,5 +66,6 @@ Si aparecen muchos conflictos `AA` (add/add):
 ## Comprobación rápida
 
 - Build: `cd openreel && pnpm run build`
-- Panel Video2Video: procesar URL, importar, seleccionar clip TTS → clonar voz → preview y export Colab con audio nuevo.
+- Panel Video2Video: procesar URL → al completar, timeline con Video + INSTRUMENTAL + pistas TTS por speaker.
+- Clonar voz en clip TTS → preview y export Colab con audio nuevo.
 - `v2vFolderRefs` tras guardar y recuperar autosave.

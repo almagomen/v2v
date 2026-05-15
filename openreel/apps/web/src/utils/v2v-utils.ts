@@ -42,6 +42,35 @@ export type V2VParsedSegment = {
 };
 
 /** Parsea nombres de medios importados desde V2V (tts_/gen_ en carpeta de job). */
+export type SegmentNameInput = {
+  seg: number;
+  speaker?: string;
+  filename?: string;
+};
+
+/** Ruta lógica en Media (`carpeta/tts_…_NNN.wav`) alineada con el WAV real en Colab. */
+export function segmentLogicalName(folder: string, seg: SegmentNameInput): string {
+  const base =
+    seg.filename?.trim() ||
+    `tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(3, "0")}.wav`;
+  return base.includes("/") ? base : `${folder}/${base}`;
+}
+
+/** Busca un ítem de media por nombre lógico o por sufijo tts_*_{seg}.wav */
+export function findSegmentMediaInLibrary<
+  T extends { name: string },
+>(items: T[], folder: string, seg: SegmentNameInput): T | undefined {
+  const logical = segmentLogicalName(folder, seg);
+  const exact = items.find((m) => m.name === logical);
+  if (exact) return exact;
+
+  const suffix = `_${String(seg.seg).padStart(3, "0")}.wav`;
+  return items.find((m) => {
+    const norm = m.name.replace(/\\/g, "/");
+    return norm.startsWith(`${folder}/`) && /(?:tts_|gen_).*/.test(norm) && norm.endsWith(suffix);
+  });
+}
+
 export function parseV2VSegmentFromName(name: string): V2VParsedSegment | null {
   const normalized = name.replace(/\\/g, "/");
   const match = normalized.match(/^(?:(.+?)\/)?(tts_|gen_)(.+)_(\d{3})\.wav$/);

@@ -7,10 +7,11 @@ import { useProjectStore } from "../../stores/project-store";
 import { useV2VStore } from "../../stores/v2v-store";
 import { autoSaveManager } from "../../services/auto-save";
 import {
-  toSafeToken,
   folderNameFromTitle,
   importKeyFor,
   parseV2VSegmentFromName,
+  segmentLogicalName,
+  findSegmentMediaInLibrary,
 } from "../../utils/v2v-utils";
 import { createSegmentInfo } from "../../utils/v2v-segment-ids";
 import { ColabExportTab } from "./ColabExportTab";
@@ -190,8 +191,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       const projectTitle = folderNameFromTitle(v.output_name || `video_${v.index}`);
 
       const projectStore = useProjectStore.getState();
-      // Si el proyecto ya está activo no hacemos nada
-      if (projectStore.project.name === projectTitle) return;
+      const wasAlreadyActive = projectStore.project.name === projectTitle;
 
       try {
         await autoSaveManager.initialize();
@@ -207,9 +207,13 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         const targetSave = uniqueProjects.find((s: any) => s.projectName === projectTitle);
         if (targetSave) {
           await projectStore.recoverFromAutoSave(targetSave.id);
-          toast.info("Proyecto cargado", `Proyecto "${projectTitle}" activo.`);
+          toast.info(
+            wasAlreadyActive ? "Proyecto actualizado" : "Proyecto cargado",
+            wasAlreadyActive
+              ? `Autosave más reciente de "${projectTitle}" aplicado.`
+              : `Proyecto "${projectTitle}" activo.`,
+          );
         }
-        // Si no existe proyecto guardado, no lo creamos — el usuario lo importará manualmente
       } catch {
         // Ignorar errores de cambio de proyecto silenciosamente
       }
@@ -548,33 +552,31 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                         freshStore = useProjectStore.getState();
                       }
                       
-                      // 2) Audios por segmento
-                      const audioSegs = v.segments.filter((s: any) => s.text?.trim().length > 0);
-                      for (const seg of audioSegs) {
-                        const speakerToken = toSafeToken(seg.speaker || "speaker");
-                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(3, "0")}.wav`;
-                        
-                        // Solo importamos si no existe ya
+                      // 2) Audios por segmento (nombres desde API / disco)
+                      let apiAudioSegs = await v2vApi.getAudioSegments(jobId!, v.index);
+                      apiAudioSegs = apiAudioSegs.filter(
+                        (as, i, a) => a.findIndex((t) => t.seg === as.seg) === i,
+                      );
+                      for (const seg of apiAudioSegs) {
+                        const wavName = segmentLogicalName(folder, seg);
+
                         if (!freshStore.project.mediaLibrary.items.some((m: any) => m.name === wavName)) {
                           const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId!, v.index, seg.seg);
                           const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
                           await freshStore.importMedia(wavFile);
-                          // Refresh store reference after each import to see new items
                           freshStore = useProjectStore.getState();
                         }
                       }
-                      
+
                       await freshStore.forceSave();
-                      
+
                       // 3) Vincular carpeta al Job para que AssetsPanel la reconozca
                       useV2VStore.getState().setFolderRef(folder, { jobId: jobId!, videoIndex: v.index, outputName: v.output_name });
-                      
+
                       // 4) Guardar información de segmentos
                       const importedMedia = freshStore.project.mediaLibrary.items;
-                      for (const seg of audioSegs) {
-                        const speakerToken = toSafeToken(seg.speaker || "speaker");
-                        const wavName = `${folder}/tts_${speakerToken}_${String(seg.seg).padStart(3, "0")}.wav`;
-                        const mediaItem = importedMedia.find((m: any) => m.name === wavName);
+                      for (const seg of apiAudioSegs) {
+                        const mediaItem = findSegmentMediaInLibrary(importedMedia, folder, seg);
                         if (mediaItem) {
                           const segmentData = createSegmentInfo({
                             mediaId: mediaItem.id,

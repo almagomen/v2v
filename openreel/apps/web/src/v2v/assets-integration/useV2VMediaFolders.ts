@@ -5,7 +5,11 @@ import { useV2VStore } from "../../stores/v2v-store";
 import { v2vApi, type AudioSegmentItem } from "../../lib/v2v-api";
 import { autoSaveManager } from "../../services/auto-save";
 import { importMultipleMediaIntoProject } from "../../utils/import-media-into-project";
-import { toSafeToken } from "../../utils/v2v-utils";
+import {
+  toSafeToken,
+  segmentLogicalName,
+  findSegmentMediaInLibrary,
+} from "../../utils/v2v-utils";
 import {
   collectFolderMediaFiles,
   extractFolderTimelineSnapshot,
@@ -252,7 +256,7 @@ export function useV2VMediaFolders({
       }
 
       for (const seg of segments) {
-        const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(seg.seg).padStart(3, "0")}.wav`;
+        const wavName = segmentLogicalName(folder, seg);
         if (!mediaNames.has(wavName)) {
           missingFilesInfo.push({ type: "audio", name: wavName, seg: seg.seg });
         }
@@ -455,12 +459,11 @@ export function useV2VMediaFolders({
         renameTimelineTrack(audioTrack.id, trackTitle);
 
         for (const seg of segs) {
-          const wavName = `${folder}/tts_${toSafeToken(seg.speaker || "speaker")}_${String(
-            seg.seg,
-          ).padStart(3, "0")}.wav`;
-          const wm = useProjectStore
-            .getState()
-            .project.mediaLibrary.items.find((m) => m.name === wavName);
+          const wm = findSegmentMediaInLibrary(
+            useProjectStore.getState().project.mediaLibrary.items,
+            folder,
+            seg,
+          );
           if (!wm) continue;
 
           const addW = await addClip(audioTrack.id, wm.id, seg.start);
