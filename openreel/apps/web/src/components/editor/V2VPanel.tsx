@@ -1,4 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
+import { useUIStore } from "../../stores/ui-store";
 import { Youtube, Loader2, AlertCircle, FolderDown, Trash2 } from "lucide-react";
 import { ScrollArea, Button } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
@@ -13,6 +14,7 @@ import {
 } from "../../utils/v2v-utils";
 import { createSegmentInfo } from "../../utils/v2v-segment-ids";
 import { ColabExportTab } from "./ColabExportTab";
+import { CloneVoiceSegmentSection } from "./v2v/CloneVoiceSegmentSection";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -87,6 +89,11 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   } = useV2VStore();
 
   const { project } = useProjectStore();
+  const selectedItems = useUIStore((s) => s.selectedItems);
+  const v2vCloneClipId = useMemo(() => {
+    const ids = useUIStore.getState().getSelectedClipIds();
+    return ids.length === 1 ? ids[0]! : null;
+  }, [selectedItems]);
 
   // Calcula cuál índice de video corresponde al proyecto activo.
   // Si el proyecto no es V2V (no coincide con ninguno), retorna -1 para mostrar el placeholder.
@@ -587,6 +594,21 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
           </>
         )}
+
+        {/* Clonar voz: usa el clip de audio V2V seleccionado en el timeline */}
+        <div className="pt-4 mt-4 border-t border-border">
+          <p className="text-[10px] text-text-muted mb-2 font-medium uppercase tracking-wide">
+            Clonar voz (clip seleccionado)
+          </p>
+          {!v2vCloneClipId ? (
+            <p className="text-[10px] text-text-muted p-3 bg-background-tertiary border border-border rounded-lg">
+              Selecciona un único clip de audio en el timeline (p. ej. segmento TTS importado desde
+              Video2Video) y vuelve aquí para editar texto y regenerar voz.
+            </p>
+          ) : (
+            <CloneVoiceSegmentSection clipId={v2vCloneClipId} />
+          )}
+        </div>
 
         {/* Exportación Colab */}
         <div className="pt-4 mt-4 border-t border-border">
