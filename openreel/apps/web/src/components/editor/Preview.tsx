@@ -4376,6 +4376,12 @@ export const Preview: React.FC = () => {
   useEffect(() => {
     const handler = () => {
       processedAudioBufferCacheRef.current.clear();
+      audioBufferCacheRef.current.clear();
+      if (videoUrlRef.current) {
+        URL.revokeObjectURL(videoUrlRef.current);
+        videoUrlRef.current = null;
+      }
+      currentVideoMediaIdRef.current = null;
       if (audioGraphRef.current) {
         audioGraphRef.current.seekTo(getMasterClock().currentTime);
       }

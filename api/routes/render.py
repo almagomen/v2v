@@ -174,10 +174,23 @@ def _resolve_media_path(
 ) -> Path:
     """
     Resolves a media_name to an absolute path.
-    Prioritizes the v2v_assets.json manifest (New Logic).
+    Prefers an existing file at folder/<relative media_name>, then v2v_assets.json.
     """
     # 0. Normalizar media_name para extraer solo el nombre base (el frontend manda Carpeta/Archivo.mp4)
     file_name = Path(media_name).name
+
+    # 0.1 Archivo bajo la carpeta del job con la misma ruta relativa (prioridad sobre manifiesto por índice)
+    clean_rel = media_name.replace("\\", "/").lstrip("/")
+    if clean_rel and not Path(clean_rel).is_absolute():
+        folder_resolved = folder.resolve()
+        cand = (folder_resolved / clean_rel).resolve()
+        if cand.is_file():
+            try:
+                cand.relative_to(folder_resolved)
+            except ValueError:
+                pass
+            else:
+                return cand
 
     # 1. Cargar manifiesto
     assets = load_assets(folder)

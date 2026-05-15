@@ -364,8 +364,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         throw new Error(msg);
       }
 
-      invalidateAudioCache(mediaItem.id);
-
       const { getClip, trimClip } = useProjectStore.getState();
       const currentClip = getClip(clipId);
       if (currentClip) {
@@ -402,6 +400,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       } else {
         setRegenStatus("Segmento regenerado");
       }
+      invalidateAudioCache(mediaItem.id);
       await forceSave();
     } catch (e) {
       setRegenError(e instanceof Error ? e.message : "Error al regenerar");
@@ -458,8 +457,6 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
       const result = await replaceMediaAsset(mediaItem.id, file);
       if (!result.success) throw new Error("Error al reemplazar audio");
 
-      invalidateAudioCache(mediaItem.id);
-
       const { getClip, trimClip } = useProjectStore.getState();
       const currentClip = getClip(clipId);
       if (currentClip) {
@@ -474,6 +471,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         });
       }
 
+      invalidateAudioCache(mediaItem.id);
       await forceSave();
       setRegenStatus("Filtro de velocidad aplicado");
     } catch (e) {

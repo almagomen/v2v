@@ -122,6 +122,8 @@ export interface ProjectState {
   importMedia: (file: File) => Promise<ActionResult>;
   deleteMedia: (mediaId: string) => Promise<ActionResult>;
   replaceMediaAsset: (mediaId: string, file: File, sourceFolder?: string) => Promise<ActionResult>;
+  /** Clears V2V stale-server flag after Colab upload sync */
+  clearNeedsV2VServerUpload: (mediaId: string) => void;
   renameMedia: (mediaId: string, name: string) => Promise<ActionResult>;
   getMediaItem: (mediaId: string) => MediaItem | undefined;
   /** Add a pending placeholder for a background KieAI task */
@@ -1892,6 +1894,19 @@ export const useProjectStore = create<ProjectState>()(
             }
           }
 
+          let needsV2VServerUpload = false;
+          try {
+            const { useV2VStore } = await import("./v2v-store");
+            const folderRefs = useV2VStore.getState().folderRefs;
+            const norm = file.name.replace(/\\/g, "/");
+            const top = norm.includes("/") ? norm.split("/")[0] : "";
+            if (top && top in folderRefs) {
+              needsV2VServerUpload = true;
+            }
+          } catch {
+            // v2v store optional
+          }
+
           const updatedItem: MediaItem = {
             id: mediaId,
             name: file.name,
@@ -1918,6 +1933,7 @@ export const useProjectStore = create<ProjectState>()(
               filmstripThumbnails.length > 0 ? filmstripThumbnails : undefined,
             isPlaceholder: false,
             sourceFile: { name: file.name, size: file.size, lastModified: file.lastModified, folder: sourceFolder },
+            ...(needsV2VServerUpload ? { needsV2VServerUpload: true as const } : {}),
           };
 
           const updatedItems = project.mediaLibrary.items.map((item) =>
@@ -1948,6 +1964,22 @@ export const useProjectStore = create<ProjectState>()(
             },
           };
         }
+      },
+
+      clearNeedsV2VServerUpload: (mediaId: string) => {
+        const { project } = get();
+        const updatedItems = project.mediaLibrary.items.map((item) =>
+          item.id === mediaId
+            ? { ...item, needsV2VServerUpload: undefined }
+            : item,
+        );
+        set({
+          project: {
+            ...project,
+            mediaLibrary: { items: updatedItems },
+            modifiedAt: Date.now(),
+          },
+        });
       },
 
       renameMedia: async (mediaId: string, name: string) => {

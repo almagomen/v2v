@@ -17,4 +17,7 @@ export const useAudioCacheStore = audioCacheStore;
 
 export function invalidateAudioCache(_mediaId: string): void {
   audioCacheStore.getState().invalidateAudio();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("openreel:preview-invalidate"));
+  }
 }
