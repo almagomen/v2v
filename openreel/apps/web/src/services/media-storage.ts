@@ -47,6 +47,22 @@ export async function deleteProjectMedia(projectId: string): Promise<void> {
   }
 }
 
+export async function saveFileHandle(name: string, size: number, handle: FileSystemFileHandle): Promise<void> {
+  await storage.saveFileHandle(name, size, handle);
+}
+
+export async function loadFileHandle(name: string, size: number): Promise<FileSystemFileHandle | null> {
+  return storage.loadFileHandle(name, size);
+}
+
+export async function saveDirectoryHandle(projectId: string, handle: FileSystemDirectoryHandle): Promise<void> {
+  await storage.saveDirectoryHandle(projectId, handle);
+}
+
+export async function loadDirectoryHandle(projectId: string): Promise<{ handle: FileSystemDirectoryHandle; folderName: string } | null> {
+  return storage.loadDirectoryHandle(projectId);
+}
+
 export async function getStorageStats(): Promise<{
   used: number;
   quota: number;
@@ -58,4 +74,21 @@ export async function getStorageStats(): Promise<{
     quota: usage.quota,
     mediaCount: usage.mediaItems,
   };
+}
+
+export async function clearAllStorage(): Promise<void> {
+  await storage.clearAllData();
+
+  const databasesToDelete = ["openreel-autosave", "openreel-projects", "openreel-templates"];
+  await Promise.allSettled(
+    databasesToDelete.map(
+      (dbName) =>
+        new Promise<void>((resolve, reject) => {
+          const request = indexedDB.deleteDatabase(dbName);
+          request.onsuccess = () => resolve();
+          request.onerror = () => reject(request.error);
+          request.onblocked = () => resolve();
+        }),
+    ),
+  );
 }

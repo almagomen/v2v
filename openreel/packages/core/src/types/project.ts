@@ -40,6 +40,14 @@ export interface MediaItem {
   readonly filmstripThumbnails?: FilmstripThumbnail[];
   readonly isPlaceholder?: boolean;
   readonly originalUrl?: string;
+  /** File hint stored in JSON for cross-session/cross-machine asset matching */
+  readonly sourceFile?: { name: string; size: number; lastModified: number; folder?: string };
+  /** True while a background KieAI generation task is in progress */
+  readonly isPending?: boolean;
+  /** True when polling exhausted all retries — shows manual retry button */
+  readonly kieaiError?: boolean;
+  /** KieAI task ID used to poll for completion */
+  readonly kieaiTaskId?: string;
 }
 
 /** Thumbnail for filmstrip display in timeline */
@@ -57,4 +65,6 @@ export interface MediaMetadata {
   readonly sampleRate: number; // For audio
   readonly channels: number; // For audio
   readonly fileSize: number;
+  /** Number of audio tracks in the file (may be > 1 for multi-track video/audio files) */
+  readonly audioTrackCount?: number;
 }

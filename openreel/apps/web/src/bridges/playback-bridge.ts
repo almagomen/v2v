@@ -17,27 +17,6 @@ export class PlaybackBridge {
   private initialized = false;
   private isUpdatingProject = false;
 
-  private async applyProjectUpdate(project: ReturnType<typeof useProjectStore.getState>["project"]): Promise<void> {
-    if (!this.playbackController) return;
-
-    const timelineStore = useTimelineStore.getState();
-    const currentTime = timelineStore.playheadPosition;
-    const wasPlaying = timelineStore.playbackState === "playing";
-
-    this.isUpdatingProject = true;
-    try {
-      this.playbackController.setProject(project);
-      await this.playbackController.scrubTo(currentTime);
-      // Ensure UI timeline doesn't jump to zero if controller emits transient "stopped".
-      useTimelineStore.getState().setPlayheadPosition(currentTime);
-      if (wasPlaying) {
-        await this.playbackController.play();
-      }
-    } finally {
-      this.isUpdatingProject = false;
-    }
-  }
-
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;
@@ -80,7 +59,7 @@ export class PlaybackBridge {
 
       switch (event.type) {
         case "timeupdate":
-          if (!this.playbackController?.getIsScrubbing()) {
+          if (!this.isUpdatingProject && !this.playbackController?.getIsScrubbing()) {
             timelineStore.setPlayheadPosition(event.time);
           }
           break;
@@ -143,7 +122,22 @@ export class PlaybackBridge {
     this.unsubscribeTimelineStore = useProjectStore.subscribe(
       (state) => state.project,
       (project) => {
-        void this.applyProjectUpdate(project);
+        if (this.playbackController) {
+          const timelineStore = useTimelineStore.getState();
+          const currentTime = timelineStore.playheadPosition;
+          const wasPlaying = timelineStore.playbackState === "playing";
+
+          this.isUpdatingProject = true;
+          this.playbackController.setProject(project);
+          this.isUpdatingProject = false;
+
+          this.playbackController.scrubTo(currentTime);
+          // Explicitly restore position — scrubTo may be blocked by isScrubbing
+          timelineStore.setPlayheadPosition(currentTime);
+          if (wasPlaying) {
+            this.playbackController.play();
+          }
+        }
       },
     );
   }
@@ -229,7 +223,9 @@ export class PlaybackBridge {
     if (this.playbackController) {
       this.playbackController.stop();
     }
-    useTimelineStore.getState().stop();
+    const store = useTimelineStore.getState();
+    store.stop();
+    store.seekToStart();
   }
 
   /**
@@ -271,9 +267,9 @@ export class PlaybackBridge {
   /**
    * Update scrub position
    */
-  async scrubTo(time: number): Promise<void> {
+  scrubTo(time: number): void {
     if (this.playbackController) {
-      await this.playbackController.scrubTo(time);
+      this.playbackController.seek(time);
     }
     useTimelineStore.getState().updateScrubPosition(time);
   }

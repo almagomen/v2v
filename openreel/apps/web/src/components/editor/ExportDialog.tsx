@@ -822,46 +822,46 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
           </div>
         )}
 
-          <div className="flex items-center justify-between p-4 border-t border-border bg-background-tertiary">
-            <div className="flex items-center gap-4 text-xs text-text-muted">
-              {duration > 0 && (
-                <>
-                  <div className="flex items-center gap-1">
-                    <Clock size={12} />
-                    {formatDuration(duration)}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <HardDrive size={12} />~
-                    {formatFileSize(
-                      activeTab === "presets" && selectedPreset
-                        ? (selectedPreset.settings as VideoExportSettings)
-                            .bitrate || 8000
-                        : customSettings.bitrate,
-                      duration,
-                    )}
-                  </div>
-                  {timeEstimate && deviceProfile?.encoding[customSettings.codec as keyof typeof deviceProfile.encoding]?.hardware && (
-                    <div className="flex items-center gap-1 text-green-500">
-                      <Zap size={12} />
-                      Hardware accelerated
-                    </div>
+        <div className="flex items-center justify-between p-4 border-t border-border bg-background-tertiary">
+          <div className="flex items-center gap-4 text-xs text-text-muted">
+            {duration > 0 && (
+              <>
+                <div className="flex items-center gap-1">
+                  <Clock size={12} />
+                  {formatDuration(duration)}
+                </div>
+                <div className="flex items-center gap-1">
+                  <HardDrive size={12} />~
+                  {formatFileSize(
+                    activeTab === "presets" && selectedPreset
+                      ? (selectedPreset.settings as VideoExportSettings)
+                          .bitrate || 8000
+                      : customSettings.bitrate,
+                    duration,
                   )}
-                </>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-               <Button variant="ghost" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleExport}
-                disabled={activeTab === "presets" && !selectedPreset}
-              >
-                <Play size={16} />
-                Start Export
-              </Button>
-             </div>
+                </div>
+                {timeEstimate && deviceProfile?.encoding[customSettings.codec as keyof typeof deviceProfile.encoding]?.hardware && (
+                  <div className="flex items-center gap-1 text-green-500">
+                    <Zap size={12} />
+                    Hardware accelerated
+                  </div>
+                )}
+              </>
+            )}
           </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleExport}
+              disabled={activeTab === "presets" && !selectedPreset}
+            >
+              <Play size={16} />
+              Start Export
+            </Button>
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   );

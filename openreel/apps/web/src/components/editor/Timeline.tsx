@@ -22,11 +22,13 @@ import {
   Plus,
   ChevronDown as ChevronDownIcon,
   Magnet,
+  Rows3,
+  Rows2,
 } from "lucide-react";
-import type { Project } from "@openreel/core";
 import { useProjectStore } from "../../stores/project-store";
 import { useTimelineStore } from "../../stores/timeline-store";
 import { useUIStore } from "../../stores/ui-store";
+import { toast } from "../../stores/notification-store";
 import { useEngineStore } from "../../stores/engine-store";
 import { getPlaybackBridge } from "../../bridges/playback-bridge";
 import {
@@ -50,48 +52,6 @@ import {
   formatTimecode,
   getTrackInfo,
 } from "./timeline/index";
-
-function findClipStartInProject(project: Project, clipId: string): number | null {
-  for (const t of project.timeline.tracks) {
-    const c = t.clips.find((cl) => cl.id === clipId);
-    if (c) return c.startTime;
-  }
-  return null;
-}
-
-/** Pista del clip y su índice entre pistas del mismo `type` (orden en `project.timeline.tracks`). */
-function findClipTrackInfo(
-  project: Project,
-  clipId: string,
-): { trackId: string; trackType: string; typeIndex: number } | null {
-  const track = project.timeline.tracks.find((t) =>
-    t.clips.some((c) => c.id === clipId),
-  );
-  if (!track) return null;
-  const sameType = project.timeline.tracks.filter((t) => t.type === track.type);
-  const typeIndex = sameType.findIndex((t) => t.id === track.id);
-  if (typeIndex < 0) return null;
-  return { trackId: track.id, trackType: track.type, typeIndex };
-}
-
-/** Desplazamiento en “filas” de pista del mismo tipo que el líder (video↔video, audio↔audio, etc.). */
-function computeLeaderTrackDelta(
-  project: Project,
-  leaderClipId: string,
-  targetTrackId: string | undefined,
-): number {
-  if (!targetTrackId) return 0;
-  const leaderInfo = findClipTrackInfo(project, leaderClipId);
-  if (!leaderInfo) return 0;
-  const destTrack = project.timeline.tracks.find((t) => t.id === targetTrackId);
-  if (!destTrack || destTrack.type !== leaderInfo.trackType) return 0;
-  const sameType = project.timeline.tracks.filter(
-    (t) => t.type === leaderInfo.trackType,
-  );
-  const newIdx = sameType.findIndex((t) => t.id === targetTrackId);
-  if (newIdx < 0) return 0;
-  return newIdx - leaderInfo.typeIndex;
-}
 
 export const Timeline: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -132,6 +92,8 @@ export const Timeline: React.FC = () => {
     setViewportDimensions,
     zoomIn,
     zoomOut,
+    trackHeight,
+    setTrackHeight,
     setTrackHeightById,
     getTrackHeight,
   } = useTimelineStore();
@@ -140,11 +102,6 @@ export const Timeline: React.FC = () => {
 
   const { select, selectMultiple, clearSelection, getSelectedClipIds, snapSettings, toggleSnap } =
     useUIStore();
-  const selectedItems = useUIStore((s) => s.selectedItems);
-  const selectedTimelineClipIds = useMemo(
-    () => selectedItems.filter((s) => s.type === "clip").map((s) => s.id),
-    [selectedItems],
-  );
   const selectedClipIds = getSelectedClipIds();
 
   const { getTitleEngine, getGraphicsEngine } = useEngineStore();
@@ -191,6 +148,17 @@ export const Timeline: React.FC = () => {
       }
     }
     return Math.max(maxEnd, 60); // Minimum 60 seconds
+  }, [tracks]);
+
+  const playheadSnapPoints = useMemo(() => {
+    const points = new Set<number>();
+    for (const track of tracks) {
+      for (const clip of track.clips) {
+        points.add(clip.startTime);
+        points.add(clip.startTime + clip.duration);
+      }
+    }
+    return Array.from(points).sort((a, b) => a - b);
   }, [tracks]);
 
   const totalTracksHeight = useMemo(() => {
@@ -268,110 +236,36 @@ export const Timeline: React.FC = () => {
   }, [playheadPosition, playbackState, pixelsPerSecond, scrollX, viewportWidth]);
 
   const handleSelectClip = useCallback(
-    (
-      clipId: string,
-      options?: { addToSelection?: boolean; rangeSelect?: boolean },
-    ) => {
-      const addToSelection = options?.addToSelection ?? false;
-      const rangeSelect = options?.rangeSelect ?? false;
-
-      const getItemById = (id: string): { type: "clip" | "text-clip" | "shape-clip"; id: string; trackId?: string; startTime: number } | null => {
-        const textClip = allTextClips.find((tc) => tc.id === id);
-        if (textClip) {
-          return {
-            type: "text-clip",
-            id,
-            trackId: textClip.trackId,
-            startTime: textClip.startTime,
-          };
-        }
-        const shapeClip = allShapeClips.find((sc) => sc.id === id);
-        if (shapeClip) {
-          return {
-            type: "shape-clip",
-            id,
-            trackId: shapeClip.trackId,
-            startTime: shapeClip.startTime,
-          };
-        }
-        for (const track of tracks) {
-          const clip = track.clips.find((c) => c.id === id);
-          if (clip) {
-            return {
-              type: "clip",
-              id,
-              trackId: track.id,
-              startTime: clip.startTime,
-            };
-          }
-        }
-        return null;
-      };
-
-      const clickedItem = getItemById(clipId);
-      if (!clickedItem) return;
-
-      if (rangeSelect && clickedItem.trackId) {
-        const anchorFromSelection = selectedItems.find(
-          (s) =>
-            (s.type === "clip" || s.type === "text-clip" || s.type === "shape-clip") &&
-            s.trackId === clickedItem.trackId &&
-            s.id !== clickedItem.id,
+    (clipId: string, addToSelection: boolean) => {
+      const isTextClip = allTextClips.some((tc) => tc.id === clipId);
+      if (isTextClip) {
+        const textClip = allTextClips.find((tc) => tc.id === clipId);
+        select(
+          { type: "text-clip", id: clipId, trackId: textClip?.trackId },
+          addToSelection,
         );
-        const anchorItem = anchorFromSelection
-          ? getItemById(anchorFromSelection.id)
-          : null;
-
-        if (anchorItem) {
-          const laneItems = [
-            ...tracks
-              .find((t) => t.id === clickedItem.trackId)
-              ?.clips.map((c) => ({
-                type: "clip" as const,
-                id: c.id,
-                trackId: clickedItem.trackId,
-                startTime: c.startTime,
-              })) ?? [],
-            ...allTextClips
-              .filter((tc) => tc.trackId === clickedItem.trackId)
-              .map((tc) => ({
-                type: "text-clip" as const,
-                id: tc.id,
-                trackId: clickedItem.trackId,
-                startTime: tc.startTime,
-              })),
-            ...allShapeClips
-              .filter((sc) => sc.trackId === clickedItem.trackId)
-              .map((sc) => ({
-                type: "shape-clip" as const,
-                id: sc.id,
-                trackId: clickedItem.trackId,
-                startTime: sc.startTime,
-              })),
-          ].sort((a, b) => a.startTime - b.startTime);
-
-          const anchorIdx = laneItems.findIndex((i) => i.id === anchorItem.id);
-          const clickedIdx = laneItems.findIndex((i) => i.id === clickedItem.id);
-          if (anchorIdx >= 0 && clickedIdx >= 0) {
-            const [from, to] =
-              anchorIdx <= clickedIdx
-                ? [anchorIdx, clickedIdx]
-                : [clickedIdx, anchorIdx];
-            const rangeItems = laneItems
-              .slice(from, to + 1)
-              .map((i) => ({ type: i.type, id: i.id, trackId: i.trackId }));
-            selectMultiple(rangeItems);
-            return;
-          }
-        }
+        return;
+      }
+      const isShapeClip = allShapeClips.some((sc) => sc.id === clipId);
+      if (isShapeClip) {
+        const shapeClip = allShapeClips.find((sc) => sc.id === clipId);
+        select(
+          { type: "shape-clip", id: clipId, trackId: shapeClip?.trackId },
+          addToSelection,
+        );
+        return;
       }
 
-      select(
-        { type: clickedItem.type, id: clickedItem.id, trackId: clickedItem.trackId },
-        addToSelection,
-      );
+      let trackId: string | undefined;
+      for (const track of tracks) {
+        if (track.clips.some((c) => c.id === clipId)) {
+          trackId = track.id;
+          break;
+        }
+      }
+      select({ type: "clip", id: clipId, trackId }, addToSelection);
     },
-    [tracks, select, selectMultiple, selectedItems, allTextClips, allShapeClips],
+    [tracks, select, allTextClips, allShapeClips],
   );
 
   const [selectedKeyframeIds, setSelectedKeyframeIds] = useState<string[]>([]);
@@ -593,9 +487,13 @@ export const Timeline: React.FC = () => {
   }, [isBoxSelecting, handleBoxSelectionEnd]);
 
   const handleDropMedia = useCallback(
-    async (_trackId: string, mediaId: string, startTime: number) => {
-      const { addClipToNewTrack } = useProjectStore.getState();
-      await addClipToNewTrack(mediaId, startTime);
+    async (trackId: string, mediaId: string, startTime: number) => {
+      const { addClip, addClipToNewTrack } = useProjectStore.getState();
+      if (trackId) {
+        await addClip(trackId, mediaId, startTime);
+      } else {
+        await addClipToNewTrack(mediaId, startTime);
+      }
     },
     [],
   );
@@ -615,73 +513,11 @@ export const Timeline: React.FC = () => {
         useProjectStore.setState((state) => ({
           project: { ...state.project, modifiedAt: Date.now() },
         }));
-        return;
-      }
-
-      const projectBefore = useProjectStore.getState().project;
-      const leaderStart = findClipStartInProject(projectBefore, clipId);
-      if (leaderStart === null) {
+      } else {
         await moveClip(clipId, newStartTime, targetTrackId);
-        return;
-      }
-
-      const deltaTime = newStartTime - leaderStart;
-      const deltaTypeIndex = computeLeaderTrackDelta(
-        projectBefore,
-        clipId,
-        targetTrackId,
-      );
-      const leaderInfo = findClipTrackInfo(projectBefore, clipId);
-      const groupIds = selectedTimelineClipIds.filter(
-        (id) => findClipStartInProject(projectBefore, id) !== null,
-      );
-
-      const isGroupMove =
-        groupIds.length > 1 &&
-        groupIds.includes(clipId) &&
-        (deltaTime !== 0 || deltaTypeIndex !== 0);
-
-      if (!isGroupMove) {
-        await moveClip(clipId, newStartTime, targetTrackId);
-        return;
-      }
-
-      const { actionHistory } = useProjectStore.getState();
-      actionHistory.beginGroup("Move clips");
-      try {
-        await moveClip(clipId, newStartTime, targetTrackId);
-        for (const id of groupIds) {
-          if (id === clipId) continue;
-          const start = findClipStartInProject(projectBefore, id);
-          if (start === null) continue;
-          const nextStart = Math.max(0, start + deltaTime);
-          const info = findClipTrackInfo(projectBefore, id);
-          if (!info || !leaderInfo) {
-            await moveClip(id, nextStart, undefined);
-            continue;
-          }
-          if (info.trackType !== leaderInfo.trackType) {
-            await moveClip(id, nextStart, undefined);
-            continue;
-          }
-          const sameType = projectBefore.timeline.tracks.filter(
-            (t) => t.type === info.trackType,
-          );
-          const nextIdx = Math.max(
-            0,
-            Math.min(sameType.length - 1, info.typeIndex + deltaTypeIndex),
-          );
-          const nextTrackId = sameType[nextIdx]!.id;
-          const nextTrackArg =
-            nextTrackId !== info.trackId ? nextTrackId : undefined;
-          if (nextStart === start && !nextTrackArg) continue;
-          await moveClip(id, nextStart, nextTrackArg);
-        }
-      } finally {
-        actionHistory.endGroup();
       }
     },
-    [moveClip, allShapeClips, graphicsEngine, selectedTimelineClipIds],
+    [moveClip, allShapeClips, graphicsEngine],
   );
 
   const [snapIndicatorTime, setSnapIndicatorTime] = React.useState<
@@ -809,45 +645,21 @@ export const Timeline: React.FC = () => {
       const clip = tracks.flatMap((t) => t.clips).find((c) => c.id === clipId);
       if (!clip) return;
 
-      const mediaItem = project.mediaLibrary.items.find((m) => m.id === clip.mediaId);
-      const mediaDuration = mediaItem?.metadata.duration || clip.duration;
-
-      let updates: any = {};
-
-      if (edge === "left") {
-        // Delta between original startTime and new handle position
-        const deltaTime = newTime - clip.startTime;
-        
-        // Target inPoint based on delta
-        const targetInPoint = clip.inPoint + deltaTime;
-        
-        // Clamp inPoint to [0, clip.outPoint - 0.1]
-        const newInPoint = Math.max(0, Math.min(targetInPoint, clip.outPoint - 0.1));
-        
-        // Recalculate actual delta based on clamped inPoint
-        const actualDelta = newInPoint - clip.inPoint;
-        
-        updates = {
-          startTime: clip.startTime + actualDelta,
-          inPoint: newInPoint,
-          duration: clip.outPoint - newInPoint,
-        };
-      } else {
-        // Right edge (trimming end)
-        const newDuration = Math.max(0.1, newTime - clip.startTime);
-        const targetOutPoint = clip.inPoint + newDuration;
-        
-        // Clamp outPoint to [clip.inPoint + 0.1, mediaDuration]
-        const newOutPoint = Math.max(clip.inPoint + 0.1, Math.min(targetOutPoint, mediaDuration));
-        
-        updates = {
-          outPoint: newOutPoint,
-          duration: newOutPoint - clip.inPoint,
-        };
-      }
-
       const oldDuration = clip.duration;
-      const newDuration = updates.duration;
+      const newDuration =
+        edge === "left"
+          ? Math.max(0.1, clip.startTime + clip.duration - newTime)
+          : Math.max(0.1, newTime - clip.startTime);
+
+      const updates =
+        edge === "left"
+          ? {
+              startTime: newTime,
+              duration: newDuration,
+            }
+          : {
+              duration: newDuration,
+            };
 
       const adjustedKeyframes = clip.keyframes.map((kf) => {
         if (kf.id.startsWith("kf-exit-")) {
@@ -875,7 +687,7 @@ export const Timeline: React.FC = () => {
         },
       }));
     },
-    [tracks, project.mediaLibrary.items],
+    [tracks],
   );
 
   const visualOrderTracks = useMemo(() => tracks, [tracks]);
@@ -885,7 +697,7 @@ export const Timeline: React.FC = () => {
       data-tour="timeline"
       className="h-full bg-background border-t border-border flex flex-col"
     >
-      <div className="h-12 border-b border-border flex items-center justify-between px-4 bg-background-secondary relative z-auto">
+      <div className="h-12 border-b border-border flex items-center justify-between px-4 bg-background-secondary relative z-[100]">
         <div className="flex items-center gap-2">
           <div className="flex bg-background-tertiary rounded-lg p-1 border border-border">
             <IconButton
@@ -1069,6 +881,30 @@ export const Timeline: React.FC = () => {
         <div className="flex items-center gap-2">
           <div className="flex items-center bg-background-tertiary rounded-lg border border-border overflow-hidden">
             <button
+              onClick={() => { setTrackHeight(80); useTimelineStore.setState({ trackHeights: {} }); }}
+              className={`w-8 h-8 flex items-center justify-center transition-colors border-r border-border ${
+                trackHeight >= 60
+                  ? "text-primary bg-primary/10"
+                  : "text-text-secondary hover:text-text-primary hover:bg-background-elevated"
+              }`}
+              title="Large tracks"
+            >
+              <Rows3 size={14} />
+            </button>
+            <button
+              onClick={() => { setTrackHeight(50); useTimelineStore.setState({ trackHeights: {} }); }}
+              className={`w-8 h-8 flex items-center justify-center transition-colors ${
+                trackHeight < 60
+                  ? "text-primary bg-primary/10"
+                  : "text-text-secondary hover:text-text-primary hover:bg-background-elevated"
+              }`}
+              title="Small tracks"
+            >
+              <Rows2 size={14} />
+            </button>
+          </div>
+          <div className="flex items-center bg-background-tertiary rounded-lg border border-border overflow-hidden">
+            <button
               onClick={zoomOut}
               className="w-8 h-8 flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-background-elevated transition-colors border-r border-border"
               title="Zoom out"
@@ -1109,6 +945,7 @@ export const Timeline: React.FC = () => {
                 pixelsPerSecond={pixelsPerSecond}
                 scrollX={scrollX}
                 viewportWidth={viewportWidth}
+                snapPoints={playheadSnapPoints}
                 onSeek={(time) => {
                   const bridge = getPlaybackBridge();
                   bridge.scrubTo(time);
@@ -1169,44 +1006,78 @@ export const Timeline: React.FC = () => {
               e.preventDefault();
               e.dataTransfer.dropEffect = "copy";
             }}
-            onDrop={(e) => {
+            onDrop={async (e) => {
               e.preventDefault();
+
+              const rect = tracksRef.current?.getBoundingClientRect();
+              if (!rect) return;
+              const x = e.clientX - rect.left + (tracksRef.current?.scrollLeft ?? 0);
+              const rawTime = Math.max(0, x / pixelsPerSecond);
+
+              const allClips = project.timeline.tracks.flatMap(t => t.clips);
+              let snappedTime = rawTime;
+              if (snapSettings.enabled) {
+                const threshold = snapSettings.snapThreshold / pixelsPerSecond;
+                let bestDist = Infinity;
+                for (const clip of allClips) {
+                  const clipEnd = clip.startTime + clip.duration;
+                  const distToEnd = Math.abs(rawTime - clipEnd);
+                  const distToStart = Math.abs(rawTime - clip.startTime);
+                  if (distToEnd < threshold && distToEnd < bestDist) {
+                    bestDist = distToEnd;
+                    snappedTime = clipEnd;
+                  }
+                  if (distToStart < threshold && distToStart < bestDist) {
+                    bestDist = distToStart;
+                    snappedTime = clip.startTime;
+                  }
+                }
+                if (snapSettings.snapToPlayhead) {
+                  const distToPlayhead = Math.abs(rawTime - playheadPosition);
+                  if (distToPlayhead < threshold && distToPlayhead < bestDist) {
+                    snappedTime = playheadPosition;
+                  }
+                }
+              }
+
+              // External OS file drop (e.g. from Windows Explorer)
+              if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                const { importMedia, addClipToNewTrack } = useProjectStore.getState();
+                for (const file of Array.from(e.dataTransfer.files)) {
+                  try {
+                    const beforeIds = new Set(
+                      useProjectStore.getState().project.mediaLibrary.items.map(i => i.id)
+                    );
+                    const result = await importMedia(file);
+                    if (result.success) {
+                      const newItem = useProjectStore
+                        .getState()
+                        .project.mediaLibrary.items.find(i => !beforeIds.has(i.id));
+                      if (newItem) {
+                        await addClipToNewTrack(newItem.id, snappedTime);
+                        const track = useProjectStore
+                          .getState()
+                          .project.timeline.tracks.find(t =>
+                            t.clips.some(c => c.mediaId === newItem.id)
+                          );
+                        if (track) {
+                          toast.success(`Added to ${track.name}`, file.name);
+                        }
+                      }
+                    }
+                  } catch (err) {
+                    console.error("[Timeline] External file drop failed:", err);
+                  }
+                }
+                return;
+              }
+
+              // Internal drag from assets panel
               try {
                 const rawData = e.dataTransfer.getData("application/json");
                 if (!rawData) return;
                 const data = JSON.parse(rawData);
                 if (!data?.mediaId) return;
-
-                const rect = tracksRef.current?.getBoundingClientRect();
-                if (!rect) return;
-                const x = e.clientX - rect.left + (tracksRef.current?.scrollLeft ?? 0);
-                const rawTime = Math.max(0, x / pixelsPerSecond);
-
-                const allClips = project.timeline.tracks.flatMap(t => t.clips);
-                let snappedTime = rawTime;
-                if (snapSettings.enabled) {
-                  const threshold = snapSettings.snapThreshold / pixelsPerSecond;
-                  let bestDist = Infinity;
-                  for (const clip of allClips) {
-                    const clipEnd = clip.startTime + clip.duration;
-                    const distToEnd = Math.abs(rawTime - clipEnd);
-                    const distToStart = Math.abs(rawTime - clip.startTime);
-                    if (distToEnd < threshold && distToEnd < bestDist) {
-                      bestDist = distToEnd;
-                      snappedTime = clipEnd;
-                    }
-                    if (distToStart < threshold && distToStart < bestDist) {
-                      bestDist = distToStart;
-                      snappedTime = clip.startTime;
-                    }
-                  }
-                  if (snapSettings.snapToPlayhead) {
-                    const distToPlayhead = Math.abs(rawTime - playheadPosition);
-                    if (distToPlayhead < threshold && distToPlayhead < bestDist) {
-                      snappedTime = playheadPosition;
-                    }
-                  }
-                }
                 handleDropMedia("", data.mediaId, snappedTime);
               } catch {
                 // ignore

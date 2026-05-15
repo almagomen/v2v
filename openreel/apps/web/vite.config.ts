@@ -40,25 +40,12 @@ export default defineConfig({
     },
   },
   server: {
-    // Necesario para abrir el dev server detrás del proxy/túnel de Colab.
-    allowedHosts: true,
-    proxy: {
-      // En dev (Vite en :5173) el frontend llama a /api/* relativo.
-      // Este proxy reenvía esas llamadas al backend FastAPI (uvicorn) en :8000.
-      "/api": {
-        target: "http://127.0.0.1:8000",
-        changeOrigin: true,
-        secure: false,
-      },
-    },
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
     },
   },
   preview: {
-    // Necesario para abrir el preview detrás del proxy/túnel de Colab.
-    allowedHosts: true,
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",

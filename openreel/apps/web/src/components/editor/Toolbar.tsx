@@ -43,9 +43,11 @@ import { ScreenRecorder } from "./ScreenRecorder";
 import { HistoryPanel } from "./inspector/HistoryPanel";
 import { V2VPanel } from "./V2VPanel";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+import { SettingsDialog } from "./settings/SettingsDialog";
 import { autoSaveManager } from "../../services/auto-save";
 import { useV2VStore } from "../../stores/v2v-store";
 import { toast } from "../../stores/notification-store";
+import { useSettingsStore } from "../../stores/settings-store";
 import { useAnalytics, AnalyticsEvents } from "../../hooks/useAnalytics";
 import { startTour, ONBOARDING_KEY, startMoGraphTour, MOGRAPH_TOUR_KEY } from "./tour";
 import {
@@ -94,6 +96,7 @@ export const Toolbar: React.FC = () => {
   } = useUIStore();
   const { mode: themeMode, toggleTheme } = useThemeStore();
   const { navigate } = useRouter();
+  const { openSettings } = useSettingsStore();
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
   const [isRecorderOpen, setIsRecorderOpen] = useState(false);
@@ -693,13 +696,14 @@ export const Toolbar: React.FC = () => {
               </span>
             </button>
           </TooltipTrigger>
-        <TooltipContent>Back to Home</TooltipContent>
+          <TooltipContent>Back to Home</TooltipContent>
         </Tooltip>
         <div className="h-6 w-px bg-border hidden md:block" />
         <ProjectSwitcher />
         <Tooltip>
           <TooltipTrigger asChild>
             <button
+              type="button"
               onClick={async () => {
                 setIsSaving(true);
                 await forceSave();
@@ -799,6 +803,20 @@ export const Toolbar: React.FC = () => {
           </TooltipTrigger>
           <TooltipContent>
             <p>Theme: {themeMode}</p>
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={() => openSettings()}
+              className="p-2 rounded-lg hover:bg-background-elevated text-text-secondary hover:text-text-primary transition-colors"
+            >
+              <Settings size={16} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Settings & API Keys</p>
           </TooltipContent>
         </Tooltip>
 
@@ -1066,6 +1084,8 @@ export const Toolbar: React.FC = () => {
         onRecordingComplete={handleRecordingComplete}
       />
 
+      <SettingsDialog />
+
       {isV2VOpen && (
         <>
           <div
@@ -1100,7 +1120,6 @@ export const Toolbar: React.FC = () => {
             <div className="flex items-center justify-between p-3 border-b border-border">
               <span className="text-sm font-medium text-text-primary">Action History</span>
               <button
-                type="button"
                 onClick={() => setIsHistoryOpen(false)}
                 className="p-1.5 rounded hover:bg-background-tertiary text-text-muted hover:text-text-primary transition-colors"
               >

@@ -25,6 +25,7 @@ import { getMediaEngine } from "../media/mediabunny-engine";
 import { getWavEncoder } from "../wasm/wav";
 
 export class ExportEngine {
+  private static readonly AUDIO_EXPORT_CHUNK_DURATION_SECONDS = 15;
   private mediabunny: typeof import("mediabunny") | null = null;
   private initialized = false;
   private videoEngine: VideoEngine | null = null;
@@ -275,6 +276,9 @@ export class ExportEngine {
     );
 
     this.videoEngine?.resetExportState();
+    if (this.videoEngine) {
+      this.videoEngine.exportMode = true;
+    }
 
     if (timelineDuration <= 0) {
       return {
@@ -311,9 +315,8 @@ export class ExportEngine {
         WebMOutputFormat,
         MovOutputFormat,
         VideoSampleSource,
-        AudioSampleSource,
+        AudioBufferSource,
         VideoSample,
-        AudioSample,
         getFirstEncodableVideoCodec,
         getFirstEncodableAudioCodec,
         QUALITY_MEDIUM,
@@ -378,7 +381,7 @@ export class ExportEngine {
           fullSettings.keyframeInterval / fullSettings.frameRate,
         hardwareAcceleration: "prefer-software",
       });
-      const audioSource = new AudioSampleSource({
+      const audioSource = new AudioBufferSource({
         codec: audioCodecResult.codec as "aac" | "opus" | "mp3",
         bitrate: audioCodecResult.bitrate,
       });
@@ -391,13 +394,10 @@ export class ExportEngine {
 
       await output.start();
 
-      const audioBuffer = await this.renderTimelineAudio(project, fullSettings);
-      if (audioBuffer) {
-        const audioSamples = AudioSample.fromAudioBuffer(audioBuffer, 0);
-        for (const sample of audioSamples) {
-          await audioSource.add(sample);
-          sample.close();
-        }
+      try {
+        await this.encodeTimelineAudioToSource(project, audioSource);
+      } finally {
+        this.audioEngine?.clearCache();
       }
       audioSource.close();
 
@@ -486,6 +486,9 @@ export class ExportEngine {
       mediaEngine.clearFrameCache();
       this.videoEngine?.clearVideoElementCache();
       this.videoEngine?.clearCache();
+      if (this.videoEngine) {
+        this.videoEngine.exportMode = false;
+      }
 
       yield this.createProgress(
         "muxing",
@@ -526,8 +529,12 @@ export class ExportEngine {
     } finally {
       this.abortController = null;
       this.currentExport = null;
+      this.audioEngine?.clearCache();
       this.videoEngine?.clearVideoElementCache();
       this.videoEngine?.clearCache();
+      if (this.videoEngine) {
+        this.videoEngine.exportMode = false;
+      }
       try {
         getMediaEngine().disposeAllExportDecoders();
         getMediaEngine().clearFrameCache();
@@ -583,9 +590,7 @@ export class ExportEngine {
 
     try {
       yield this.createProgress("preparing", 0, 1, 0, 0);
-      const audioBuffer = await this.renderTimelineAudio(project, {
-        audioSettings: fullSettings,
-      } as VideoExportSettings);
+      const audioBuffer = await this.renderTimelineAudio(project);
 
       if (!audioBuffer) {
         throw this.createError(
@@ -1051,7 +1056,8 @@ export class ExportEngine {
 
   private async renderTimelineAudio(
     project: Project,
-    _settings?: VideoExportSettings,
+    startTime: number = 0,
+    duration?: number,
   ): Promise<AudioBuffer | null> {
     const { timeline } = project;
 
@@ -1071,13 +1077,67 @@ export class ExportEngine {
       return null;
     }
 
+    const renderDuration = Math.max(
+      0,
+      Math.min(duration ?? timelineDuration, timelineDuration - startTime),
+    );
+    if (renderDuration <= 0) {
+      return null;
+    }
+
     const rendered = await this.audioEngine!.renderAudio(
       project,
-      0,
-      timelineDuration,
+      startTime,
+      renderDuration,
     );
 
     return rendered.buffer;
+  }
+
+  private async encodeTimelineAudioToSource(
+    project: Project,
+    audioSource: InstanceType<typeof import("mediabunny").AudioBufferSource>,
+  ): Promise<void> {
+    const timelineDuration = this.calculateTimelineDuration(project.timeline);
+    if (timelineDuration <= 0) {
+      return;
+    }
+
+    const chunkDuration = ExportEngine.AUDIO_EXPORT_CHUNK_DURATION_SECONDS;
+
+    for (
+      let startTime = 0;
+      startTime < timelineDuration;
+      startTime += chunkDuration
+    ) {
+      if (this.abortController?.signal.aborted) {
+        throw this.createError(
+          "CANCELLED",
+          "Export cancelled by user",
+          "encoding",
+        );
+      }
+
+      const currentChunkDuration = Math.min(
+        chunkDuration,
+        timelineDuration - startTime,
+      );
+      const audioBuffer = await this.renderTimelineAudio(
+        project,
+        startTime,
+        currentChunkDuration,
+      );
+
+      if (!audioBuffer) {
+        continue;
+      }
+
+      await audioSource.add(audioBuffer);
+
+      // Yield between chunks so the browser can reclaim the previous buffer
+      // before the next long-running render starts.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
 
   private async encodeAudioWithMediaBunny(

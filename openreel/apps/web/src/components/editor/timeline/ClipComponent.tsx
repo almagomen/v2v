@@ -16,10 +16,7 @@ interface ClipComponentProps {
   isSelected: boolean;
   trackHeights: Map<string, number>;
   timelineRef: React.RefObject<HTMLDivElement>;
-  onSelect: (
-    clipId: string,
-    options?: { addToSelection?: boolean; rangeSelect?: boolean },
-  ) => void;
+  onSelect: (clipId: string, addToSelection: boolean) => void;
   onMoveClip: (
     clipId: string,
     newStartTime: number,
@@ -35,8 +32,6 @@ interface ClipComponentProps {
 
 const AUTO_SCROLL_THRESHOLD = 80;
 const AUTO_SCROLL_SPEED = 10;
-const HORIZONTAL_AUTO_SCROLL_THRESHOLD = 120;
-const HORIZONTAL_AUTO_SCROLL_SPEED = 14;
 const DRAG_THRESHOLD = 5;
 
 export const ClipComponent: React.FC<ClipComponentProps> = ({
@@ -54,13 +49,18 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
 }) => {
   const { getMediaItem } = useProjectStore();
   const { snapSettings } = useUIStore();
+  const effectApplicationClipId = useUIStore(
+    (state) => state.effectApplicationClipId,
+  );
+  const effectApplicationLabel = useUIStore(
+    (state) => state.effectApplicationLabel,
+  );
   const { playheadPosition } = useTimelineStore();
   const mediaItem = getMediaItem(clip.mediaId);
   const [isDragging, setIsDragging] = useState(false);
   const [isPendingDrag, setIsPendingDrag] = useState(false);
   const [dragOffset, setDragOffset] = useState(0);
   const [dragYOffset, setDragYOffset] = useState(0);
-  const [dragTime, setDragTime] = useState<number | null>(null);
   const [isInvalidDrop, setIsInvalidDrop] = useState(false);
   const [isTrimming, setIsTrimming] = useState(false);
   const [trimEdge, setTrimEdge] = useState<"left" | "right" | null>(null);
@@ -87,8 +87,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
   });
   const clipRef = useRef<HTMLDivElement>(null);
 
-  const currentStartTime = dragTime !== null ? dragTime : clip.startTime;
-  const left = currentStartTime * pixelsPerSecond;
+  const left = clip.startTime * pixelsPerSecond;
   const width = clip.duration * pixelsPerSecond;
 
   const isVideo = track.type === "video";
@@ -100,10 +99,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     if (e.button !== 0) return;
     if (isDragging || isPendingDrag) return;
     e.stopPropagation();
-    onSelect(clip.id, {
-      addToSelection: e.shiftKey || e.metaKey,
-      rangeSelect: e.shiftKey && e.altKey,
-    });
+    onSelect(clip.id, e.shiftKey || e.metaKey);
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -111,23 +107,22 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     if (track.locked || isTrimming) return;
     e.stopPropagation();
 
-    const timelineRect = timelineRef.current?.getBoundingClientRect();
+    const rect = clipRef.current?.parentElement?.getBoundingClientRect();
     const clipRect = clipRef.current?.getBoundingClientRect();
-    if (!timelineRect || !clipRect) return;
-    const scrollLeft = timelineRef.current?.scrollLeft || 0;
-    const clickX = e.clientX - timelineRect.left + scrollLeft;
+    if (!rect || !clipRect) return;
+
+    const clickX = e.clientX - rect.left;
     const clipStartX = clip.startTime * pixelsPerSecond;
     setDragOffset(clickX - clipStartX);
 
     dragStartRef.current = {
       mouseY: e.clientY,
-      clipY: clipRect.top - timelineRect.top,
+      clipY: clipRect.top - rect.top,
       scrollTop: timelineRef.current?.scrollTop || 0,
     };
     mousePositionRef.current = { x: e.clientX, y: e.clientY };
     dragPendingRef.current = { active: true, startX: e.clientX, startY: e.clientY };
     setDragYOffset(0);
-    setDragTime(null);
     setIsInvalidDrop(false);
     setIsPendingDrag(true);
   };
@@ -165,10 +160,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     const handlePendingMouseUp = (e: MouseEvent) => {
       dragPendingRef.current.active = false;
       setIsPendingDrag(false);
-      onSelect(clip.id, {
-        addToSelection: e.shiftKey || e.metaKey,
-        rangeSelect: e.shiftKey && e.altKey,
-      });
+      onSelect(clip.id, e.shiftKey || e.metaKey);
     };
 
     window.addEventListener("mousemove", handlePendingMouseMove);
@@ -196,31 +188,16 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       const mouseY = mousePositionRef.current.y;
       const timelineTop = timelineRect.top;
       const timelineBottom = timelineRect.bottom;
-      const timelineLeft = timelineRect.left;
-      const timelineRight = timelineRect.right;
       const canScrollUp = timeline.scrollTop > 0;
       const canScrollDown = timeline.scrollTop < timeline.scrollHeight - timeline.clientHeight;
-      const canScrollLeft = timeline.scrollLeft > 0;
-      const canScrollRight = timeline.scrollLeft < timeline.scrollWidth - timeline.clientWidth;
 
-      const mouseX = mousePositionRef.current.x;
       const distanceFromTop = mouseY - timelineTop;
       const distanceFromBottom = timelineBottom - mouseY;
-      const distanceFromLeft = mouseX - timelineLeft;
-      const distanceFromRight = timelineRight - mouseX;
 
       if (distanceFromTop < AUTO_SCROLL_THRESHOLD && canScrollUp) {
         timeline.scrollTop -= AUTO_SCROLL_SPEED;
       } else if (distanceFromBottom < AUTO_SCROLL_THRESHOLD && canScrollDown) {
         timeline.scrollTop += AUTO_SCROLL_SPEED;
-      }
-      if (distanceFromLeft < HORIZONTAL_AUTO_SCROLL_THRESHOLD && canScrollLeft) {
-        timeline.scrollLeft -= HORIZONTAL_AUTO_SCROLL_SPEED;
-      } else if (
-        distanceFromRight < HORIZONTAL_AUTO_SCROLL_THRESHOLD &&
-        canScrollRight
-      ) {
-        timeline.scrollLeft += HORIZONTAL_AUTO_SCROLL_SPEED;
       }
 
       animationFrameId = requestAnimationFrame(scrollLoop);
@@ -232,11 +209,11 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       mousePositionRef.current.x = e.clientX;
       mousePositionRef.current.y = e.clientY;
 
+      const rect = clipRef.current?.parentElement?.getBoundingClientRect();
       const timelineRect = timelineRef.current?.getBoundingClientRect();
-      if (!timelineRect) return;
+      if (!rect || !timelineRect) return;
 
-      const scrollLeft = timelineRef.current?.scrollLeft || 0;
-      const x = e.clientX - timelineRect.left + scrollLeft - dragOffset;
+      const x = e.clientX - rect.left - dragOffset;
       const rawTime = Math.max(0, x / pixelsPerSecond);
 
       const dragSnapSettings = { ...snapSettings, snapToPlayhead: false };
@@ -276,7 +253,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       setIsInvalidDrop(isOverDifferentTrackType);
 
       pendingDropRef.current = { time: snapResult.time, targetTrackId };
-      setDragTime(snapResult.time);
+      onMoveClip(clip.id, snapResult.time, undefined);
       onSnapIndicator(snapResult.snapped && snapResult.snapPoint ? snapResult.snapPoint.time : null);
     };
 
@@ -286,13 +263,12 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       }
 
       const { time, targetTrackId } = pendingDropRef.current;
-      if (time !== clip.startTime || targetTrackId) {
+      if (targetTrackId) {
         onMoveClip(clip.id, time, targetTrackId);
       }
 
       setIsDragging(false);
       setDragYOffset(0);
-      setDragTime(null);
       setIsInvalidDrop(false);
       onSnapIndicator(null);
     };
@@ -366,9 +342,10 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
   }, [isTrimming, trimEdge, clip.id, pixelsPerSecond, onTrimClip]);
 
   const thumbnailCount = Math.max(1, Math.floor(width / 60));
-  const clipName = (mediaItem?.name || clip.mediaId.slice(0, 8)).split(/[\\/]/).pop() || "";
+  const clipName = mediaItem?.name || clip.mediaId.slice(0, 8);
 
   const isInteracting = isDragging || isTrimming;
+  const isApplyingEffect = effectApplicationClipId === clip.id;
 
   return (
     <ContextMenu>
@@ -383,7 +360,9 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
               : "cursor-grab"
           } ${
             isSelected && !isDragging
-              ? "ring-2 ring-primary border-primary z-10"
+              ? isApplyingEffect
+                ? "ring-2 ring-amber-400 border-amber-300 z-10"
+                : "ring-2 ring-primary border-primary z-10"
               : !isDragging ? "border-opacity-30 hover:border-opacity-60 hover:brightness-110" : ""
           } ${clipStyle.bg} border ${clipStyle.border} ${
             track.locked ? "cursor-not-allowed opacity-60" : ""
@@ -398,6 +377,16 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
             pointerEvents: isDragging ? 'none' : 'auto',
           }}
         >
+      {isApplyingEffect && (
+        <>
+          <div className="absolute -inset-px rounded-lg border border-amber-300/80 shadow-[0_0_18px_rgba(251,191,36,0.55)] pointer-events-none animate-pulse" />
+          <div className="absolute inset-0 bg-[linear-gradient(110deg,transparent_0%,rgba(255,255,255,0.08)_28%,rgba(251,191,36,0.28)_50%,rgba(255,255,255,0.08)_72%,transparent_100%)] pointer-events-none animate-pulse" />
+          <div className="absolute top-1 right-1 rounded-full bg-black/70 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-amber-200 pointer-events-none">
+            {effectApplicationLabel ?? "Applying effect"}
+          </div>
+        </>
+      )}
+
       {isVideo &&
         (mediaItem?.filmstripThumbnails?.length || mediaItem?.thumbnailUrl) && (
           <div className="absolute inset-0 flex pointer-events-none">
@@ -470,32 +459,25 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
         </span>
       </div>
 
-      {isAudio && (
+      {(isAudio || isVideo) && (
         <>
-          <div className="absolute inset-x-0 inset-y-0 h-full overflow-hidden opacity-50 pointer-events-none">
+          <div className={`absolute inset-x-0 px-1 pointer-events-none ${isAudio ? "inset-y-0 flex items-center opacity-50" : "bottom-0 h-1/3 flex items-end opacity-30"}`}>
             {mediaItem?.waveformData ? (
               <svg
-                style={{
-                  width: `${(mediaItem.metadata.duration || clip.duration) * pixelsPerSecond}px`,
-                  transform: `translateX(-${(clip.inPoint || 0) * pixelsPerSecond}px)`,
-                }}
-                className="h-full"
-                viewBox={`0 0 ${(mediaItem.metadata.duration || clip.duration) * pixelsPerSecond} 40`}
+                className="w-full h-full"
                 preserveAspectRatio="none"
+                viewBox="0 0 100 40"
               >
                 <path
-                  d={generateWaveformPath(
-                    mediaItem.waveformData,
-                    Math.floor((mediaItem.metadata.duration || clip.duration) * pixelsPerSecond)
-                  )}
+                  d={generateWaveformPath(mediaItem.waveformData, 100)}
                   stroke="currentColor"
-                  className="text-blue-400"
+                  className={isAudio ? "text-blue-400" : "text-green-300"}
                   fill="none"
-                  strokeWidth="1.5"
+                  strokeWidth="1"
                   vectorEffect="non-scaling-stroke"
                 />
               </svg>
-            ) : (
+            ) : isAudio ? (
               <svg className="w-full h-full" preserveAspectRatio="none">
                 <path
                   d="M0,20 Q10,5 20,20 T40,20 T60,20 T80,20 T100,20"
@@ -505,15 +487,17 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
                   vectorEffect="non-scaling-stroke"
                 />
               </svg>
-            )}
+            ) : null}
           </div>
-          <div className="absolute inset-x-0 top-1 flex justify-center opacity-0 group-hover:opacity-60 transition-opacity pointer-events-none">
-            <div className="flex gap-0.5">
-              <div className="w-1 h-1 rounded-full bg-blue-300" />
-              <div className="w-1 h-1 rounded-full bg-blue-300" />
-              <div className="w-1 h-1 rounded-full bg-blue-300" />
+          {isAudio && (
+            <div className="absolute inset-x-0 top-1 flex justify-center opacity-0 group-hover:opacity-60 transition-opacity pointer-events-none">
+              <div className="flex gap-0.5">
+                <div className="w-1 h-1 rounded-full bg-blue-300" />
+                <div className="w-1 h-1 rounded-full bg-blue-300" />
+                <div className="w-1 h-1 rounded-full bg-blue-300" />
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 
@@ -536,27 +520,35 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       )}
 
       {isSelected && (
-        <div className="absolute inset-0 border-2 border-primary rounded-lg pointer-events-none shadow-[inset_0_0_10px_rgba(34,197,94,0.2)]" />
+        <div className="absolute inset-0 border-2 border-primary rounded-lg pointer-events-none" />
       )}
 
       {(isVideo || isImage || isAudio) && onTrimClip && (
         <>
           <div
             onMouseDown={handleTrimMouseDown("left")}
-            className={`absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize z-20 opacity-0 group-hover:opacity-100 transition-opacity ${
-              isAudio ? "hover:bg-blue-400/50" : isVideo ? "hover:bg-green-400/50" : "hover:bg-purple-400/50"
-            }`}
+            className={`absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-20 flex items-center justify-center transition-opacity ${
+              isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+            } ${isSelected ? "bg-primary" : isAudio ? "hover:bg-blue-400/50" : isVideo ? "hover:bg-green-400/50" : "hover:bg-purple-400/50"}`}
+            style={{ borderRadius: "6px 0 0 6px" }}
             onClick={(e) => e.stopPropagation()}
-            title="Drag to adjust start"
-          />
+          >
+            {isSelected && (
+              <div className="w-0.5 h-3 bg-primary-foreground/80 rounded-full" />
+            )}
+          </div>
           <div
             onMouseDown={handleTrimMouseDown("right")}
-            className={`absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize z-20 opacity-0 group-hover:opacity-100 transition-opacity ${
-              isAudio ? "hover:bg-blue-400/50" : isVideo ? "hover:bg-green-400/50" : "hover:bg-purple-400/50"
-            }`}
+            className={`absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize z-20 flex items-center justify-center transition-opacity ${
+              isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+            } ${isSelected ? "bg-primary" : isAudio ? "hover:bg-blue-400/50" : isVideo ? "hover:bg-green-400/50" : "hover:bg-purple-400/50"}`}
+            style={{ borderRadius: "0 6px 6px 0" }}
             onClick={(e) => e.stopPropagation()}
-            title="Drag to adjust end"
-          />
+          >
+            {isSelected && (
+              <div className="w-0.5 h-3 bg-primary-foreground/80 rounded-full" />
+            )}
+          </div>
         </>
       )}
 

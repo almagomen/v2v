@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState, useEffect } from "react";
+﻿import React, { useCallback, useRef, useState, useEffect } from "react";
 import {
   Search,
   Maximize2,
@@ -65,7 +65,7 @@ const formatDuration = (seconds: number): string => {
 };
 
 
-/** Copia blobs de Media de una carpeta `folder/…` a archivos para importar en otro proyecto. */
+/** Copia blobs de Media de una carpeta `folder/ΓÇª` a archivos para importar en otro proyecto. */
 function collectFolderMediaFiles(items: MediaItem[], folder: string): File[] {
   const out: File[] = [];
   for (const m of items) {
@@ -231,7 +231,7 @@ const MediaThumbnail: React.FC<{
 
   const formatResolution = () => {
     if (item.metadata?.width && item.metadata?.height) {
-      return `${item.metadata.width}×${item.metadata.height}`;
+      return `${item.metadata.width}├ù${item.metadata.height}`;
     }
     return null;
   };
@@ -324,9 +324,9 @@ const MediaThumbnail: React.FC<{
           </div>
           <div className="flex items-center gap-1.5 text-[9px] text-text-muted">
             {item.metadata?.duration && <span>{formatDuration(item.metadata.duration)}</span>}
-            {item.metadata?.duration && formatResolution() && <span>•</span>}
+            {item.metadata?.duration && formatResolution() && <span>ΓÇó</span>}
             {formatResolution() && <span>{formatResolution()}</span>}
-            {(item.metadata?.duration || formatResolution()) && formatFileSize(item.metadata?.fileSize) && <span>•</span>}
+            {(item.metadata?.duration || formatResolution()) && formatFileSize(item.metadata?.fileSize) && <span>ΓÇó</span>}
             {formatFileSize(item.metadata?.fileSize) && <span>{formatFileSize(item.metadata?.fileSize)}</span>}
           </div>
         </div>
@@ -459,7 +459,7 @@ const MediaThumbnail: React.FC<{
           <div className="flex items-center gap-1.5 text-[9px] text-text-muted mt-0.5">
             {formatResolution() && <span>{formatResolution()}</span>}
             {formatResolution() && formatFileSize(item.metadata?.fileSize) && (
-              <span>•</span>
+              <span>ΓÇó</span>
             )}
             {formatFileSize(item.metadata?.fileSize) && (
               <span>{formatFileSize(item.metadata?.fileSize)}</span>
@@ -604,14 +604,14 @@ export const AssetsPanel: React.FC = () => {
       const rest = getDisplayName(it.name);
       await renameMedia(it.id, `${newName}/${rest}`);
     }
-    // Re-map de referencia para el botón "Añadir a la timeline".
+    // Re-map de referencia para el bot├│n "A├▒adir a la timeline".
     useV2VStore.getState().renameFolderRef(activeFolder, newName);
     setActiveFolder(newName);
   }, [activeFolder, mediaItems, renameMedia]);
 
   const handleDeleteFolder = useCallback(async () => {
     if (!activeFolder) return;
-    const ok = window.confirm(`¿Borrar la carpeta "${activeFolder}" y todos sus archivos?`);
+    const ok = window.confirm(`┬┐Borrar la carpeta "${activeFolder}" y todos sus archivos?`);
     if (!ok) return;
     const items = mediaItems.filter((m) => getFolderName(m.name) === activeFolder);
     for (const it of items) {
@@ -906,7 +906,7 @@ export const AssetsPanel: React.FC = () => {
       const currentItems = refreshState().project.mediaLibrary.items;
       const mediaNames = new Set(currentItems.map((m) => m.name));
 
-      // 1) Identificamos qué archivos faltan
+      // 1) Identificamos qu├⌐ archivos faltan
       const missingFilesInfo: { type: 'video' | 'audio', name: string, seg?: number }[] = [];
       if (!mediaNames.has(videoMediaName)) {
         missingFilesInfo.push({ type: 'video', name: videoMediaName });
@@ -933,16 +933,16 @@ export const AssetsPanel: React.FC = () => {
 
         const filesToImport = await Promise.all(downloadTasks);
         
-        // 3) Importación masiva
+        // 3) Importaci├│n masiva
         const batchRes = await importMultipleMediaIntoProject(refreshState().project, filesToImport, { quick: true });
         if (!batchRes.success) {
-           throw new Error("Error en la importación masiva de la carpeta");
+           throw new Error("Error en la importaci├│n masiva de la carpeta");
         }
         // Actualizamos el proyecto en el store (ya que importMultiple lo crea desconectado)
         // NOTA: Como estamos en un callback de AssetsPanel, usamos importMedia o similar si queremos persistencia, 
-        // pero aquí el patrón es que importMultiple devuelve el nuevo proyecto y nosotros lo inyectamos.
+        // pero aqu├¡ el patr├│n es que importMultiple devuelve el nuevo proyecto y nosotros lo inyectamos.
         // En AssetsPanel no tenemos un setProject directo, dependemos de importMedia. 
-        // Sin embargo, podemos usar el patrón de 'ProjectStore.setState({ project: batchRes.project })' o similar si es accesible.
+        // Sin embargo, podemos usar el patr├│n de 'ProjectStore.setState({ project: batchRes.project })' o similar si es accesible.
         // Revisando useProjectStore...
         useProjectStore.setState({ project: batchRes.project });
       }
@@ -969,7 +969,7 @@ export const AssetsPanel: React.FC = () => {
   );
 
   /**
-   * Añade nuevas pistas al timeline actual: video a t=0 y audios por speaker con start/end del backend.
+   * A├▒ade nuevas pistas al timeline actual: video a t=0 y audios por speaker con start/end del backend.
    */
   const handleAddV2VFolderAsNewTracks = useCallback(async () => {
     if (!activeFolder) return;
@@ -979,7 +979,7 @@ export const AssetsPanel: React.FC = () => {
     const snapshot = loadFolderSnapshot(activeFolder);
     if (snapshot && snapshot.tracks.length > 0) {
       setIsImporting(true);
-      setImportProgress("Restaurando pistas desde snapshot guardado…");
+      setImportProgress("Restaurando pistas desde snapshot guardadoΓÇª");
       try {
         if (ref) {
           await ensureV2VMediaInProject(activeFolder, ref);
@@ -1002,7 +1002,7 @@ export const AssetsPanel: React.FC = () => {
 
           renameTimelineTrack(newTrack.id, trackSnap.name);
 
-          // Añadir clips
+          // A├▒adir clips
           for (const clipSnap of trackSnap.clips) {
             const mediaName = `${folder}/${clipSnap.mediaName}`;
             const wm = useProjectStore
@@ -1034,7 +1034,7 @@ export const AssetsPanel: React.FC = () => {
         setIsImporting(false);
         setImportProgress("");
       }
-      return; // salir después de restaurar desde snapshot
+      return; // salir despu├⌐s de restaurar desde snapshot
     }
 
     if (!ref) {
@@ -1045,7 +1045,7 @@ export const AssetsPanel: React.FC = () => {
     }
 
     setIsImporting(true);
-    setImportProgress("Sincronizando Media y añadiendo pistas al timeline…");
+    setImportProgress("Sincronizando Media y a├▒adiendo pistas al timelineΓÇª");
     try {
       const segments = await ensureV2VMediaInProject(activeFolder, ref);
       const folder = activeFolder;
@@ -1071,16 +1071,16 @@ export const AssetsPanel: React.FC = () => {
         (t) => t.type === "video" && !beforeVideo.has(t.id),
       );
       if (!videoTrack) {
-        window.alert("No se encontró la pista de video nueva.");
+        window.alert("No se encontr├│ la pista de video nueva.");
         return;
       }
 
-      const folderLabel = folder.length > 52 ? `${folder.slice(0, 49)}…` : folder;
-      renameTimelineTrack(videoTrack.id, `V2V · ${folderLabel}`);
+      const folderLabel = folder.length > 52 ? `${folder.slice(0, 49)}ΓÇª` : folder;
+      renameTimelineTrack(videoTrack.id, `V2V ┬╖ ${folderLabel}`);
 
       const addV = await addClip(videoTrack.id, videoMedia.id, 0);
       if (!addV.success) {
-        window.alert("No se pudo añadir el clip de video.");
+        window.alert("No se pudo a├▒adir el clip de video.");
         return;
       }
 
@@ -1120,7 +1120,7 @@ export const AssetsPanel: React.FC = () => {
         const trackTitle =
           displaySpeaker.length > 0
             ? displaySpeaker.length > 80
-              ? `${displaySpeaker.slice(0, 77)}…`
+              ? `${displaySpeaker.slice(0, 77)}ΓÇª`
               : displaySpeaker
             : speakerKey;
 
@@ -1171,7 +1171,7 @@ export const AssetsPanel: React.FC = () => {
       await autoSaveManager.initialize();
       const saves = await autoSaveManager.checkForRecovery();
 
-      // Deduplicamos por projectId y nos quedamos con el más reciente.
+      // Deduplicamos por projectId y nos quedamos con el m├ís reciente.
       const unique = saves.reduce((acc, save) => {
         const existing = acc.find((x) => x.projectId === save.projectId);
         if (!existing || save.timestamp > existing.timestamp) {
@@ -1464,7 +1464,7 @@ export const AssetsPanel: React.FC = () => {
                       ? "bg-primary/10 border-primary text-primary"
                       : "hover:bg-background-tertiary border-transparent text-text-muted"
                   }`}
-                  title="Volver a la raíz (Suelta archivos aquí para sacarlos)"
+                  title="Volver a la ra├¡z (Suelta archivos aqu├¡ para sacarlos)"
                 >
                   <ArrowLeft size={14} />
                 </button>
@@ -1472,6 +1472,14 @@ export const AssetsPanel: React.FC = () => {
                   {activeFolder}
                 </div>
                 <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => void handleRenameFolder()}
+                    className="p-1 rounded bg-background-tertiary border border-border hover:border-primary/50 text-text-muted hover:text-primary transition-all active:scale-90"
+                    title="Renombrar carpeta"
+                  >
+                    <Pencil size={14} />
+                  </button>
                   <button
                     onClick={() => setShowGenerateAudio(true)}
                     className="p-1 rounded bg-primary/15 border border-primary/30 hover:border-primary/50 text-primary transition-all active:scale-90"
@@ -1754,7 +1762,7 @@ export const AssetsPanel: React.FC = () => {
               Stickers & Emojis
             </h4>
             <div className="grid grid-cols-4 gap-2">
-              {["😀", "🎉", "❤️", "⭐", "🔥", "👍", "🎬", "🎵"].map(
+              {["≡ƒÿÇ", "≡ƒÄë", "Γ¥ñ∩╕Å", "Γ¡É", "≡ƒöÑ", "≡ƒæì", "≡ƒÄ¼", "≡ƒÄ╡"].map(
                 (emoji, i) => (
                   <button
                     key={i}
@@ -1935,7 +1943,7 @@ export const AssetsPanel: React.FC = () => {
               Opciones de carpeta
             </DialogTitle>
             <DialogDescription className="text-xs text-text-muted">
-              Añadir al timeline o copiar a otro proyecto.
+              A├▒adir al timeline o copiar a otro proyecto.
             </DialogDescription>
           </DialogHeader>
 
@@ -1948,7 +1956,7 @@ export const AssetsPanel: React.FC = () => {
               className="w-full text-left p-3 mb-2 rounded-lg border border-primary/40 bg-primary/10 hover:border-primary transition-colors flex items-center justify-between"
             >
               <div>
-                <div className="text-sm font-medium text-primary">Añadir al timeline</div>
+                <div className="text-sm font-medium text-primary">A├▒adir al timeline</div>
                 <div className="text-[11px] text-text-muted mt-0.5">En nuevas pistas sincronizadas con job V2V</div>
               </div>
               <Plus size={18} className="text-primary" />

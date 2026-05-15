@@ -14,6 +14,7 @@ export { NoiseReductionSection } from "./NoiseReductionSection";
 export { BackgroundRemovalSection } from "./BackgroundRemovalSection";
 export { CropSection } from "./CropSection";
 export { SpeedSection } from "./SpeedSection";
+export { StabilizationSection } from "./StabilizationSection";
 
 // Color Grading
 export { ColorGradingSection } from "./ColorGradingSection";
@@ -46,9 +47,9 @@ export { StickerPickerPanel } from "./StickerPickerPanel";
 export { AudioEffectsSection } from "./AudioEffectsSection";
 export { AudioDuckingSection } from "./AudioDuckingSection";
 export { AutoCutSilenceSection } from "./AutoCutSilenceSection";
+export { CloneVoiceSegmentSection } from "./CloneVoiceSegmentSection";
 export { MusicLibraryPanel } from "./MusicLibraryPanel";
 export { TextToSpeechPanel } from "./TextToSpeechPanel";
-export { CloneVoiceSegmentSection } from "./CloneVoiceSegmentSection";
 
 // Transitions & Keyframes
 export { TransitionInspector } from "./TransitionInspector";
@@ -91,3 +92,7 @@ export { SceneNavigatorPanel } from "./SceneNavigatorPanel";
 
 // Particle Effects
 export { ParticleEffectsSection } from "./ParticleEffectsSection";
+
+// Text Behind Subject
+export { BehindSubjectSection } from "./BehindSubjectSection";
+

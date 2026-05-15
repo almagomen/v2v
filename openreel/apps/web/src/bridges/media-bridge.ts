@@ -107,7 +107,7 @@ export class MediaBridge {
         generateThumbnails: !quickMode,
         thumbnailCount: 10,
         thumbnailWidth: 160,
-        generateWaveform: generateWaveform,
+        generateWaveform: generateWaveform && !quickMode,
         waveformSamplesPerSecond: 100,
         useFallback: true,
         quickMode,

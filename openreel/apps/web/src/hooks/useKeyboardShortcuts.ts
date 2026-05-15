@@ -7,9 +7,6 @@ import { useProjectStore } from "../stores/project-store";
 import { useUIStore } from "../stores/ui-store";
 import { useTimelineStore } from "../stores/timeline-store";
 
-let lastSaveTime = 0;
-const SAVE_COOLDOWN = 1000;
-
 export function useKeyboardShortcuts() {
   const [showShortcutsOverlay, setShowShortcutsOverlay] = useState(false);
 
@@ -25,7 +22,6 @@ export function useKeyboardShortcuts() {
     getClip,
     project,
     addMarker,
-    forceSave,
   } = useProjectStore();
 
   const { getSelectedClipIds, clearSelection, toggleSnap, select } =
@@ -247,19 +243,7 @@ export function useKeyboardShortcuts() {
     setShowShortcutsOverlay(true);
   }, []);
 
-  const handleSave = useCallback(async () => {
-    const now = Date.now();
-    if (now - lastSaveTime < SAVE_COOLDOWN) {
-      return;
-    }
-    lastSaveTime = now;
-    try {
-      await forceSave();
-      console.log("[KeyboardShortcuts] Project saved");
-    } catch (error) {
-      console.error("[KeyboardShortcuts] Save failed:", error);
-    }
-  }, [forceSave]);
+  const handleSave = useCallback(() => {}, []);
 
   const handleExport = useCallback(() => {}, []);
 
@@ -352,7 +336,6 @@ export function useKeyboardShortcuts() {
     handleExport,
     handleAddText,
     handleAddMarker,
-    forceSave,
   ]);
 
   return {

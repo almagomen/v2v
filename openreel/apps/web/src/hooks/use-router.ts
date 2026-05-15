@@ -36,7 +36,7 @@ function parseHash(hash: string): RouterState {
   }
 
   const pathParts = path.split("/");
-  const route: AppRoute = (pathParts[0] || "welcome") as AppRoute;
+  let route: AppRoute = (pathParts[0] || "welcome") as AppRoute;
   const validRoutes: AppRoute[] = [
     "welcome",
     "editor",

@@ -371,8 +371,12 @@ class AutoSaveManager {
   private computeHash(project: Project): string {
     const key = JSON.stringify({
       id: project.id,
-      timeline: project.timeline,
-      settings: project.settings,
+      modifiedAt: project.modifiedAt,
+      trackCount: project.timeline.tracks.length,
+      clipCount: project.timeline.tracks.reduce(
+        (sum, t) => sum + t.clips.length,
+        0,
+      ),
       mediaCount: project.mediaLibrary.items.length,
     });
 
@@ -417,7 +421,6 @@ class AutoSaveManager {
   async forceSave(project: Project): Promise<void> {
     this.pendingProject = project;
     this.isDirty = true;
-    this.lastSavedHash = "";
     await this.saveIfDirty();
   }
 
