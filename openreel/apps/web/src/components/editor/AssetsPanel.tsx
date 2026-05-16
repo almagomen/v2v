@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
   Search, Image as ImageIcon, Film, Music, Plus, Upload, Trash2, 
   Square, Circle, Triangle, Star, ArrowRight, Hexagon, FileCode, AlertTriangle, 
@@ -36,11 +36,6 @@ import {
 import { KieAIImageDialog } from "./kieai/KieAIImageDialog";
 import { loadMediaBlob } from "../../services/media-storage";
 import { useKieAIStore } from "../../stores/kieai-store";
-import { useV2VMediaFolders } from "../../v2v/assets-integration/useV2VMediaFolders";
-import {
-  V2VMediaFolderModals,
-  V2VMediaFolderRails,
-} from "../../v2v/assets-integration/V2VMediaFolderChrome";
 
 const formatDuration = (seconds: number): string => {
   const mins = Math.floor(seconds / 60);
@@ -606,13 +601,12 @@ export const AssetsPanel: React.FC = () => {
   } = useProjectStore();
   const mediaItems = project.mediaLibrary.items;
 
-  const v2v = useV2VMediaFolders({
-    projectId: project.id,
-    mediaItems,
-    searchQuery,
-    showOnlyMissing,
-    setIsImporting,
-    setImportProgress,
+  const filteredItems = mediaItems.filter((item) => {
+    if (showOnlyMissing && !item.isPlaceholder) return false;
+    if (searchQuery) {
+      return item.name.toLowerCase().includes(searchQuery.toLowerCase());
+    }
+    return true;
   });
 
   // KieAI store
@@ -629,9 +623,23 @@ export const AssetsPanel: React.FC = () => {
   // Handle file import with loading state
   const handleFileImport = useCallback(
     async (files: FileList | null) => {
-      await v2v.importDroppedFiles(files);
+      if (!files) return;
+      setIsImporting(true);
+      setImportProgress("Importing media...");
+      try {
+        const fileArray = Array.from(files);
+        for (let i = 0; i < fileArray.length; i++) {
+          setImportProgress(`Importing file ${i + 1} of ${fileArray.length}...`);
+          await importMedia(fileArray[i]);
+        }
+      } catch (err) {
+        toast.error("Import failed", String(err));
+      } finally {
+        setIsImporting(false);
+        setImportProgress("");
+      }
     },
-    [v2v],
+    [importMedia],
   );
 
   // Handle drag and drop import — capture FileSystemFileHandle for each dropped file
@@ -661,9 +669,9 @@ export const AssetsPanel: React.FC = () => {
           : [];
 
       await Promise.all(handlePromises);
-      await v2v.importDroppedFiles(droppedFiles);
+      await handleFileImport(droppedFiles);
     },
-    [v2v],
+    [handleFileImport],
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -917,7 +925,7 @@ export const AssetsPanel: React.FC = () => {
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder={v2v.activeFolder ? `Buscar en ${v2v.activeFolder}` : "Search media"}
+                  placeholder="Search media"
                   className="pl-9 text-xs bg-background-tertiary border-border text-text-primary h-9"
                 />
               </div>
@@ -943,9 +951,6 @@ export const AssetsPanel: React.FC = () => {
               </div>
             </div>
 
-            <div className="px-4 pb-2">
-              <V2VMediaFolderRails {...v2v} mediaItems={mediaItems} />
-            </div>
 
             {missingAssetsCount > 0 && (
               <div className="px-4 pb-3 space-y-2">
@@ -982,7 +987,7 @@ export const AssetsPanel: React.FC = () => {
               onDragLeave={handleDragLeave}
             >
               <div className="px-4 pb-4 relative">
-                {v2v.filteredItems.length === 0 ? (
+                {filteredItems.length === 0 ? (
                   <EmptyState onImport={triggerFileInput} />
                 ) : (
                   <div className={
@@ -992,10 +997,10 @@ export const AssetsPanel: React.FC = () => {
                         ? "grid grid-cols-3 gap-2"
                         : "grid grid-cols-2 gap-3"
                   }>
-                    {v2v.filteredItems.map((item) => (
+                    {filteredItems.map((item) => (
                       <MediaThumbnail
                         key={item.id}
-                        item={v2v.itemForThumbnail(item)}
+                        item={item}
                         isSelected={isSelected(item.id)}
                         viewMode={mediaViewMode}
                         onSelect={() => handleSelectItem(item.id)}
@@ -1486,7 +1491,7 @@ export const AssetsPanel: React.FC = () => {
         />
       )}
 
-      <V2VMediaFolderModals {...v2v} />
+
     </div>
   );
 };

@@ -44,12 +44,11 @@ export function findClipIdForSegment(
 }
 
 export function resolveMediaIdForSegment(
-  folder: string,
   segIdx: number,
   opts?: { speaker?: string | null; filename?: string | null },
 ): string | undefined {
   const { project } = useProjectStore.getState();
-  const match = findSegmentMediaInLibrary(project.mediaLibrary.items, folder, {
+  const match = findSegmentMediaInLibrary(project.mediaLibrary.items, {
     seg: segIdx,
     speaker: opts?.speaker ?? undefined,
     filename: opts?.filename ?? undefined,
@@ -115,11 +114,11 @@ export async function applyRegeneratedSegmentToTimeline(
 
   const filenameToken = speakerFilenameToken(previousSpeakerToken, speaker, speakerLabel);
   const newFileName = `tts_${filenameToken}_${String(segIdx).padStart(3, "0")}.wav`;
-  const newMediaName = `${folder}/${newFileName}`;
+  const newMediaName = newFileName;
   const file = new File([regenBlob], newMediaName, { type: "audio/wav" });
 
   if (!mediaId) {
-    mediaId = resolveMediaIdForSegment(folder, segIdx, {
+    mediaId = resolveMediaIdForSegment(segIdx, {
       speaker,
       filename: newFileName,
     });

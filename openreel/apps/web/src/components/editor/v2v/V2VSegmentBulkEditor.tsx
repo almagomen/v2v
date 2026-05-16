@@ -123,7 +123,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
 
       const mediaId =
         stored?.mediaId ||
-        resolveMediaIdForSegment(folder, apiRow.seg, {
+        resolveMediaIdForSegment(apiRow.seg, {
           speaker: speakerToken,
           filename: apiRow.filename,
         });

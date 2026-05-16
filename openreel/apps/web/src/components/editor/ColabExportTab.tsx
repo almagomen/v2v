@@ -65,27 +65,16 @@ function isInV2VFolder(
   mediaName: string,
   folderRefs: Record<string, any>,
 ): boolean {
-  let folder = "";
-  let filename = "";
-
   const norm = mediaName.replace(/\\/g, "/");
+  const filename = norm.split("/").pop() || norm;
 
-  if (norm.includes("__")) {
-    const parts = norm.split("__");
-    folder = parts[0];
-    filename = parts[parts.length - 1];
-  } else if (norm.includes("/")) {
-    const parts = norm.split("/");
-    folder = parts[0];
-    filename = parts[parts.length - 1];
-  }
-
-  if (!folder || !(folder in folderRefs)) return false;
-
-  const ref = folderRefs[folder];
-  
-  if (ref.nativeFiles && Array.isArray(ref.nativeFiles)) {
-    return ref.nativeFiles.includes(filename);
+  for (const folderKey of Object.keys(folderRefs)) {
+    const ref = folderRefs[folderKey];
+    if (ref.nativeFiles && Array.isArray(ref.nativeFiles)) {
+      if (ref.nativeFiles.includes(filename)) {
+        return true;
+      }
+    }
   }
 
   return false;
@@ -229,16 +218,12 @@ export const ColabExportTab: React.FC = () => {
   const jobContext = React.useMemo(() => {
     for (const clip of analyzed) {
       if (clip.status !== "not_allowed") {
-        const norm = clip.mediaName.replace(/\\/g, "/");
-        let folder = "";
-        if (norm.includes("__")) {
-          folder = norm.split("__")[0];
-        } else if (norm.includes("/")) {
-          folder = norm.split("/")[0];
+        const filename = clip.mediaName.split("/").pop() || clip.mediaName;
+        for (const [folderKey, ref] of Object.entries(folderRefs as Record<string, any>)) {
+          if (ref.nativeFiles && Array.isArray(ref.nativeFiles) && ref.nativeFiles.includes(filename)) {
+            return { ...ref, longName: ref.outputName || folderKey };
+          }
         }
-        
-        const ref = (folderRefs as Record<string, { jobId: string; videoIndex: number; outputName?: string }>)[folder];
-        if (ref) return { ...ref, longName: ref.outputName || folder };
       }
     }
     return null;
@@ -380,10 +365,12 @@ export const ColabExportTab: React.FC = () => {
         const ctx = clips.reduce<{ jobId: string; videoIndex: number } | null>((acc, c) => {
           if (acc) return acc;
           if (c.status !== "not_allowed") {
-            const folder = c.mediaName.replace(/\\/g, "/").split("/")[0];
-            const ref = (folderRefs as Record<string, { jobId: string; videoIndex: number; outputName?: string }>)[folder];
-            if (ref) return { ...ref, longName: ref.outputName || folder };
-            return null;
+            const filename = c.mediaName.split("/").pop() || c.mediaName;
+            for (const [folderKey, ref] of Object.entries(folderRefs as Record<string, any>)) {
+              if (ref.nativeFiles && Array.isArray(ref.nativeFiles) && ref.nativeFiles.includes(filename)) {
+                return { ...ref, longName: ref.outputName || folderKey };
+              }
+            }
           }
           return null;
         }, null);

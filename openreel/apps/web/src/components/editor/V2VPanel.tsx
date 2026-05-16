@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo, useState } from "react";
-import { Youtube, Loader2, AlertCircle, FolderDown, Trash2, RefreshCw, ListChecks } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Trash2, ListChecks } from "lucide-react";
 import {
   ScrollArea,
   Button,
@@ -17,15 +17,9 @@ import { autoSaveManager } from "../../services/auto-save";
 import {
   folderNameFromTitle,
   importKeyFor,
-  parseV2VSegmentFromName,
-  segmentLogicalName,
-  findSegmentMediaInLibrary,
 } from "../../utils/v2v-utils";
-import { createSegmentInfo } from "../../utils/v2v-segment-ids";
 import { ColabExportTab } from "./ColabExportTab";
-import { CloneVoiceSegmentSection } from "./v2v/CloneVoiceSegmentSection";
 import { V2VSegmentBulkEditor } from "./v2v/V2VSegmentBulkEditor";
-import { useUIStore } from "../../stores/ui-store";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -71,6 +65,7 @@ function statusToBadgeClass(status: string): string {
 export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   embedInDrawer = false,
 }) => {
+  const { project } = useProjectStore();
   const {
     urls,
     setUrls,
@@ -102,22 +97,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
   const [bulkEditorOpen, setBulkEditorOpen] = useState(false);
 
-  const { project, getClip, getMediaItem } = useProjectStore();
-  const getSelectedClipIds = useUIStore((s) => s.getSelectedClipIds);
 
-  const selectedV2VAudioClipId = useMemo(() => {
-    const ids = getSelectedClipIds();
-    if (ids.length !== 1) return null;
-    const clip = getClip(ids[0]);
-    if (!clip) return null;
-    const track = project.timeline.tracks.find((t) =>
-      t.clips.some((c) => c.id === clip.id),
-    );
-    if (track?.type !== "audio") return null;
-    const media = getMediaItem(clip.mediaId);
-    if (!media?.name || !parseV2VSegmentFromName(media.name)) return null;
-    return clip.id;
-  }, [getSelectedClipIds, getClip, getMediaItem, project.timeline.tracks, project.modifiedAt]);
 
   // Calcula cuál índice de video corresponde al proyecto activo.
   // Si el proyecto no es V2V (no coincide con ninguno), retorna -1 para mostrar el placeholder.
@@ -522,121 +502,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                     </option>
                   ))}
                 </select>
-                <Button
-                  size="icon"
-                  variant="secondary"
-                  title="Re-importar carpeta a Media"
-                  onClick={async () => {
-                    if (!jobId || selectedVideoIndex < 0 || !videos[selectedVideoIndex]) return;
-                    const v = videos[selectedVideoIndex];
-                    const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
-                    const projectTitle = folder;
-                    
-                    setIsProcessing(true);
-                    try {
-                      const projectStore = useProjectStore.getState();
-                      let targetProjectLoaded = false;
-                      
-                      if (projectStore.project.name === projectTitle) {
-                        targetProjectLoaded = true;
-                      } else {
-                        await autoSaveManager.initialize();
-                        const saves = await autoSaveManager.checkForRecovery();
-                        const uniqueProjects = saves.reduce((acc: any[], save: any) => {
-                          const existing = acc.find((s: any) => s.projectId === save.projectId);
-                          if (!existing || save.timestamp > existing.timestamp) {
-                            return [...acc.filter((s: any) => s.projectId !== save.projectId), save];
-                          }
-                          return acc;
-                        }, [] as any[]);
-                        
-                        const targetSave = uniqueProjects.find((s: any) => s.projectName === projectTitle);
-                        if (targetSave) {
-                          await projectStore.recoverFromAutoSave(targetSave.id);
-                          targetProjectLoaded = true;
-                        } else {
-                          const baseProjectSettings = projectStore.project.settings;
-                          projectStore.createNewProject(projectTitle, {
-                            width: baseProjectSettings.width,
-                            height: baseProjectSettings.height,
-                            frameRate: baseProjectSettings.frameRate,
-                          });
-                          targetProjectLoaded = true;
-                        }
-                      }
-                      
-                      if (!targetProjectLoaded) {
-                        toast.error("Error", "No se pudo cargar el proyecto destino.");
-                        return;
-                      }
-
-                      // Obtenemos el store fresco tras el posible cambio de proyecto
-                      let freshStore = useProjectStore.getState();
-                      
-                      // 1) Video Merged (Original)
-                      const videoRealName = v.video_path?.split(/[\\/]/).pop() || "video_original.mp4";
-                      const videoMediaName = `${folder}/${videoRealName}`;
-                      const videoExists = freshStore.project.mediaLibrary.items.some((m: any) => m.name === videoMediaName);
-                      
-                      if (!videoExists) {
-                        const vblob = await v2vApi.fetchFileBlob(jobId!, v.index, videoRealName);
-                        const vfile = new File([vblob], videoMediaName, { type: "video/mp4" });
-                        await freshStore.importMedia(vfile);
-                        // Refresh store reference after import
-                        freshStore = useProjectStore.getState();
-                      }
-                      
-                      // 2) Audios por segmento (nombres desde API / disco)
-                      let apiAudioSegs = await v2vApi.getAudioSegments(jobId!, v.index);
-                      apiAudioSegs = apiAudioSegs.filter(
-                        (as, i, a) => a.findIndex((t) => t.seg === as.seg) === i,
-                      );
-                      for (const seg of apiAudioSegs) {
-                        const wavName = segmentLogicalName(folder, seg);
-
-                        if (!freshStore.project.mediaLibrary.items.some((m: any) => m.name === wavName)) {
-                          const wavBlob = await v2vApi.fetchAudioSegmentBlob(jobId!, v.index, seg.seg);
-                          const wavFile = new File([wavBlob], wavName, { type: "audio/wav" });
-                          await freshStore.importMedia(wavFile);
-                          freshStore = useProjectStore.getState();
-                        }
-                      }
-
-                      await freshStore.forceSave();
-
-                      // 3) Vincular carpeta al Job para que AssetsPanel la reconozca
-                      useV2VStore.getState().setFolderRef(folder, { jobId: jobId!, videoIndex: v.index, outputName: v.output_name });
-
-                      // 4) Guardar información de segmentos
-                      const importedMedia = freshStore.project.mediaLibrary.items;
-                      for (const seg of apiAudioSegs) {
-                        const mediaItem = findSegmentMediaInLibrary(importedMedia, folder, seg);
-                        if (mediaItem) {
-                          const segmentData = createSegmentInfo({
-                            mediaId: mediaItem.id,
-                            jobId: jobId!,
-                            videoIndex: v.index,
-                            segIdx: seg.seg,
-                            folder: folder,
-                            originalText:
-                              v.segments?.find((s) => s.seg === seg.seg)?.text || "",
-                            speaker: seg.speaker,
-                          });
-                          useV2VStore.getState().setSegmentInfo(folder, segmentData);
-                        }
-                      }
-
-                      toast.success("Re-importación completa", `Archivos en proyecto "${projectTitle}".`);
-                    } catch (e) {
-                      toast.error("Error al re-importar", String(e));
-                    } finally {
-                      setIsProcessing(false);
-                    }
-                  }}
-                  disabled={!jobId || isProcessing}
-                >
-                  {isProcessing ? <Loader2 size={14} className="animate-spin" /> : <FolderDown size={14} />}
-                </Button>
               </div>
               {bulkEditorContext && (
                 <Button
@@ -655,22 +520,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           </>
         )}
 
-        <div className="pt-4 mt-4 border-t border-border space-y-3">
-          <div className="flex items-center gap-2">
-            <RefreshCw size={14} className="text-primary" />
-            <p className="text-xs font-medium text-text-primary">Clonar voz del segmento</p>
-          </div>
-          <p className="text-[10px] text-text-muted">
-            Selecciona un clip de audio TTS en el timeline (pista de segmento V2V).
-          </p>
-          {selectedV2VAudioClipId ? (
-            <CloneVoiceSegmentSection clipId={selectedV2VAudioClipId} />
-          ) : (
-            <div className="p-3 bg-background-tertiary border border-border rounded-lg text-[10px] text-text-muted">
-              Ningún clip de segmento V2V seleccionado.
-            </div>
-          )}
-        </div>
+
 
         {/* Exportación Colab */}
         <div className="pt-4 mt-4 border-t border-border">
