@@ -1,6 +1,14 @@
-import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, FolderDown, Trash2, RefreshCw } from "lucide-react";
-import { ScrollArea, Button } from "@openreel/ui";
+import React, { useEffect, useCallback, useMemo, useState } from "react";
+import { Youtube, Loader2, AlertCircle, FolderDown, Trash2, RefreshCw, ListChecks } from "lucide-react";
+import {
+  ScrollArea,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
 import { v2vApi } from "../../lib/v2v-api";
 import { useProjectStore } from "../../stores/project-store";
@@ -92,6 +100,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     getFolderRef,
   } = useV2VStore();
 
+  const [bulkEditorOpen, setBulkEditorOpen] = useState(false);
+
   const { project, getClip, getMediaItem } = useProjectStore();
   const getSelectedClipIds = useUIStore((s) => s.getSelectedClipIds);
 
@@ -134,6 +144,12 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       targetLang: translateLang === "None" ? null : translateLang,
     };
   }, [jobId, selectedVideoIndex, effectiveDropdownValue, videos, getFolderRef, translateLang]);
+
+  useEffect(() => {
+    if (!bulkEditorContext && bulkEditorOpen) {
+      setBulkEditorOpen(false);
+    }
+  }, [bulkEditorContext, bulkEditorOpen]);
 
   useEffect(() => {
     if (speakers.length === 0) {
@@ -270,6 +286,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
 
   return (
+    <>
     <ScrollArea className="h-full min-h-0 flex-1 w-full">
       <div className="p-4 space-y-4 min-w-0">
         {!embedInDrawer && (
@@ -621,20 +638,21 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                   {isProcessing ? <Loader2 size={14} className="animate-spin" /> : <FolderDown size={14} />}
                 </Button>
               </div>
+              {bulkEditorContext && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-full mt-2 text-xs h-9 gap-2"
+                  title="Editor masivo STT / TTS y retraducción"
+                  onClick={() => setBulkEditorOpen(true)}
+                >
+                  <ListChecks size={14} />
+                  Editar segmentos…
+                </Button>
+              )}
             </div>
 
           </>
-        )}
-
-        {bulkEditorContext && (
-          <div className="pt-4 mt-4 border-t border-border">
-            <V2VSegmentBulkEditor
-              jobId={bulkEditorContext.jobId}
-              videoIndex={bulkEditorContext.videoIndex}
-              folder={bulkEditorContext.folder}
-              targetLang={bulkEditorContext.targetLang}
-            />
-          </div>
         )}
 
         <div className="pt-4 mt-4 border-t border-border space-y-3">
@@ -660,6 +678,33 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         </div>
       </div>
     </ScrollArea>
+
+    <Dialog open={bulkEditorOpen} onOpenChange={setBulkEditorOpen}>
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] w-[calc(100vw-2rem)] bg-background flex flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="px-6 pt-6 pb-2 space-y-1 shrink-0 text-left">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <ListChecks size={18} className="text-primary" />
+            Editar segmentos V2V
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            Texto STT original frente al TTS, retraducción con Gemini y aplicar regeneración al timeline.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="px-6 pb-6 overflow-y-auto min-h-0 flex-1">
+          {bulkEditorOpen && bulkEditorContext && (
+            <V2VSegmentBulkEditor
+              jobId={bulkEditorContext.jobId}
+              videoIndex={bulkEditorContext.videoIndex}
+              folder={bulkEditorContext.folder}
+              targetLang={bulkEditorContext.targetLang}
+              hideTitle
+              inDialog
+            />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 };
 

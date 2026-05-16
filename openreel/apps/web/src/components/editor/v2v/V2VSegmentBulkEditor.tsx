@@ -62,6 +62,10 @@ type Props = {
   videoIndex: number;
   folder: string;
   targetLang?: string | null;
+  /** Oculta la fila con icono + título (p. ej. cuando el modal ya muestra DialogTitle). */
+  hideTitle?: boolean;
+  /** Más altura útil para lista dentro de un modal. */
+  inDialog?: boolean;
 };
 
 export const V2VSegmentBulkEditor: React.FC<Props> = ({
@@ -69,6 +73,8 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
   videoIndex,
   folder,
   targetLang,
+  hideTitle = false,
+  inDialog = false,
 }) => {
   const { getFolderRef, speakers, fetchSpeakers, speaker: defaultSpeaker, translateLang } =
     useV2VStore();
@@ -394,13 +400,19 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
     return <p className="text-[10px] text-text-muted">No hay segmentos para este video.</p>;
   }
 
+  const listScrollClass = inDialog
+    ? "max-h-[min(60vh,520px)]"
+    : "max-h-72";
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <ListChecks size={14} className="text-primary" />
-          <p className="text-xs font-medium text-text-primary">Editar segmentos</p>
-        </div>
+        {!hideTitle && (
+          <div className="flex items-center gap-2">
+            <ListChecks size={14} className="text-primary" />
+            <p className="text-xs font-medium text-text-primary">Editar segmentos</p>
+          </div>
+        )}
         <p className="text-[10px] text-text-muted">
           {selectedCount} sel. · {dirtyCount} mod.
         </p>
@@ -467,7 +479,9 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         <ApplyProgressBlock applyProgress={applyProgress} />
       )}
 
-      <div className="max-h-72 overflow-y-auto space-y-2 pr-1 border border-border rounded-lg p-2 bg-background-tertiary/40">
+      <div
+        className={`${listScrollClass} overflow-y-auto space-y-2 pr-1 border border-border rounded-lg p-2 bg-background-tertiary/40`}
+      >
         {visibleRows.length === 0 ? (
           <p className="text-[10px] text-text-muted text-center py-4">
             Ningún segmento coincide con el filtro.
