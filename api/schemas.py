@@ -160,7 +160,6 @@ class RetranslateSegmentsRequest(BaseModel):
     job_id: str
     video_index: int = 0
     seg_indices: list[int] = Field(..., min_length=1)
-    mode: Literal["shorter", "similar_length"] = "similar_length"
     target_lang: Optional[str] = None
 
 

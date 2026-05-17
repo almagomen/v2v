@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, Loader2, ListChecks } from "lucide-react";
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
-import { v2vApi, type RetranslateMode, type SegmentEditorRow } from "../../../lib/v2v-api";
+import { v2vApi, type SegmentEditorRow } from "../../../lib/v2v-api";
 import { useV2VStore } from "../../../stores/v2v-store";
 import { useProjectStore } from "../../../stores/project-store";
 import { toast } from "../../../stores/notification-store";
@@ -84,7 +84,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [onlyProblematic, setOnlyProblematic] = useState(false);
-  const [retranslateMode, setRetranslateMode] = useState<RetranslateMode>("shorter");
+
   const [retranslateBusy, setRetranslateBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
   const [applyProgress, setApplyProgress] = useState<{ current: number; total: number } | null>(
@@ -215,8 +215,8 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
   const selectProblematic = () =>
     setRows((prev) => prev.map((r) => ({ ...r, selected: isRowProblematic(r) })));
 
-  const handleProposeTranslation = async () => {
-    const targets = rows.filter((r) => r.selected);
+  const handleProposeTranslation = async (specificSegs?: number[]) => {
+    const targets = specificSegs ? rows.filter(r => specificSegs.includes(r.seg)) : rows.filter((r) => r.selected);
     if (targets.length === 0) {
       toast.warning("Selecciona segmentos", "Marca al menos un segmento para proponer traducción.");
       return;
@@ -228,7 +228,6 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         jobId,
         videoIndex,
         targets.map((r) => r.seg),
-        retranslateMode,
         normalizeTranslateLang,
       );
       const bySeg = new Map(segments.map((s) => [s.seg, s.text]));
@@ -438,15 +437,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           Problemáticos
         </Button>
 
-        <Select value={retranslateMode} onValueChange={(v) => setRetranslateMode(v as RetranslateMode)}>
-          <SelectTrigger className="h-7 w-[130px] text-[10px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="shorter">Más corto</SelectItem>
-            <SelectItem value="similar_length">Longitud similar</SelectItem>
-          </SelectContent>
-        </Select>
+
 
         <Button
           type="button"
@@ -488,7 +479,14 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           </p>
         ) : (
           visibleRows.map((row) => (
-            <SegmentRow key={row.seg} row={row} updateRow={updateRow} />
+            <SegmentRow
+              key={row.seg}
+              row={row}
+              updateRow={updateRow}
+              jobId={jobId}
+              videoIndex={videoIndex}
+              onProposeTranslation={() => void handleProposeTranslation([row.seg])}
+            />
           ))
         )}
       </div>
@@ -530,9 +528,15 @@ function ApplyProgressBlock({
 function SegmentRow({
   row,
   updateRow,
+  jobId,
+  videoIndex,
+  onProposeTranslation,
 }: {
   row: BulkSegmentRow;
   updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
+  jobId: string;
+  videoIndex: number;
+  onProposeTranslation: () => void;
 }) {
   const ratio = row.draftText.length / Math.max(row.originalText.length, 1);
   const problematic = isRowProblematic(row);
@@ -569,7 +573,13 @@ function SegmentRow({
         <SegmentDraftText row={row} updateRow={updateRow} />
       </div>
 
-      <SegmentSpeedControls row={row} updateRow={updateRow} />
+      <SegmentSpeedControls 
+        row={row} 
+        updateRow={updateRow} 
+        jobId={jobId}
+        videoIndex={videoIndex}
+        onProposeTranslation={onProposeTranslation}
+      />
     </div>
   );
 }
@@ -605,10 +615,41 @@ function SegmentDraftText({
 function SegmentSpeedControls({
   row,
   updateRow,
+  jobId,
+  videoIndex,
+  onProposeTranslation,
 }: {
   row: BulkSegmentRow;
   updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
+  jobId: string;
+  videoIndex: number;
+  onProposeTranslation: () => void;
 }) {
+  const [playing, setPlaying] = useState(false);
+
+  const handlePlayAudio = async () => {
+    if (playing) return;
+    try {
+      setPlaying(true);
+      const blob = await v2vApi.fetchAudioSegmentBlob(jobId, videoIndex, row.seg);
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => {
+        setPlaying(false);
+        URL.revokeObjectURL(url);
+      };
+      audio.onerror = () => {
+        setPlaying(false);
+        URL.revokeObjectURL(url);
+        toast.error("Error al reproducir", "No se pudo cargar el audio del segmento.");
+      };
+      await audio.play();
+    } catch (e) {
+      setPlaying(false);
+      toast.error("Error", "No se pudo reproducir el audio.");
+    }
+  };
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Select
@@ -643,6 +684,26 @@ function SegmentSpeedControls({
         }
       >
         Encajar slot
+      </Button>
+      <div className="flex-1" />
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="text-[9px] h-7 px-2"
+        disabled={playing}
+        onClick={() => void handlePlayAudio()}
+      >
+        {playing ? "Reproduciendo..." : "Reproducir audio"}
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="text-[9px] h-7 px-2"
+        onClick={onProposeTranslation}
+      >
+        Regenerar texto
       </Button>
     </div>
   );

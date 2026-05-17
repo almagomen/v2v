@@ -181,7 +181,6 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
         sentences,
         target_lang=target_lang,
         source_lang=source_lang,
-        mode=req.mode,
     )
     if not translated or len(translated) != len(sentences):
         raise HTTPException(status_code=500, detail="Error al retraducir con Gemini")

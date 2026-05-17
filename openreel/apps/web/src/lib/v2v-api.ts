@@ -122,7 +122,6 @@ export interface SegmentsEditorResponse {
   segments: SegmentEditorRow[];
 }
 
-export type RetranslateMode = "shorter" | "similar_length";
 
 export interface JobUrlItem {
   url: string;
@@ -444,7 +443,6 @@ export const v2vApi = {
     jobId: string,
     videoIndex: number,
     segIndices: number[],
-    mode: RetranslateMode,
     targetLang?: string | null,
   ): Promise<{ segments: Array<{ seg: number; text: string }> }> {
     const res = await fetch(url("/api/retranslate-segments"), {
@@ -454,7 +452,6 @@ export const v2vApi = {
         job_id: jobId,
         video_index: videoIndex,
         seg_indices: segIndices,
-        mode,
         target_lang: targetLang ?? null,
       }),
     });
