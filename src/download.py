@@ -144,7 +144,6 @@ def download_video(
         "logger": OneLineLogger(),
         "quiet": True,
         "js_runtimes": {"node": {}},
-        "remote_components": ["ejs:github"],
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "referer": "https://www.google.com/",
     }
