@@ -332,7 +332,8 @@ export const v2vApi = {
     jobId: string,
     videoIndex: number,
     segIdx: number,
-    speed: number
+    speed: number | null,
+    targetDuration?: number
   ): Promise<Blob> {
     const res = await fetch(url("/api/apply-speed"), {
       method: "POST",
@@ -342,6 +343,7 @@ export const v2vApi = {
         video_index: videoIndex,
         seg_idx: segIdx,
         speed,
+        target_duration: targetDuration,
       }),
     });
     if (!res.ok) {

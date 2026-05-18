@@ -247,6 +247,69 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
     }
   };
 
+  const handleApplySpeedOnly = async (row: BulkSegmentRow) => {
+    setApplyBusy(true);
+    let effectiveSpeed = parseFloat(row.speedInput) || (row.speedMode === "x" ? row.speed || 1 : row.slotDuration);
+    let targetDuration: number | undefined;
+    if (row.speedMode === "s" && effectiveSpeed > 0) {
+      targetDuration = effectiveSpeed;
+      effectiveSpeed = 1;
+    }
+
+    try {
+      const regenBlob = await v2vApi.applyAudioSpeed(
+        jobId,
+        videoIndex,
+        row.seg,
+        row.speedMode === "x" ? effectiveSpeed : null,
+        targetDuration
+      );
+
+      const speedForStore = row.speedMode === "x" ? effectiveSpeed : row.loadedSpeed;
+
+      const result = await applyRegeneratedSegmentToTimeline({
+        folder,
+        jobId,
+        videoIndex,
+        segIdx: row.seg,
+        regenBlob,
+        text: row.loadedText, // Mantenemos el texto original (no TTS nuevo)
+        speaker: row.speaker,
+        speakerLabel: row.speakerLabel,
+        previousSpeakerToken: row.previousSpeakerToken,
+        start: row.start,
+        end: row.end,
+        effectiveSpeed: speedForStore,
+        mediaId: row.mediaId,
+        clipId: row.clipId,
+        trackStart: row.start,
+      });
+
+      if (!result.success) {
+        throw new Error("No se pudo actualizar el timeline");
+      }
+
+      setRows((prev) =>
+        prev.map((r) =>
+          r.seg === row.seg
+            ? {
+                ...r,
+                loadedText: r.draftText, // El texto en el timeline podría no cambiar, pero si lo modificó no importa
+                loadedSpeedInput: row.speedInput,
+                loadedSpeed: row.speedMode === "x" ? effectiveSpeed : row.loadedSpeed,
+                dirty: false,
+              }
+            : r
+        )
+      );
+      toast.success("Velocidad aplicada", "Se ajustó el segmento sin regenerar voz.");
+    } catch (e) {
+      toast.error("Error al aplicar velocidad", e instanceof Error ? e.message : String(e));
+    } finally {
+      setApplyBusy(false);
+    }
+  };
+
   const applyRows = async (toApply: BulkSegmentRow[]) => {
     const dirtyRows = toApply.filter((r) => r.dirty);
     if (dirtyRows.length === 0) {
@@ -485,7 +548,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
               updateRow={updateRow}
               jobId={jobId}
               videoIndex={videoIndex}
-              onProposeTranslation={() => void handleProposeTranslation([row.seg])}
+              onApplyRow={() => void handleApplySpeedOnly(row)}
             />
           ))
         )}
@@ -530,13 +593,13 @@ function SegmentRow({
   updateRow,
   jobId,
   videoIndex,
-  onProposeTranslation,
+  onApplyRow,
 }: {
   row: BulkSegmentRow;
   updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
   jobId: string;
   videoIndex: number;
-  onProposeTranslation: () => void;
+  onApplyRow: () => void;
 }) {
   const ratio = row.draftText.length / Math.max(row.originalText.length, 1);
   const problematic = isRowProblematic(row);
@@ -565,7 +628,23 @@ function SegmentRow({
         >
           ×{ratio.toFixed(2)}
         </span>
-        {row.dirty && <span className="text-[9px] text-primary">modificado</span>}
+        {row.dirty && (
+          <button
+            type="button"
+            onClick={() =>
+              updateRow(row.seg, {
+                draftText: row.loadedText,
+                speedInput: row.loadedSpeedInput,
+                speedMode: "x",
+                speed: row.loadedSpeed,
+              })
+            }
+            className="text-[9px] text-primary hover:underline cursor-pointer"
+            title="Deshacer cambios"
+          >
+            modificado
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -578,7 +657,7 @@ function SegmentRow({
         updateRow={updateRow} 
         jobId={jobId}
         videoIndex={videoIndex}
-        onProposeTranslation={onProposeTranslation}
+        onApplyRow={onApplyRow}
       />
     </div>
   );
@@ -617,13 +696,13 @@ function SegmentSpeedControls({
   updateRow,
   jobId,
   videoIndex,
-  onProposeTranslation,
+  onApplyRow,
 }: {
   row: BulkSegmentRow;
   updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
   jobId: string;
   videoIndex: number;
-  onProposeTranslation: () => void;
+  onApplyRow: () => void;
 }) {
   const [playing, setPlaying] = useState(false);
 
@@ -654,7 +733,13 @@ function SegmentSpeedControls({
     <div className="flex flex-wrap items-center gap-2">
       <Select
         value={row.speedMode}
-        onValueChange={(v) => updateRow(row.seg, { speedMode: v as "x" | "s" })}
+        onValueChange={(v) => {
+          const isS = v === "s";
+          updateRow(row.seg, {
+            speedMode: isS ? "s" : "x",
+            speedInput: isS ? row.slotDuration.toFixed(3) : row.loadedSpeedInput || "1.000",
+          });
+        }}
       >
         <SelectTrigger className="h-7 w-14 text-[10px]">
           <SelectValue />
@@ -676,14 +761,10 @@ function SegmentSpeedControls({
         size="sm"
         variant="secondary"
         className="text-[9px] h-7 px-2"
-        onClick={() =>
-          updateRow(row.seg, {
-            speedMode: "s",
-            speedInput: row.slotDuration.toFixed(3),
-          })
-        }
+        disabled={!row.dirty}
+        onClick={onApplyRow}
       >
-        Encajar slot
+        Aplicar
       </Button>
       <div className="flex-1" />
       <Button
@@ -695,15 +776,6 @@ function SegmentSpeedControls({
         onClick={() => void handlePlayAudio()}
       >
         {playing ? "Reproduciendo..." : "Reproducir audio"}
-      </Button>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        className="text-[9px] h-7 px-2"
-        onClick={onProposeTranslation}
-      >
-        Regenerar texto
       </Button>
     </div>
   );

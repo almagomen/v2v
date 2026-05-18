@@ -102,7 +102,8 @@ class ApplySpeedRequest(BaseModel):
     job_id: Optional[str] = Field(None, description="ID del job")
     video_index: int = Field(0, description="Índice del video en el job")
     seg_idx: int = Field(..., ge=1)
-    speed: float = Field(..., description="Factor de velocidad (0.5 a 2.0)")
+    speed: Optional[float] = Field(None, description="Factor de velocidad")
+    target_duration: Optional[float] = Field(None, description="Duración objetivo en segundos")
 
 
 class GenerateAudioSegmentRequest(BaseModel):

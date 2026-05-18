@@ -180,19 +180,24 @@ async def apply_speed(req: ApplySpeedRequest):
             detail=f"El archivo reportado por el manifiesto no existe físicamente: {audio_path.name}",
         )
     
-    info_current = torchaudio.info(str(audio_path))
-    current_samples = info_current.num_frames
-    
-    # El Frontend calculó req.speed asumiendo la duración del archivo actual.
-    # Por lo tanto, target_samples deriva estrictamente del audio visible en UI.
-    target_samples = int(current_samples / req.speed)
-
     # Intentamos leer siempre del RAW puro si existe, para no destruir fase.
+    # Lo leemos ANTES de calcular target_samples porque target_duration * rate usa 'rate'
     raw_path = audio_path.with_name(f"{audio_path.stem}_raw{audio_path.suffix}")
     if raw_path.exists():
         arr, rate = torchaudio.load(str(raw_path))
     else:
         arr, rate = torchaudio.load(str(audio_path))
+        
+    info_current = torchaudio.info(str(audio_path))
+    current_samples = info_current.num_frames
+    
+    # El Frontend calculó req.speed asumiendo la duración del archivo actual, o nos mandó target_duration.
+    if req.target_duration is not None and req.target_duration > 0:
+        target_samples = int(req.target_duration * rate)
+    elif req.speed is not None and req.speed > 0:
+        target_samples = int(current_samples / req.speed)
+    else:
+        raise HTTPException(status_code=400, detail="Debe proporcionar speed o target_duration válido")
 
     # Aplicar la velocidad
     # En adjust_audio_duration aplicará la compresión necesaria
