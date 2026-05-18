@@ -1,13 +1,8 @@
-import React, { useEffect, useCallback, useMemo, useState } from "react";
+import React, { useEffect, useCallback, useMemo } from "react";
 import { Youtube, Loader2, AlertCircle, Trash2, ListChecks } from "lucide-react";
 import {
   ScrollArea,
   Button,
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
 } from "@openreel/ui";
 import { toast } from "../../stores/notification-store";
 import { v2vApi } from "../../lib/v2v-api";
@@ -19,7 +14,6 @@ import {
   importKeyFor,
 } from "../../utils/v2v-utils";
 import { ColabExportTab } from "./ColabExportTab";
-import { V2VSegmentBulkEditor } from "./v2v/V2VSegmentBulkEditor";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -93,9 +87,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     fetchSpeakers,
     startPolling,
     getFolderRef,
+    bulkEditorOpen,
+    setBulkEditorOpen,
+    setIsV2VOpen,
   } = useV2VStore();
-
-  const [bulkEditorOpen, setBulkEditorOpen] = useState(false);
 
 
 
@@ -509,7 +504,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                   variant="secondary"
                   className="w-full mt-2 text-xs h-9 gap-2"
                   title="Editor masivo STT / TTS y retraducción"
-                  onClick={() => setBulkEditorOpen(true)}
+                  onClick={() => {
+                    setBulkEditorOpen(true);
+                    setIsV2VOpen(false);
+                  }}
                 >
                   <ListChecks size={14} />
                   Editar segmentos…
@@ -528,32 +526,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         </div>
       </div>
     </ScrollArea>
-
-    <Dialog open={bulkEditorOpen} onOpenChange={setBulkEditorOpen}>
-      <DialogContent className="sm:max-w-4xl max-h-[90vh] w-[calc(100vw-2rem)] bg-background flex flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="px-6 pt-6 pb-2 space-y-1 shrink-0 text-left">
-          <DialogTitle className="flex items-center gap-2 text-base">
-            <ListChecks size={18} className="text-primary" />
-            Editar segmentos V2V
-          </DialogTitle>
-          <DialogDescription className="text-xs">
-            Texto STT original frente al TTS, retraducción con Gemini y aplicar regeneración al timeline.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="px-6 pb-6 overflow-y-auto min-h-0 flex-1">
-          {bulkEditorOpen && bulkEditorContext && (
-            <V2VSegmentBulkEditor
-              jobId={bulkEditorContext.jobId}
-              videoIndex={bulkEditorContext.videoIndex}
-              folder={bulkEditorContext.folder}
-              targetLang={bulkEditorContext.targetLang}
-              hideTitle
-              inDialog
-            />
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
     </>
   );
 };

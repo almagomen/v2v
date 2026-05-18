@@ -136,6 +136,11 @@ export interface V2VState {
   jobPhase: string;
   lastUrlsSignature: string | null;
 
+  isV2VOpen: boolean;
+  setIsV2VOpen: (open: boolean) => void;
+  bulkEditorOpen: boolean;
+  setBulkEditorOpen: (open: boolean) => void;
+
   setUrls: (urls: string) => void;
   setTranslateLang: (lang: string) => void;
   setSpeaker: (speaker: string) => void;
@@ -210,6 +215,11 @@ export const useV2VStore = create<V2VState>((set, get) => {
     urlLogs: saved.urlLogs ?? {},
     jobPhase: saved.jobPhase ?? "idle",
     lastUrlsSignature: saved.lastUrlsSignature ?? null,
+
+    isV2VOpen: false,
+    setIsV2VOpen: (isV2VOpen) => set({ isV2VOpen }),
+    bulkEditorOpen: false,
+    setBulkEditorOpen: (bulkEditorOpen) => set({ bulkEditorOpen }),
 
     speakers: [],
 
@@ -880,6 +890,8 @@ export const useV2VStore = create<V2VState>((set, get) => {
         urlLogs: {},
         jobPhase: "idle",
         lastUrlsSignature: null,
+        isV2VOpen: false,
+        bulkEditorOpen: false,
       });
     },
   };

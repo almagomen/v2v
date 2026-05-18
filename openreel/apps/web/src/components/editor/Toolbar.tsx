@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect } from "react";
+import React, { useCallback, useState, useEffect, useMemo } from "react";
 import {
   Search,
   Command,
@@ -23,6 +23,7 @@ import {
   Youtube,
   Play,
   Save,
+  ListChecks,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/project-store";
 import { useUIStore } from "../../stores/ui-store";
@@ -50,6 +51,8 @@ import { toast } from "../../stores/notification-store";
 import { useSettingsStore } from "../../stores/settings-store";
 import { useAnalytics, AnalyticsEvents } from "../../hooks/useAnalytics";
 import { startTour, ONBOARDING_KEY, startMoGraphTour, MOGRAPH_TOUR_KEY } from "./tour";
+import { V2VSegmentBulkEditor } from "./v2v/V2VSegmentBulkEditor";
+import { folderNameFromTitle } from "../../utils/v2v-utils";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -59,6 +62,11 @@ import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
 } from "@openreel/ui";
 
 type ExportType =
@@ -86,6 +94,17 @@ export const Toolbar: React.FC = () => {
   const { project, forceSave } = useProjectStore();
   const v2vStore = useV2VStore();
   const {
+    isV2VOpen,
+    setIsV2VOpen,
+    bulkEditorOpen,
+    setBulkEditorOpen,
+    selectedVideoIndex,
+    jobId,
+    videos,
+    getFolderRef,
+    translateLang,
+  } = v2vStore;
+  const {
     openModal,
     selectedItems,
     setExportState: setGlobalExportState,
@@ -101,10 +120,35 @@ export const Toolbar: React.FC = () => {
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
   const [isRecorderOpen, setIsRecorderOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [isV2VOpen, setIsV2VOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const { importMedia } = useProjectStore();
   const { track } = useAnalytics();
+
+  // Calcula cuál índice de video corresponde al proyecto activo.
+  // Si el proyecto no es V2V (no coincide con ninguno), retorna -1 para mostrar el placeholder.
+  const effectiveDropdownValue = useMemo(() => {
+    for (let i = 0; i < videos.length; i++) {
+      const v = videos[i] as any;
+      const projectTitle = folderNameFromTitle(v.output_name || `video_${v.index}`);
+      if (project.name === projectTitle) return i;
+    }
+    return -1;
+  }, [videos, project.name]);
+
+  const bulkEditorContext = useMemo(() => {
+    const videoIdx =
+      selectedVideoIndex >= 0 ? selectedVideoIndex : effectiveDropdownValue;
+    if (!jobId || videoIdx < 0 || !videos[videoIdx]) return null;
+    const v = videos[videoIdx] as { index: number; output_name?: string; url?: string };
+    const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
+    if (!getFolderRef(folder)) return null;
+    return {
+      jobId,
+      videoIndex: v.index,
+      folder,
+      targetLang: translateLang === "None" ? null : translateLang,
+    };
+  }, [jobId, selectedVideoIndex, effectiveDropdownValue, videos, getFolderRef, translateLang]);
 
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -875,7 +919,7 @@ export const Toolbar: React.FC = () => {
             <button
               type="button"
               onClick={() => {
-                setIsV2VOpen((open) => !open);
+                setIsV2VOpen(!isV2VOpen);
                 setIsHistoryOpen(false);
               }}
               className={`p-2 rounded-lg transition-colors ${
@@ -1132,6 +1176,38 @@ export const Toolbar: React.FC = () => {
           </div>
         </>
       )}
+
+      <Dialog open={bulkEditorOpen} onOpenChange={setBulkEditorOpen} modal={false}>
+        <DialogContent
+          hideOverlay
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          className="sm:max-w-4xl max-h-[90vh] w-[calc(100vw-2rem)] bg-background flex flex-col gap-0 overflow-hidden p-0 shadow-2xl border border-border"
+        >
+          <DialogHeader className="px-6 pt-6 pb-2 space-y-1 shrink-0 text-left">
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <ListChecks size={18} className="text-primary" />
+              Editar segmentos V2V
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Texto STT original frente al TTS, retraducción con Gemini y aplicar regeneración al timeline.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="px-6 pb-6 overflow-y-auto min-h-0 flex-1">
+            {bulkEditorOpen && bulkEditorContext && (
+              <V2VSegmentBulkEditor
+                jobId={bulkEditorContext.jobId}
+                videoIndex={bulkEditorContext.videoIndex}
+                folder={bulkEditorContext.folder}
+                targetLang={bulkEditorContext.targetLang}
+                hideTitle
+                inDialog
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
