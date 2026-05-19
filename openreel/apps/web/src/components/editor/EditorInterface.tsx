@@ -13,7 +13,11 @@ import { SpotlightTour, MoGraphTour } from "./tour";
 import { useProjectStore } from "../../stores/project-store";
 import { useUIStore } from "../../stores/ui-store";
 import { useEngineStore } from "../../stores/engine-store";
+import { useV2VStore } from "../../stores/v2v-store";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
+import { ListChecks, X } from "lucide-react";
+import { folderNameFromTitle } from "../../utils/v2v-utils";
+import { V2VSegmentBulkEditor } from "./v2v/V2VSegmentBulkEditor";
 import {
   initializePlaybackBridge,
   disposePlaybackBridge,
@@ -193,6 +197,44 @@ export const EditorInterface: React.FC = () => {
     setPanelVisible,
   } = useUIStore();
   const { project, updateClipKeyframes } = useProjectStore();
+  const {
+    timelineHeight,
+    setTimelineHeight,
+    bulkEditorOpen,
+    setBulkEditorOpen,
+    selectedVideoIndex,
+    jobId,
+    videos,
+    getFolderRef,
+    translateLang,
+  } = useV2VStore();
+
+  // Calcula cuál índice de video corresponde al proyecto activo.
+  // Si el proyecto no es V2V (no coincide con ninguno), retorna -1 para mostrar el placeholder.
+  const effectiveDropdownValue = React.useMemo(() => {
+    for (let i = 0; i < videos.length; i++) {
+      const v = videos[i] as any;
+      const projectTitle = folderNameFromTitle(v.output_name || `video_${v.index}`);
+      if (project.name === projectTitle) return i;
+    }
+    return -1;
+  }, [videos, project.name]);
+
+  const bulkEditorContext = React.useMemo(() => {
+    const videoIdx =
+      selectedVideoIndex >= 0 ? selectedVideoIndex : effectiveDropdownValue;
+    if (!jobId || videoIdx < 0 || !videos[videoIdx]) return null;
+    const v = videos[videoIdx] as { index: number; output_name?: string; url?: string };
+    const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
+    if (!getFolderRef(folder)) return null;
+    return {
+      jobId,
+      videoIndex: v.index,
+      folder,
+      targetLang: translateLang === "None" ? null : translateLang,
+    };
+  }, [jobId, selectedVideoIndex, effectiveDropdownValue, videos, getFolderRef, translateLang]);
+
   const tracks = project.timeline.tracks;
 
   const [selectedKeyframeIds, setSelectedKeyframeIds] = React.useState<string[]>([]);
@@ -274,7 +316,6 @@ export const EditorInterface: React.FC = () => {
   const keyframePanelRef = useRef<HTMLDivElement>(null);
   const resizeStateRef = useRef<ResizeTarget | null>(null);
 
-  const [timelineHeight, setTimelineHeight] = useState(DEFAULT_TIMELINE_HEIGHT);
   const [assetsWidth, setAssetsWidth] = useState(DEFAULT_ASSETS_WIDTH);
   const [inspectorWidth, setInspectorWidth] = useState(DEFAULT_INSPECTOR_WIDTH);
 
@@ -492,7 +533,7 @@ export const EditorInterface: React.FC = () => {
       <Toolbar />
 
       <div ref={editorBodyRef} className="min-h-0 flex-1 flex flex-col overflow-hidden">
-        <div ref={workspaceRef} className="min-h-0 flex-1 flex overflow-hidden">
+        <div ref={workspaceRef} className="min-h-0 flex-1 flex overflow-hidden relative">
           <div
             className="h-full shrink-0 min-w-0 overflow-hidden"
             style={{ width: assetsWidth }}
@@ -551,6 +592,41 @@ export const EditorInterface: React.FC = () => {
                   copiedKeyframes={copiedKeyframes}
                 />
               </PanelErrorBoundary>
+            </div>
+          )}
+
+          {bulkEditorOpen && bulkEditorContext && (
+            <div 
+              className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 z-50 w-[calc(100vw-2rem)] max-w-4xl bg-background border-x border-b border-border shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-top duration-200"
+            >
+              {/* Header */}
+              <div className="px-6 pt-5 pb-3 space-y-1 shrink-0 text-left border-b border-border relative">
+                <h3 className="flex items-center gap-2 text-base font-semibold text-text-primary">
+                  <ListChecks size={18} className="text-primary" />
+                  Editar segmentos V2V
+                </h3>
+                <p className="text-xs text-text-muted">
+                  Texto STT original frente al TTS, retraducción con Gemini y aplicar regeneración al timeline.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setBulkEditorOpen(false)}
+                  className="absolute right-4 top-4 p-1.5 rounded hover:bg-background-tertiary text-text-muted hover:text-text-primary transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {/* Content */}
+              <div className="px-6 py-4 overflow-y-auto min-h-0 flex-1">
+                <V2VSegmentBulkEditor
+                  jobId={bulkEditorContext.jobId}
+                  videoIndex={bulkEditorContext.videoIndex}
+                  folder={bulkEditorContext.folder}
+                  targetLang={bulkEditorContext.targetLang}
+                  hideTitle
+                  inDialog
+                />
+              </div>
             </div>
           )}
         </div>

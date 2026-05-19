@@ -140,6 +140,8 @@ export interface V2VState {
   setIsV2VOpen: (open: boolean) => void;
   bulkEditorOpen: boolean;
   setBulkEditorOpen: (open: boolean) => void;
+  timelineHeight: number;
+  setTimelineHeight: (height: number) => void;
 
   setUrls: (urls: string) => void;
   setTranslateLang: (lang: string) => void;
@@ -220,6 +222,8 @@ export const useV2VStore = create<V2VState>((set, get) => {
     setIsV2VOpen: (isV2VOpen) => set({ isV2VOpen }),
     bulkEditorOpen: false,
     setBulkEditorOpen: (bulkEditorOpen) => set({ bulkEditorOpen }),
+    timelineHeight: 320,
+    setTimelineHeight: (timelineHeight) => set({ timelineHeight }),
 
     speakers: [],
 

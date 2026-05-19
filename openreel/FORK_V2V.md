@@ -19,7 +19,9 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 
 ## Archivos compartidos con upstream (revisar en cada merge)
 
-- `apps/web/src/components/editor/Toolbar.tsx` — icono YouTube, drawer `V2VPanel`, guardado manual.
+- `apps/web/src/components/editor/Toolbar.tsx` — icono YouTube, drawer `V2VPanel`, guardado manual. *(Nota: Se removió el Dialog flotante del Bulk Editor de aquí para reducir huella y minimizar conflictos futuros con upstream).*
+- `apps/web/src/components/editor/EditorInterface.tsx` — contenedor principal que ahora aloja el panel absoluto/flotante del editor masivo de V2V justo debajo de la barra superior y sobre el timeline, sincronizando `timelineHeight`.
+- `packages/ui/src/components/dialog.tsx` — se añadió la propiedad genérica `hideOverlay` para soportar diálogos transparentes no obstructivos.
 - `apps/web/src/components/editor/AssetsPanel.tsx` — enganches en pestaña Media (`useV2VMediaFolders`, import/drop V2V).
 - `apps/web/src/stores/project-store.ts` — `v2vFolderRefs` en `forceSave`; `replaceMediaAsset` persiste blob + invalida preview.
 - `apps/web/src/components/editor/GenerateAudioSegmentSection.tsx` — TTS por carpeta y API v2v.
