@@ -561,4 +561,25 @@ export const v2vApi = {
     }
     return await readJsonOrThrow<{ status: string; message: string }>(res);
   },
+
+  async getAuth0Cookie(): Promise<{ cookie: string }> {
+    const res = await fetch(url("/api/settings/auth0-cookie"));
+    if (!res.ok) throw new Error("Error al obtener la cookie");
+    return readJsonOrThrow<{ cookie: string }>(res);
+  },
+
+  async saveAuth0Cookie(cookie: string): Promise<{ cookie: string; message: string }> {
+    const res = await fetch(url("/api/settings/auth0-cookie"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cookie,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al actualizar la cookie");
+    }
+    return readJsonOrThrow(res);
+  },
 };

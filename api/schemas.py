@@ -171,3 +171,12 @@ class RetranslateSegmentItem(BaseModel):
 
 class RetranslateSegmentsResponse(BaseModel):
     segments: list[RetranslateSegmentItem]
+
+
+class CookieSettingsRequest(BaseModel):
+    cookie: str = Field(..., description="Nuevo valor para AUTH0_COOKIE")
+
+
+class CookieSettingsResponse(BaseModel):
+    cookie: str
+    message: str = "Cookie actualizada exitosamente"

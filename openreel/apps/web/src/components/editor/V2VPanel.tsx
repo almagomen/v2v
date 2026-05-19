@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, Trash2, ListChecks } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings } from "lucide-react";
 import {
   ScrollArea,
   Button,
@@ -57,7 +57,7 @@ function statusToBadgeClass(status: string): string {
 }
 
 export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
-  embedInDrawer = false,
+  embedInDrawer: _embedInDrawer = false,
 }) => {
   const { project } = useProjectStore();
   const {
@@ -91,6 +91,40 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     setBulkEditorOpen,
     setIsV2VOpen,
   } = useV2VStore();
+
+  const [auth0Cookie, setAuth0Cookie] = React.useState("");
+  const [showCookieSettings, setShowCookieSettings] = React.useState(false);
+  const [isSavingCookie, setIsSavingCookie] = React.useState(false);
+
+  useEffect(() => {
+    // Cargar cookies al montar
+    const loadCookies = async () => {
+      try {
+        const res = await v2vApi.getAuth0Cookie();
+        setAuth0Cookie(res.cookie || "");
+      } catch (err) {
+        console.error("Error cargando cookies:", err);
+      }
+    };
+    loadCookies();
+  }, []);
+
+  const handleSaveCookies = useCallback(async () => {
+    if (!auth0Cookie.trim()) {
+      toast.error("Error", "La cookie AUTH0_COOKIE no puede estar vacía.");
+      return;
+    }
+    setIsSavingCookie(true);
+    try {
+      await v2vApi.saveAuth0Cookie(auth0Cookie);
+      toast.success("Configuración guardada", "La cookie de autenticación de LMNT se ha actualizado correctamente.");
+      setShowCookieSettings(false);
+    } catch (err) {
+      toast.error("Error al guardar", err instanceof Error ? err.message : "No se pudo actualizar");
+    } finally {
+      setIsSavingCookie(false);
+    }
+  }, [auth0Cookie]);
 
 
 
@@ -264,12 +298,80 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     <>
     <ScrollArea className="h-full min-h-0 flex-1 w-full">
       <div className="p-4 space-y-4 min-w-0">
-        {!embedInDrawer && (
+        <div className="flex items-center justify-between border-b border-border pb-2">
           <div className="flex items-center gap-2">
             <Youtube size={20} className="text-red-500" />
             <h2 className="text-sm font-semibold text-text-primary">
               Video2Video – Traducción y doblaje
             </h2>
+          </div>
+          <button
+            onClick={() => setShowCookieSettings(!showCookieSettings)}
+            className={`p-1.5 rounded-lg border transition-all flex items-center gap-1.5 text-xs font-medium ${
+              showCookieSettings 
+                ? "bg-primary/10 border-primary/20 text-primary shadow-sm" 
+                : "bg-background-tertiary border-border text-text-muted hover:text-text-primary hover:bg-background-secondary"
+            }`}
+            title="Configurar cookies de sesión de LMNT"
+          >
+            <Settings size={13} className={showCookieSettings ? "animate-spin" : ""} style={{ animationDuration: "3s" }} />
+            Tokens
+          </button>
+        </div>
+
+        {showCookieSettings && (
+          <div className="p-3.5 rounded-xl border border-primary/20 bg-primary/5 space-y-3 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-primary/10 rounded-full blur-2xl pointer-events-none" />
+            
+            <div className="relative">
+              <h3 className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                Configurar Cookies LMNT (Auth0)
+              </h3>
+              <p className="text-[10px] text-text-muted mt-0.5 leading-normal">
+                Si alcanzas el límite de generación de voz, pega la nueva cookie de sesión aquí y guarda para continuar sin reiniciar el backend.
+              </p>
+            </div>
+
+            <div className="space-y-2 relative">
+              <div>
+                <label className="text-[9px] text-text-muted block mb-1 font-medium">
+                  AUTH0_COOKIE (lmnt-auth0)
+                </label>
+                <textarea
+                  className="w-full h-16 px-2.5 py-1.5 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary whitespace-pre-wrap resize-none"
+                  placeholder="Pega la cookie 'lmnt-auth0' completa aquí..."
+                  value={auth0Cookie}
+                  onChange={(e) => setAuth0Cookie(e.target.value)}
+                />
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <Button
+                  onClick={handleSaveCookies}
+                  disabled={isSavingCookie}
+                  className="flex-1 text-xs h-8"
+                  variant="default"
+                >
+                  {isSavingCookie ? (
+                    <>
+                      <Loader2 size={12} className="animate-spin mr-1.5" />
+                      Guardando...
+                    </>
+                  ) : (
+                    "Guardar y aplicar"
+                  )}
+                </Button>
+                <Button
+                  onClick={() => setShowCookieSettings(false)}
+                  disabled={isSavingCookie}
+                  className="text-xs h-8 px-3"
+                  variant="secondary"
+                >
+                  Cancelar
+                </Button>
+              </div>
+            </div>
           </div>
         )}
 

@@ -7,13 +7,9 @@ import time
 import requests
 import torchaudio, torch
 
-from src.config import get_lmnt_api_key, get_lmnt_auth0_cookie, get_mixpanel_cookie
+from src.config import get_lmnt_api_key, get_lmnt_auth0_cookie
 
 LMNT_URL = "https://api.lmnt.com/v1/ai/speech/bytes"
-cookies = {
-        'lmnt-auth0': get_lmnt_auth0_cookie(),
-        'mp_576dc537cb2781fc026e98b5c5527486_mixpanel': get_mixpanel_cookie(),
-    }
 
 
 def lmnt_tts(
@@ -33,6 +29,10 @@ def lmnt_tts(
     if not api_key:
         print("Error: LMNT_API_KEY no configurada. Configura en Colab Secrets o .env")
         return None, None
+
+    active_cookies = {
+        'lmnt-auth0': get_lmnt_auth0_cookie(),
+    }
 
     headers = {
         'accept': '*/*',
@@ -62,7 +62,7 @@ def lmnt_tts(
     }
 
     try:
-        response = requests.post(LMNT_URL, headers=headers, files=files, cookies=cookies)
+        response = requests.post(LMNT_URL, headers=headers, files=files, cookies=active_cookies)
         time.sleep(2)
         response.raise_for_status()
         waveform, sr = torchaudio.load(io.BytesIO(response.content))

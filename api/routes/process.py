@@ -10,6 +10,8 @@ from api.schemas import (
     VideoResult,
     SegmentSchema,
     JobPollResponse,
+    CookieSettingsRequest,
+    CookieSettingsResponse,
 )
 from api.job_store import get_job
 from api.service import start_process
@@ -164,3 +166,49 @@ def reconcile_jobs():
                 )
 
     return {"jobs": jobs_summary}
+
+
+@router.get("/settings/auth0-cookie", response_model=CookieSettingsResponse)
+def get_auth0_cookie():
+    from src.config import get_lmnt_auth0_cookie
+    return CookieSettingsResponse(
+        cookie=get_lmnt_auth0_cookie() or "",
+    )
+
+
+@router.post("/settings/auth0-cookie", response_model=CookieSettingsResponse)
+def post_auth0_cookie(req: CookieSettingsRequest):
+    import os
+    from pathlib import Path
+
+    cookie_val = req.cookie.strip()
+    os.environ["AUTH0_COOKIE"] = cookie_val
+
+    # Intentar guardar persistente en .env
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    try:
+        lines = []
+        exists = env_path.exists()
+        auth0_found = False
+
+        if exists:
+            with open(env_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            
+            for i, line in enumerate(lines):
+                if line.strip().startswith("AUTH0_COOKIE="):
+                    lines[i] = f"AUTH0_COOKIE={cookie_val}\n"
+                    auth0_found = True
+
+        if not auth0_found:
+            lines.append(f"AUTH0_COOKIE={cookie_val}\n")
+
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+    except Exception as e:
+        print(f"Error escribiendo en .env: {e}")
+
+    return CookieSettingsResponse(
+        cookie=cookie_val,
+        message="Cookie de autenticación actualizada en caliente",
+    )
