@@ -2,6 +2,7 @@
 Traducción y generación de títulos con Gemini.
 """
 import json
+from typing import Optional
 
 from src.config import get_google_api_key
 
