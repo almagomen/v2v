@@ -21,9 +21,10 @@ def translate_text_list(
     list_sentences: list[str],
     target_lang: str,
     source_lang: str = "en",
+    model_name: Optional[str] = None,
 ) -> list[str] | None:
     """
-    Traduce una lista de frases a un idioma objetivo usando Gemini.
+    Traduce una lista de frases a un idioma objetivo usando Gemini con fallback robusto.
     """
     if not list_sentences:
         return []
@@ -55,17 +56,35 @@ corresponda a una frase traducida, manteniendo el mismo orden que las frases ori
 Asegúrate de que la salida sea únicamente la lista JSON y nada más.
 """
 
-    response = client.models.generate_content(
-        model="gemini-flash-lite-latest",
-        contents=[prompt],
-        config={"response_mime_type": "application/json"},
-    )
-    return json.loads(response.text.strip())
+    selected_model = model_name or "gemini-flash-latest"
+    try:
+        response = client.models.generate_content(
+            model=selected_model,
+            contents=[prompt],
+            config={"response_mime_type": "application/json"},
+        )
+        return json.loads(response.text.strip())
+    except Exception as e:
+        if not model_name and selected_model != "gemini-flash-lite-latest":
+            print(f"⚠️ Error con {selected_model}, intentando fallback a gemini-flash-lite-latest: {e}")
+            try:
+                response = client.models.generate_content(
+                    model="gemini-flash-lite-latest",
+                    contents=[prompt],
+                    config={"response_mime_type": "application/json"},
+                )
+                return json.loads(response.text.strip())
+            except Exception as e2:
+                print(f"❌ Fallback a gemini-flash-lite-latest fallido: {e2}")
+                raise e2
+        else:
+            raise e
 
 
 def generate_tiktok_title(
     youtube_url: str,
     target_lang: str = "es",
+    model_name: Optional[str] = None,
 ) -> str | None:
     GOOGLE_API_KEY = get_google_api_key()
     if not GOOGLE_API_KEY:
@@ -90,12 +109,25 @@ Requisitos:
 
 IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones adicionales.
 """
-    model = "gemini-flash-lite-latest"
+    selected_model = model_name or "gemini-2.5-flash"
     contents = types.Content(
         parts=[
             types.Part(file_data=types.FileData(file_uri=youtube_url)),
             types.Part(text=prompt),
         ]
     )
-    response = client.models.generate_content(model=model, contents=contents)
-    return response.text.strip() if response.text else None
+
+    try:
+        response = client.models.generate_content(model=selected_model, contents=contents)
+        return response.text.strip() if response.text else None
+    except Exception as e:
+        if not model_name and selected_model != "gemini-flash-lite-latest":
+            print(f"⚠️ Error con {selected_model}, intentando fallback a gemini-flash-lite-latest: {e}")
+            try:
+                response = client.models.generate_content(model="gemini-flash-lite-latest", contents=contents)
+                return response.text.strip() if response.text else None
+            except Exception as e2:
+                print(f"❌ Fallback a gemini-flash-lite-latest fallido: {e2}")
+                raise e2
+        else:
+            raise e

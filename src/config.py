@@ -36,13 +36,16 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # API keys: Colab userdata o env
 def get_google_api_key() -> str | None:
+    env_key = os.getenv("GOOGLE_API_KEY")
+    if env_key:
+        return env_key
     if is_colab():
         try:
             from google.colab import userdata
             return userdata.get("GOOGLE_API_KEY") or None
         except Exception:
-            return os.getenv("GOOGLE_API_KEY")
-    return os.getenv("GOOGLE_API_KEY")
+            pass
+    return None
 
 
 def get_lmnt_api_key() -> str | None:

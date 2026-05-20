@@ -175,8 +175,10 @@ class RetranslateSegmentsResponse(BaseModel):
 
 class CookieSettingsRequest(BaseModel):
     cookie: str = Field(..., description="Nuevo valor para AUTH0_COOKIE")
+    google_api_key: Optional[str] = Field(None, description="Nuevo valor para GOOGLE_API_KEY")
 
 
 class CookieSettingsResponse(BaseModel):
     cookie: str
-    message: str = "Cookie actualizada exitosamente"
+    google_api_key: Optional[str] = None
+    message: str = "Configuración actualizada exitosamente"

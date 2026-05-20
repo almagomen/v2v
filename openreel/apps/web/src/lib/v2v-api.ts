@@ -562,23 +562,24 @@ export const v2vApi = {
     return await readJsonOrThrow<{ status: string; message: string }>(res);
   },
 
-  async getAuth0Cookie(): Promise<{ cookie: string }> {
+  async getAuth0Cookie(): Promise<{ cookie: string; google_api_key?: string }> {
     const res = await fetch(url("/api/settings/auth0-cookie"));
-    if (!res.ok) throw new Error("Error al obtener la cookie");
-    return readJsonOrThrow<{ cookie: string }>(res);
+    if (!res.ok) throw new Error("Error al obtener la configuración de tokens");
+    return readJsonOrThrow<{ cookie: string; google_api_key?: string }>(res);
   },
 
-  async saveAuth0Cookie(cookie: string): Promise<{ cookie: string; message: string }> {
+  async saveAuth0Cookie(cookie: string, googleApiKey?: string): Promise<{ cookie: string; google_api_key?: string; message: string }> {
     const res = await fetch(url("/api/settings/auth0-cookie"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         cookie,
+        google_api_key: googleApiKey || null,
       }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al actualizar la cookie");
+      throw new Error(err.detail || "Error al actualizar la configuración de tokens");
     }
     return readJsonOrThrow(res);
   },

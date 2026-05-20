@@ -93,6 +93,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   } = useV2VStore();
 
   const [auth0Cookie, setAuth0Cookie] = React.useState("");
+  const [googleApiKey, setGoogleApiKey] = React.useState("");
   const [showCookieSettings, setShowCookieSettings] = React.useState(false);
   const [isSavingCookie, setIsSavingCookie] = React.useState(false);
 
@@ -102,6 +103,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       try {
         const res = await v2vApi.getAuth0Cookie();
         setAuth0Cookie(res.cookie || "");
+        setGoogleApiKey(res.google_api_key || "");
       } catch (err) {
         console.error("Error cargando cookies:", err);
       }
@@ -116,15 +118,15 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     }
     setIsSavingCookie(true);
     try {
-      await v2vApi.saveAuth0Cookie(auth0Cookie);
-      toast.success("Configuración guardada", "La cookie de autenticación de LMNT se ha actualizado correctamente.");
+      await v2vApi.saveAuth0Cookie(auth0Cookie, googleApiKey);
+      toast.success("Configuración guardada", "Los tokens y cookies se han actualizado correctamente.");
       setShowCookieSettings(false);
     } catch (err) {
       toast.error("Error al guardar", err instanceof Error ? err.message : "No se pudo actualizar");
     } finally {
       setIsSavingCookie(false);
     }
-  }, [auth0Cookie]);
+  }, [auth0Cookie, googleApiKey]);
 
 
 
@@ -326,10 +328,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             <div className="relative">
               <h3 className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                Configurar Cookies LMNT (Auth0)
+                Configurar Tokens de Acceso (LMNT / Gemini)
               </h3>
               <p className="text-[10px] text-text-muted mt-0.5 leading-normal">
-                Si alcanzas el límite de generación de voz, pega la nueva cookie de sesión aquí y guarda para continuar sin reiniciar el backend.
+                Configura la cookie AUTH0_COOKIE de LMNT y tu GOOGLE_API_KEY para traducciones y títulos virales de Gemini en caliente.
               </p>
             </div>
 
@@ -343,6 +345,19 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                   placeholder="Pega la cookie 'lmnt-auth0' completa aquí..."
                   value={auth0Cookie}
                   onChange={(e) => setAuth0Cookie(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="text-[9px] text-text-muted block mb-1 font-medium">
+                  GOOGLE_API_KEY (Gemini)
+                </label>
+                <input
+                  type="password"
+                  className="w-full px-2.5 py-1.5 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
+                  placeholder="Pega la API Key de Google Gemini aquí..."
+                  value={googleApiKey}
+                  onChange={(e) => setGoogleApiKey(e.target.value)}
                 />
               </div>
 

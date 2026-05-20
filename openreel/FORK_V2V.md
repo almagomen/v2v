@@ -32,12 +32,12 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 
 ## Comportamiento V2V relevante
 
-### Configuración dinámica de la Cookie de Sesión (Auth0)
+### Configuración dinámica de la Cookie de Sesión (Auth0) y GOOGLE_API_KEY (Gemini)
 
 - El panel **Video2Video** incluye un botón **Tokens** que despliega un formulario interactivo.
-- Permite modificar `AUTH0_COOKIE` (para evitar límites de generación de voz) en caliente.
-- `GET /api/settings/auth0-cookie` y `POST /api/settings/auth0-cookie` actualizan la variable en `os.environ` y la persisten en el archivo `.env` raíz si existe.
-- Las funciones de generación de audio (`lmnt_tts` en `src/tts.py`) consultan la cookie dinámicamente en cada petición en lugar de inicializarla de manera estática global al importar el módulo.
+- Permite modificar `AUTH0_COOKIE` (para evitar límites de generación de voz) y `GOOGLE_API_KEY` en caliente.
+- `GET /api/settings/auth0-cookie` y `POST /api/settings/auth0-cookie` actualizan las variables en `os.environ` y las persisten en el archivo `.env` raíz si existe.
+- Las funciones de generación de audio (`lmnt_tts` en `src/tts.py`) y las llamadas a Gemini de traducción y generación de títulos (`src/translation.py`) consultan estas credenciales dinámicamente en cada petición en lugar de inicializarlas de manera estática global al importar el módulo.
 
 ### Dev / Colab
 

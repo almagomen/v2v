@@ -170,9 +170,10 @@ def reconcile_jobs():
 
 @router.get("/settings/auth0-cookie", response_model=CookieSettingsResponse)
 def get_auth0_cookie():
-    from src.config import get_lmnt_auth0_cookie
+    from src.config import get_lmnt_auth0_cookie, get_google_api_key
     return CookieSettingsResponse(
         cookie=get_lmnt_auth0_cookie() or "",
+        google_api_key=get_google_api_key() or "",
     )
 
 
@@ -184,12 +185,18 @@ def post_auth0_cookie(req: CookieSettingsRequest):
     cookie_val = req.cookie.strip()
     os.environ["AUTH0_COOKIE"] = cookie_val
 
+    google_api_val = ""
+    if req.google_api_key:
+        google_api_val = req.google_api_key.strip()
+        os.environ["GOOGLE_API_KEY"] = google_api_val
+
     # Intentar guardar persistente en .env
     env_path = Path(__file__).resolve().parent.parent.parent / ".env"
     try:
         lines = []
         exists = env_path.exists()
         auth0_found = False
+        google_found = False
 
         if exists:
             with open(env_path, "r", encoding="utf-8") as f:
@@ -199,9 +206,15 @@ def post_auth0_cookie(req: CookieSettingsRequest):
                 if line.strip().startswith("AUTH0_COOKIE="):
                     lines[i] = f"AUTH0_COOKIE={cookie_val}\n"
                     auth0_found = True
+                elif line.strip().startswith("GOOGLE_API_KEY="):
+                    if google_api_val:
+                        lines[i] = f"GOOGLE_API_KEY={google_api_val}\n"
+                        google_found = True
 
         if not auth0_found:
             lines.append(f"AUTH0_COOKIE={cookie_val}\n")
+        if not google_found and google_api_val:
+            lines.append(f"GOOGLE_API_KEY={google_api_val}\n")
 
         with open(env_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
@@ -210,5 +223,6 @@ def post_auth0_cookie(req: CookieSettingsRequest):
 
     return CookieSettingsResponse(
         cookie=cookie_val,
-        message="Cookie de autenticación actualizada en caliente",
+        google_api_key=google_api_val or None,
+        message="Configuración actualizada en caliente",
     )
