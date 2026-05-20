@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, Loader2, ListChecks } from "lucide-react";
+import { AlertCircle, AlertTriangle, Loader2, ListChecks } from "lucide-react";
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
 import { v2vApi, type SegmentEditorRow } from "../../../lib/v2v-api";
@@ -37,6 +37,8 @@ type BulkSegmentRow = {
   mediaId?: string;
   clipId?: string;
   filename?: string | null;
+  /** true si el MediaItem es placeholder (TTS falló al generar) */
+  missingAudio: boolean;
 };
 
 function speakerLabelFor(speakers: { value: string; label: string }[], token: string): string {
@@ -136,6 +138,9 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         }
       }
 
+      const mediaItem = mediaId != null ? getMediaItem(mediaId) : undefined;
+      const missingAudio = !!mediaItem?.isPlaceholder;
+
       const clipId =
         mediaId != null ? findClipIdForSegment(mediaId, apiRow.start) ?? undefined : undefined;
 
@@ -160,8 +165,11 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         mediaId,
         clipId,
         filename: apiRow.filename,
+        missingAudio,
       };
-      return { ...base, dirty: rowIsDirty(base) };
+      // Si el audio falta, forzamos dirty=true para que "Aplicar todos" lo incluya automáticamente
+      const forceDirty = missingAudio && ttsText.trim().length > 0;
+      return { ...base, dirty: forceDirty || rowIsDirty(base) };
     },
     [folder, getFolderRef, jobId, videoIndex, defaultSpeaker, speakers, getMediaItem],
   );
@@ -176,7 +184,10 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         const data = await v2vApi.getSegmentsEditor(jobId, videoIndex);
         if (cancelled) return;
         const built = await Promise.all(data.segments.map((r) => buildRow(r)));
-        if (!cancelled) setRows(built);
+        if (cancelled) return;
+        // Auto-seleccionar filas con audio faltante para fácil regeneración
+        const withAutoSelect = built.map(r => ({ ...r, selected: r.missingAudio }));
+        if (!cancelled) setRows(withAutoSelect);
       } catch (e) {
         if (!cancelled) {
           setLoadError(e instanceof Error ? e.message : "Error al cargar segmentos");
@@ -607,7 +618,11 @@ function SegmentRow({
   return (
     <div
       className={`rounded-lg border p-2 space-y-2 ${
-        problematic ? "border-amber-500/40 bg-amber-500/5" : "border-border bg-background"
+        row.missingAudio
+          ? "border-red-500/40 bg-red-500/5"
+          : problematic
+            ? "border-amber-500/40 bg-amber-500/5"
+            : "border-border bg-background"
       }`}
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -628,6 +643,12 @@ function SegmentRow({
         >
           ×{ratio.toFixed(2)}
         </span>
+        {row.missingAudio && (
+          <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-medium">
+            <AlertTriangle size={10} />
+            Sin audio – regenerar
+          </span>
+        )}
         {row.dirty && (
           <button
             type="button"

@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings, Eye, EyeOff } from "lucide-react";
 import {
   ScrollArea,
   Button,
@@ -96,6 +96,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [googleApiKey, setGoogleApiKey] = React.useState("");
   const [showCookieSettings, setShowCookieSettings] = React.useState(false);
   const [isSavingCookie, setIsSavingCookie] = React.useState(false);
+  const [showAuth0Cookie, setShowAuth0Cookie] = React.useState(false);
+  const [showGoogleApiKey, setShowGoogleApiKey] = React.useState(false);
 
   useEffect(() => {
     // Cargar cookies al montar
@@ -239,6 +241,14 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
       try {
         await autoSaveManager.initialize();
+
+        // Persistir el proyecto actual antes de abandonarlo para evitar pérdida de cambios
+        // y para que el import en background no sobreescriba el estado al hacer loadProject
+        const currentProject = projectStore.project;
+        if (!wasAlreadyActive && currentProject.timeline.tracks.length > 0) {
+          await autoSaveManager.forceSave(currentProject);
+        }
+
         const saves = await autoSaveManager.checkForRecovery();
         const uniqueProjects = saves.reduce((acc: any[], save: any) => {
           const existing = acc.find((s: any) => s.projectId === save.projectId);
@@ -340,25 +350,44 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 <label className="text-[9px] text-text-muted block mb-1 font-medium">
                   AUTH0_COOKIE (lmnt-auth0)
                 </label>
-                <textarea
-                  className="w-full h-16 px-2.5 py-1.5 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary whitespace-pre-wrap resize-none"
-                  placeholder="Pega la cookie 'lmnt-auth0' completa aquí..."
-                  value={auth0Cookie}
-                  onChange={(e) => setAuth0Cookie(e.target.value)}
-                />
+                <div className="relative flex items-center">
+                  <input
+                    type={showAuth0Cookie ? "text" : "password"}
+                    className="w-full px-2.5 py-1.5 pr-8 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
+                    placeholder="Pega la cookie 'lmnt-auth0' completa aquí..."
+                    value={auth0Cookie}
+                    onChange={(e) => setAuth0Cookie(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAuth0Cookie(!showAuth0Cookie)}
+                    className="absolute right-2.5 text-text-muted hover:text-text-primary transition-colors focus:outline-none"
+                  >
+                    {showAuth0Cookie ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
               </div>
 
               <div>
                 <label className="text-[9px] text-text-muted block mb-1 font-medium">
                   GOOGLE_API_KEY (Gemini)
                 </label>
-                <input
-                  type="password"
-                  className="w-full px-2.5 py-1.5 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
-                  placeholder="Pega la API Key de Google Gemini aquí..."
-                  value={googleApiKey}
-                  onChange={(e) => setGoogleApiKey(e.target.value)}
-                />
+                <div className="relative flex items-center">
+                  <input
+                    type={showGoogleApiKey ? "text" : "password"}
+                    className="w-full px-2.5 py-1.5 pr-8 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
+                    placeholder="Pega la API Key de Google Gemini aquí..."
+                    value={googleApiKey}
+                    onChange={(e) => setGoogleApiKey(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowGoogleApiKey(!showGoogleApiKey)}
+                    className="absolute right-2.5 text-text-muted hover:text-text-primary transition-colors focus:outline-none"
+                  >
+                    {showGoogleApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
               </div>
 
               <div className="flex gap-2 pt-1">

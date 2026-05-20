@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { v4 as uuidv4 } from "uuid";
+import type { MediaItem } from "@openreel/core";
 import { v2vApi, type Segment, type VideoResult, type JobUrlItem, type AudioSegmentItem } from "../lib/v2v-api";
 import { useProjectStore } from "./project-store";
 import { createEmptyProject } from "./project";
@@ -8,6 +10,7 @@ import {
   importKeyFor,
   segmentLogicalName,
   findSegmentMediaInLibrary,
+  toSafeToken,
 } from "../utils/v2v-utils";
 import { toast } from "./notification-store";
 import {
@@ -42,9 +45,11 @@ export type V2VFolderRef = {
   outputName?: string; 
   nativeFiles?: string[];
   segments?: Record<string, V2VSegmentInfo>;
+  /** ID del workingProject que generó este folderRef, para evitar cargar un autosave stale */
+  projectId?: string;
 };
 
-type SerializedFolderData = Omit<V2VFolderData, "segments"> & { segments: Record<string, V2VSegmentInfo> };
+type SerializedFolderData = Omit<V2VFolderData, "segments"> & { segments: Record<string, V2VSegmentInfo>; projectId?: string };
 
 function loadFolderRefsFromStorage(): Record<string, SerializedFolderData> {
   if (typeof window === "undefined") return {};
@@ -293,6 +298,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
           segments: existing?.segments || {},
           createdAt: existing?.createdAt || now,
           updatedAt: now,
+          projectId: ref.projectId,
         };
         const folderRefs = { ...state.folderRefs, [folder]: newFolderData };
         saveFolderRefsToStorage(folderRefs);
@@ -700,44 +706,100 @@ export const useV2VStore = create<V2VState>((set, get) => {
                       workingProject = clipRes.project!;
                     }
 
-                    const bySpeaker: Record<string, typeof downloadedSegs> = {};
-                    for (const d of downloadedSegs) {
-                      const spk = (d.seg.speaker || "").trim() || `Speaker_${d.seg.seg}`;
-                      (bySpeaker[spk] ||= []).push(d);
+                    // Agrupar TODOS los audioSegs (incluyendo fallidos) por speaker
+                    const bySpkAll: Record<string, AudioSegmentItem[]> = {};
+                    for (const seg of audioSegs) {
+                      const spk = (seg.speaker || "").trim() || `Speaker_${seg.seg}`;
+                      (bySpkAll[spk] ||= []).push(seg);
                     }
 
-                    for (const sKey of Object.keys(bySpeaker)) {
-                      const segs = bySpeaker[sKey].sort((a,b) => a.seg.seg - b.seg.seg);
+                    for (const sKey of Object.keys(bySpkAll)) {
+                      const segs = bySpkAll[sKey].sort((a, b) => a.seg - b.seg);
                       const { project: p2, trackId } = await addTrackAndGetId(workingProject, "audio");
                       workingProject = p2;
                       if (!trackId) continue;
 
                       workingProject = renameTrackInProject(workingProject, trackId, sKey);
-                      for (const d of segs) {
-                        const media = findSegmentMediaInLibrary(
-                          workingProject.mediaLibrary.items,
-                          d.seg,
-                        );
-                        if (!media) {
-                          console.warn(
-                            `[V2V] Segmento ${d.seg.seg} no montado: logicalName=${d.logicalName}, filename=${d.seg.filename}`,
+                      const failedSegNums: number[] = [];
+
+                      for (const seg of segs) {
+                        // ¿Tenemos el blob descargado para este segmento?
+                        const downloaded = downloadedSegs.find(d => d.seg.seg === seg.seg);
+
+                        if (downloaded) {
+                          // Flujo normal: el WAV ya fue importado a la librería
+                          const media = findSegmentMediaInLibrary(
+                            workingProject.mediaLibrary.items,
+                            seg,
                           );
-                          continue;
+                          if (!media) {
+                            console.warn(
+                              `[V2V] Segmento ${seg.seg} descargado pero no encontrado en librería: ${downloaded.logicalName}`,
+                            );
+                            continue;
+                          }
+                          const clipRes = (await addClipToDetachedProject(
+                            workingProject,
+                            trackId,
+                            media.id,
+                            seg.start,
+                          )) as { project?: typeof workingProject };
+                          if (clipRes.project) workingProject = clipRes.project;
+                        } else {
+                          // TTS falló: crear MediaItem placeholder para que el clip
+                          // quede en el timeline y pueda regenerarse desde el Bulk Editor
+                          const placeholderName = `tts_${toSafeToken(sKey)}_${String(seg.seg).padStart(3, "0")}.wav`;
+                          const placeholderItem: MediaItem = {
+                            id: uuidv4(),
+                            name: placeholderName,
+                            type: "audio",
+                            fileHandle: null,
+                            blob: null,
+                            isPlaceholder: true,
+                            metadata: {
+                              duration: Math.max(seg.end - seg.start, 0.1),
+                              width: 0,
+                              height: 0,
+                              frameRate: 0,
+                              codec: "",
+                              sampleRate: 48000,
+                              channels: 1,
+                              fileSize: 0,
+                            },
+                            thumbnailUrl: null,
+                            waveformData: null,
+                          };
+
+                          workingProject = {
+                            ...workingProject,
+                            mediaLibrary: {
+                              ...workingProject.mediaLibrary,
+                              items: [...workingProject.mediaLibrary.items, placeholderItem],
+                            },
+                          };
+
+                          const clipRes = (await addClipToDetachedProject(
+                            workingProject,
+                            trackId,
+                            placeholderItem.id,
+                            seg.start,
+                          )) as { project?: typeof workingProject };
+                          if (clipRes.project) workingProject = clipRes.project;
+                          failedSegNums.push(seg.seg);
                         }
-                        const clipRes = (await addClipToDetachedProject(
-                          workingProject,
-                          trackId,
-                          media.id,
-                          d.seg.start,
-                        )) as { project?: typeof workingProject };
-                        if (clipRes.project) workingProject = clipRes.project;
+                      }
+
+                      if (failedSegNums.length > 0) {
+                        const logMsg = `⚠️ Speaker "${sKey}": ${failedSegNums.length} segmento(s) sin audio TTS (error al generar) → #${failedSegNums.join(", #")}. Recupéralos desde el Bulk Editor.`;
+                        console.warn(`[V2V] ${logMsg}`);
+                        if (urlForLog) get().appendUrlLog(urlForLog, logMsg);
                       }
                     }
 
                     await autoSaveManager.forceSave(workingProject);
                     
                     const audioSegmentsImported = workingProject.mediaLibrary.items.filter(
-                      m => m.type === "audio" && m.name.startsWith("tts_") && !m.waveformData
+                      m => m.type === "audio" && m.name.startsWith("tts_") && !m.waveformData && !m.isPlaceholder
                     );
                     
                     if (audioSegmentsImported.length > 0) {
@@ -765,7 +827,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     
                     const nativeFiles = filesToImport.map(f => f.name.split("/").pop() || "");
                     
-                    get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index, outputName: v.output_name, nativeFiles });
+                    get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index, outputName: v.output_name, nativeFiles, projectId: workingProject.id });
                     
                     const segsWithMediaInfo = downloadedSegs.map((d) => {
                       const media = findSegmentMediaInLibrary(
@@ -802,11 +864,21 @@ export const useV2VStore = create<V2VState>((set, get) => {
 
                     const activeProject = useProjectStore.getState().project;
                     if (activeProject.name === folder) {
-                      useProjectStore.getState().loadProject(workingProject);
-                      toast.success(
-                        "Timeline V2V actualizado",
-                        "Video, instrumental y voces TTS montados en el timeline.",
-                      );
+                      if (activeProject.id === workingProject.id) {
+                        // El usuario no hizo switch: cargamos directamente
+                        useProjectStore.getState().loadProject(workingProject);
+                        toast.success(
+                          "Timeline V2V actualizado",
+                          "Video, instrumental y voces TTS montados en el timeline.",
+                        );
+                      } else {
+                        // El usuario hizo recoverFromAutoSave sobre este folder mientras importábamos.
+                        // El autosave ya fue persistido (forceSave arriba); notificamos sin sobreescribir.
+                        toast.info(
+                          "Importación lista",
+                          `El timeline de "${folder}" fue actualizado. Recárgalo desde el dropdown de video si no ves los cambios.`,
+                        );
+                      }
                     } else {
                       toast.info(
                         "Importación guardada en autosave",

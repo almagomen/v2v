@@ -118,7 +118,7 @@ function analyzeProject(
         start: clip.inPoint ?? 0,
         end: clip.outPoint ?? (clip.inPoint ?? 0) + clip.duration,
         trackStart: clip.startTime,
-        volume: 1.0,
+        volume: clip.volume ?? 1.0,
         status,
         blob: media.blob ?? undefined,
       });
