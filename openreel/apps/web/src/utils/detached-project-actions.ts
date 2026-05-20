@@ -28,12 +28,13 @@ export async function addTrackToDetachedProject(
   project: Project,
   trackType: "video" | "audio" | "image" | "text" | "graphics",
   position?: number,
+  trackId?: string,
 ): Promise<ActionResult & { project?: Project }> {
   const action: Action = {
     type: "track/add",
     id: uuidv4(),
     timestamp: Date.now(),
-    params: { trackType, position },
+    params: { trackType, position, trackId: trackId || `track-${uuidv4()}` },
   };
   return executeActionOnDetachedProject(project, action);
 }

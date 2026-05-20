@@ -353,7 +353,7 @@ export class ActionExecutor {
             (t: MutableTrack) => t.type === params.trackType,
           ).length + 1;
         const newTrack: MutableTrack = {
-          id: params.trackId ?? `track-${Date.now()}`,
+          id: params.trackId ?? `track-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           type: params.trackType as Track["type"],
           name: `${trackNames[params.trackType] || params.trackType} ${trackCount}`,
           clips: [],

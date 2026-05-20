@@ -2107,7 +2107,7 @@ export const useProjectStore = create<ProjectState>()(
           type: "track/add",
           id: uuidv4(),
           timestamp: Date.now(),
-          params: { trackType, position },
+          params: { trackType, position, trackId: `track-${uuidv4()}` },
         };
         const result = await actionExecutor.execute(action, projectCopy);
         if (result.success) {
