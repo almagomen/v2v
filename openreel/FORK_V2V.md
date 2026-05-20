@@ -10,7 +10,7 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 | Estado V2V | `apps/web/src/stores/v2v-store.ts` |
 | Utilidades / IDs | `apps/web/src/utils/v2v-utils.ts` (`segmentLogicalName`, `findSegmentMediaInLibrary`, `parseV2VSegmentFromName`), `apps/web/src/utils/v2v-segment-ids.ts`, `apps/web/src/utils/detached-project-actions.ts` (acciones de clon/mutación del timeline con IDs de pista únicos mediante `uuidv4`) |
 | Import masivo | `apps/web/src/utils/import-media-into-project.ts` |
-| UI principal | `apps/web/src/components/editor/V2VPanel.tsx`, `ColabExportTab.tsx` |
+| UI principal | `apps/web/src/components/editor/V2VPanel.tsx` (con prioridad de `effectiveDropdownValue` en `bulkEditorContext` para abrir según el timeline), `ColabExportTab.tsx` |
 | Clonar voz segmento | `apps/web/src/components/editor/v2v/CloneVoiceSegmentSection.tsx` |
 | Editor masivo segmentos | `apps/web/src/components/editor/v2v/V2VSegmentBulkEditor.tsx`, `apps/web/src/utils/v2v-segment-regen.ts` |
 | Caché audio preview | `apps/web/src/stores/audio-cache-store.ts` (dispara `openreel:preview-invalidate`) |
@@ -20,7 +20,7 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 ## Archivos compartidos con upstream (revisar en cada merge)
 
 - `apps/web/src/components/editor/Toolbar.tsx` — icono YouTube, drawer `V2VPanel`, guardado manual. *(Nota: Se removió el Dialog flotante del Bulk Editor de aquí para reducir huella y minimizar conflictos futuros con upstream).*
-- `apps/web/src/components/editor/EditorInterface.tsx` — contenedor principal que ahora aloja el panel absoluto/flotante del editor masivo de V2V justo debajo de la barra superior y sobre el timeline, sincronizando `timelineHeight`.
+- `apps/web/src/components/editor/EditorInterface.tsx` — contenedor principal que aloja el panel absoluto/flotante del editor masivo de V2V justo debajo de la barra superior y sobre el timeline, sincronizando `timelineHeight`. Se prioriza `effectiveDropdownValue` (proyecto activo del timeline) sobre `selectedVideoIndex` en `bulkEditorContext` para asegurar que abre el video del proyecto activo.
 - `packages/ui/src/components/dialog.tsx` — se añadió la propiedad genérica `hideOverlay` para soportar diálogos transparentes no obstructivos.
 - `apps/web/src/components/editor/AssetsPanel.tsx` — enganches en pestaña Media (`useV2VMediaFolders`, import/drop V2V).
 - `apps/web/src/stores/project-store.ts` — `v2vFolderRefs` en `forceSave`; `replaceMediaAsset` persiste blob + invalida preview; inyección de `trackId` único (`uuidv4`) en la acción `addTrack` para evitar duplicados en actualizaciones rápidas.

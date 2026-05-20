@@ -222,7 +222,7 @@ export const EditorInterface: React.FC = () => {
 
   const bulkEditorContext = React.useMemo(() => {
     const videoIdx =
-      selectedVideoIndex >= 0 ? selectedVideoIndex : effectiveDropdownValue;
+      effectiveDropdownValue >= 0 ? effectiveDropdownValue : (selectedVideoIndex >= 0 ? selectedVideoIndex : 0);
     if (!jobId || videoIdx < 0 || !videos[videoIdx]) return null;
     const v = videos[videoIdx] as { index: number; output_name?: string; url?: string };
     const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
