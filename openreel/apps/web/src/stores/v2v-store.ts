@@ -885,10 +885,27 @@ export const useV2VStore = create<V2VState>((set, get) => {
                         `Abre el proyecto "${folder}" o recupera el autosave más reciente para ver el timeline completo.`,
                       );
                     }
+                  } else {
+                    // El import falló (ej. error decodificando video, falta de memoria)
+                    console.error(`[V2V] importMultipleMediaIntoProject falló para ${folder}`);
+                    get().setImportStatus(key, "error");
+                    if (urlForLog) {
+                      get().appendUrlLog(urlForLog, `❌ Falló la importación al proyecto para ${folder}`);
+                    }
                   }
                 }
               } catch (err) {
                 console.error("V2V Background import error:", err);
+                // Limpiar cualquier video que se haya quedado 'in_progress' por una excepción
+                const state = get();
+                const pendingKeys = Object.keys(state.importStatusByKey).filter(k => state.importStatusByKey[k] === "in_progress");
+                if (pendingKeys.length > 0) {
+                  set((st) => {
+                    const newStatus = { ...st.importStatusByKey };
+                    pendingKeys.forEach(k => { newStatus[k] = "error"; });
+                    return { importStatusByKey: newStatus };
+                  });
+                }
               } finally {
                 isImportingBusy = false;
               }
