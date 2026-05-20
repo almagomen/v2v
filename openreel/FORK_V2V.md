@@ -8,7 +8,7 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 |------|------|
 | Cliente API | `apps/web/src/lib/v2v-api.ts` |
 | Estado V2V | `apps/web/src/stores/v2v-store.ts` |
-| Utilidades / IDs | `apps/web/src/utils/v2v-utils.ts` (`segmentLogicalName`, `findSegmentMediaInLibrary`, `parseV2VSegmentFromName`), `apps/web/src/utils/v2v-segment-ids.ts` |
+| Utilidades / IDs | `apps/web/src/utils/v2v-utils.ts` (`segmentLogicalName`, `findSegmentMediaInLibrary`, `parseV2VSegmentFromName`), `apps/web/src/utils/v2v-segment-ids.ts`, `apps/web/src/utils/detached-project-actions.ts` (acciones de clon/mutación del timeline con IDs de pista únicos mediante `uuidv4`) |
 | Import masivo | `apps/web/src/utils/import-media-into-project.ts` |
 | UI principal | `apps/web/src/components/editor/V2VPanel.tsx`, `ColabExportTab.tsx` |
 | Clonar voz segmento | `apps/web/src/components/editor/v2v/CloneVoiceSegmentSection.tsx` |
@@ -23,7 +23,8 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 - `apps/web/src/components/editor/EditorInterface.tsx` — contenedor principal que ahora aloja el panel absoluto/flotante del editor masivo de V2V justo debajo de la barra superior y sobre el timeline, sincronizando `timelineHeight`.
 - `packages/ui/src/components/dialog.tsx` — se añadió la propiedad genérica `hideOverlay` para soportar diálogos transparentes no obstructivos.
 - `apps/web/src/components/editor/AssetsPanel.tsx` — enganches en pestaña Media (`useV2VMediaFolders`, import/drop V2V).
-- `apps/web/src/stores/project-store.ts` — `v2vFolderRefs` en `forceSave`; `replaceMediaAsset` persiste blob + invalida preview.
+- `apps/web/src/stores/project-store.ts` — `v2vFolderRefs` en `forceSave`; `replaceMediaAsset` persiste blob + invalida preview; inyección de `trackId` único (`uuidv4`) en la acción `addTrack` para evitar duplicados en actualizaciones rápidas.
+- `packages/core/src/actions/action-executor.ts` — inyección de fracción aleatoria en el ID por defecto para `track/add` (`track-${Date.now()}-${random}`) como red de seguridad defensiva si no se provee un ID explícito.
 - `apps/web/src/components/editor/GenerateAudioSegmentSection.tsx` — TTS por carpeta y API v2v.
 - Repo padre: `api/routes/render.py` — resolución de medios TTS por índice en `v2v_assets.json` (prioridad sobre copias obsoletas).
 - Repo padre: `api/routes/segments.py` — editor masivo (`GET segments-editor`, `POST retranslate-segments`); `src/translation.py` modos `shorter` / `similar_length`.
