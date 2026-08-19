@@ -42,20 +42,36 @@ def _load_bs_roformer():
     from bs_roformer.utils import get_model_from_config
     from bs_roformer.inference import SafeLoaderWithTuple
 
-    if not ROFORMER_DIR or not ROFORMER_DIR.exists():
+    # Buscar carpeta de BS-RoFormer en Drive o rutas locales
+    candidates = []
+    if ROFORMER_DIR:
+        candidates.append(ROFORMER_DIR)
+    candidates.extend([
+        BASE_DIR / "bs-roformer-revive3e",
+        BASE_DIR / "models" / "bs-roformer-revive3e",
+        Path("bs-roformer-revive3e"),
+        Path("models/bs-roformer-revive3e"),
+    ])
+
+    roformer_path = None
+    for cand in candidates:
+        if cand and cand.exists() and (cand / "bs_roformer_revive3e.ckpt").exists():
+            roformer_path = cand
+            break
+
+    if not roformer_path:
         raise FileNotFoundError(
-            "No se encontró el directorio de BS-RoFormer. "
-            "Asegúrate de montar Drive y crear la carpeta 'bs-roformer-revive3e' en "
-            f"{DRIVE_DIR} con los archivos del modelo."
+            "No se encontró el modelo BS-RoFormer. "
+            "Asegúrate de colocar 'bs_roformer_revive3e.ckpt' y 'config.yaml' en "
+            f"{ROFORMER_DIR or (BASE_DIR / 'bs-roformer-revive3e')}."
         )
 
-    model_path = ROFORMER_DIR / "bs_roformer_revive3e.ckpt"
-    config_path = ROFORMER_DIR / "config.yaml"
+    model_path = roformer_path / "bs_roformer_revive3e.ckpt"
+    config_path = roformer_path / "config.yaml"
 
-    if not model_path.exists() or not config_path.exists():
+    if not config_path.exists():
         raise FileNotFoundError(
-            "No se encontraron los archivos de BS-RoFormer en "
-            f"{ROFORMER_DIR}. Esperado: bs_roformer_revive3e.ckpt y config.yaml."
+            f"No se encontró 'config.yaml' de BS-RoFormer en {roformer_path}."
         )
 
     with open(config_path) as f:

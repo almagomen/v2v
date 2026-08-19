@@ -8,7 +8,10 @@ import pickle
 from pathlib import Path
 from typing import Union, Optional
 
-import torchaudio
+try:
+    import torchaudio
+except ImportError:
+    torchaudio = None
 
 from src.download import yt
 from src.stt import run_main
@@ -46,27 +49,30 @@ def process_video_queue(
             # Escanear carpetas en Queue para ver si alguna tiene este link
             for folder in QUEUE_DIR.glob("*"):
                 pkl_file = folder / "result.pkl"
-                if pkl_file.exists():
+                if pkl_file.exists() and pkl_file.is_file():
                     try:
-                        # Carga de datos procesados (Estructura: translated_result, output_name, url, result, transcription, diarization, info)
-                        (
-                            translated_result,
-                            output_name,
-                            url,
-                            result,
-                            transcription,
-                            diarization,
-                            info,
-                            *extra,
-                        ) = pickle.load(f)
+                        with open(pkl_file, "rb") as f:
+                            # Carga de datos procesados (Estructura: translated_result, output_name, url, result, transcription, diarization, info)
+                            (
+                                translated_result,
+                                output_name,
+                                cached_url,
+                                result,
+                                transcription,
+                                diarization,
+                                info,
+                                *extra,
+                            ) = pickle.load(f)
+
+                        # Solo adoptar si la URL coincide exactamente
+                        if cached_url != u:
+                            continue
+
                         if not isinstance(info, dict):
                             info = {}
 
                         # Encontrar el archivo de video original (.mp4) dentro de la carpeta
-                        # yt-dlp lo guarda como folder_name.mp4 dentro de folder_name/
-                        video_files = list(folder.glob("*.mp4"))
-                        # Excluir el resultante si tiene el mismo nombre, preferimos el original
-                        # pero si solo hay uno, usamos ese.
+                        video_files = [p for p in folder.glob("*.mp4") if not p.name.startswith("_")]
                         if video_files:
                             path = video_files[0]
                             results.append(
@@ -74,8 +80,9 @@ def process_video_queue(
                                     "path": path,
                                     "output_name": output_name,
                                     "url": u,
+                                    "info": info,
                                     "texts": translated_result,
-                                    "src_lang": transcription.language,
+                                    "src_lang": getattr(transcription, "language", "es") if transcription else "es",
                                     "result": result,
                                     "transcription": transcription,
                                     "diarization": diarization,
@@ -83,8 +90,9 @@ def process_video_queue(
                                 }
                             )
                             found_in_cache = True
+                            print(f"♻️ Caché detectada por URL: {output_name}")
                             break
-                    except:
+                    except Exception:
                         continue
 
             if found_in_cache:
@@ -119,7 +127,7 @@ def process_video_queue(
                         "url": u,
                         "info": info,
                         "texts": translated_result,
-                        "src_lang": transcription.language,
+                        "src_lang": getattr(transcription, "language", "es") if transcription else "es",
                         "result": result,
                         "transcription": transcription,
                         "diarization": diarization,
@@ -176,7 +184,7 @@ def process_video_queue(
                     "url": u,
                     "info": info,
                     "texts": translated_result,
-                    "src_lang": transcription.language,
+                    "src_lang": getattr(transcription, "language", "es") if transcription else "es",
                     "result": result,
                     "transcription": transcription,
                     "diarization": diarization,
@@ -222,7 +230,7 @@ def split_audio_sequences(
         end = int(text_dict["end"] * org_sr)
         arr_split = arr[:, start:end]
 
-        seq_num = edit_indices[idx] if edit_indices else texts.index(text_dict) + 1
+        seq_num = edit_indices[idx] if edit_indices else idx + 1
         audio_filename = f"{audio_path.stem}_{seq_num:03d}.wav"
         audio_path_out = output_dir / audio_filename
 

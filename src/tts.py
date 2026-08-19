@@ -3,9 +3,16 @@ TTS vía API LMNT. Usa LMNT_API_KEY desde config (env o Colab Secrets).
 """
 import io
 import time
+from typing import Any, Tuple
 
 import requests
-import torchaudio, torch
+
+try:
+    import torch
+    import torchaudio
+except ImportError:
+    torch = None
+    torchaudio = None
 
 from src.config import get_lmnt_api_key, get_lmnt_auth0_cookie
 
@@ -20,7 +27,7 @@ def lmnt_tts(
     temperature: float = 1.2,
     top_p: float = 0.85,
     sample_rate: int = 24000,
-) -> tuple[torch.Tensor | None, int | None]:
+) -> Tuple[Any, Optional[int] if "Optional" in globals() else Any]:
     """
     Genera audio con LMNT. voice_id puede ser UUID de voz o path a .wav (referencia).
     Returns: (waveform, sample_rate) o (None, None) en error.
@@ -78,9 +85,6 @@ def lmnt_tts(
         return None, None
 
 
-def model_tts(text: str, language: str, audio_ref: str, **kwargs) -> tuple[torch.Tensor | None, int | None]:
+def model_tts(text: str, language: str, audio_ref: str, **kwargs) -> tuple:
     """Wrapper para usar como tts_fn en clone_voice_segments. audio_ref = voice_id."""
     return lmnt_tts(text, language, audio_ref, **kwargs)
-
-
-

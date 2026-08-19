@@ -76,6 +76,29 @@ def upload_to_catbox(file_path: Path) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
+_NVENC_AVAILABLE: Optional[bool] = None
+
+
+def _check_nvenc_available() -> bool:
+    """Verifica si FFmpeg soporta h264_nvenc en la máquina actual."""
+    global _NVENC_AVAILABLE
+    if _NVENC_AVAILABLE is not None:
+        return _NVENC_AVAILABLE
+    try:
+        cmd = [
+            "ffmpeg",
+            "-f", "lavfi",
+            "-i", "nullsrc=s=64x64:d=0.1",
+            "-c:v", "h264_nvenc",
+            "-f", "null",
+            "-",
+        ]
+        res = subprocess.run(cmd, capture_output=True, check=False)
+        _NVENC_AVAILABLE = (res.returncode == 0)
+    except Exception:
+        _NVENC_AVAILABLE = False
+    return _NVENC_AVAILABLE
+
 
 def _has_audio(path: Path) -> bool:
     """Check if a media file has at least one audio stream using ffprobe."""
@@ -451,33 +474,51 @@ def _build_ffmpeg_cmd(
         max_k = int(target_k * 1.1)
         buf_k = int(target_k * 2.0)
 
-        # Configuración optimizada para Peso/Calidad (NVENC):
-        cmd += [
-            "-c:v",
-            "h264_nvenc",
-            "-profile:v",
-            "high",
-            "-preset",
-            "p7",  # Máximo análisis de calidad
-            "-rc",
-            "vbr",  # Variable Bit Rate
-            "-cq",
-            "28",  # Calidad constante balanceada para peso
-            "-b:v",
-            f"{target_k}k",  # Bitrate objetivo dinámico
-            "-maxrate:v",
-            f"{max_k}k",  # Límite máximo dinámico
-            "-bufsize:v",
-            f"{buf_k}k",  # Buffer dinámico (2x)
-            "-multipass",
-            "fullres",  # Análisis detallado multipass
-            "-spatial-aq",
-            "1",  # Adaptive Quantization espacial
-            "-temporal-aq",
-            "1",  # Adaptive Quantization temporal
-            "-pix_fmt",
-            "yuv420p",
-        ]
+        # Configuración de Video Encoder (NVENC con fallback a libx264)
+        if _check_nvenc_available():
+            cmd += [
+                "-c:v",
+                "h264_nvenc",
+                "-profile:v",
+                "high",
+                "-preset",
+                "p7",  # Máximo análisis de calidad
+                "-rc",
+                "vbr",  # Variable Bit Rate
+                "-cq",
+                "28",  # Calidad constante balanceada para peso
+                "-b:v",
+                f"{target_k}k",  # Bitrate objetivo dinámico
+                "-maxrate:v",
+                f"{max_k}k",  # Límite máximo dinámico
+                "-bufsize:v",
+                f"{buf_k}k",  # Buffer dinámico (2x)
+                "-multipass",
+                "fullres",  # Análisis detallado multipass
+                "-spatial-aq",
+                "1",  # Adaptive Quantization espacial
+                "-temporal-aq",
+                "1",  # Adaptive Quantization temporal
+                "-pix_fmt",
+                "yuv420p",
+            ]
+        else:
+            cmd += [
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "23",
+                "-b:v",
+                f"{target_k}k",
+                "-maxrate:v",
+                f"{max_k}k",
+                "-bufsize:v",
+                f"{buf_k}k",
+                "-pix_fmt",
+                "yuv420p",
+            ]
 
     if audio_map:
         cmd += ["-map", audio_map]

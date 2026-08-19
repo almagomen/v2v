@@ -4,10 +4,16 @@ Diarización de hablantes con Pyannote.
 import re
 from typing import Any
 
-import torch
-import torchaudio
-from pyannote.audio import Pipeline
-from pyannote.core import Segment
+try:
+    import torch
+    import torchaudio
+    from pyannote.audio import Pipeline
+    from pyannote.core import Segment
+except ImportError:
+    torch = None
+    torchaudio = None
+    Pipeline = None
+    Segment = None
 
 from src.config import DEVICE, DRIVE_DIR
 from src.models import get_or_load_model
@@ -15,7 +21,7 @@ from src.models import get_or_load_model
 DIARIZATION_DIR = DRIVE_DIR / "speaker-diarization-community-1" if DRIVE_DIR else None
 
 
-def _load_diarization_model() -> Pipeline:
+def _load_diarization_model() -> Any:
     pretrained = (
         DIARIZATION_DIR
         if DIARIZATION_DIR and DIARIZATION_DIR.exists()
@@ -26,11 +32,11 @@ def _load_diarization_model() -> Pipeline:
     return model
 
 
-def get_diarization_model() -> Pipeline:
+def get_diarization_model() -> Any:
     return get_or_load_model("community-1", _load_diarization_model)
 
 
-def speaker_diarization(diarization_model: Pipeline, wav_audio: str, num_speakers: int | None = None) -> Any:
+def speaker_diarization(diarization_model: Any, wav_audio: str, num_speakers: int | None = None) -> Any:
     waveform, sample_rate = torchaudio.load(wav_audio)
     output = diarization_model(
         {"waveform": waveform, "sample_rate": sample_rate},

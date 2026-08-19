@@ -5,7 +5,11 @@ Detecta Colab vs local y carga secretos desde Colab userdata o variables de ento
 from pathlib import Path
 import os
 import sys
-import torch
+
+try:
+    import torch
+except ImportError:
+    torch = None
 
 # Detección Colab
 def is_colab() -> bool: return "google.colab" in sys.modules
@@ -32,7 +36,7 @@ QUEUE_DIR.mkdir(parents=True, exist_ok=True)
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Dispositivo
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = "cuda" if (torch is not None and torch.cuda.is_available()) else "cpu"
 
 # API keys: Colab userdata o env
 def get_google_api_key() -> str | None:
@@ -68,7 +72,6 @@ def get_lmnt_auth0_cookie() -> str | None:
         except Exception:
             pass
     return None
-
 
 
 def get_drive_mount() -> bool: return _google_drive and is_colab()

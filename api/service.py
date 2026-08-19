@@ -120,14 +120,20 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             texts = r["texts"]
             output_name = f"{idx + 1}. {r['output_name']}"
             transcription = r["transcription"]
-            lang = translate_lang if translate_lang else transcription.language
+            lang = translate_lang if translate_lang else getattr(transcription, "language", "es")
 
             # Leer activos deterministas desde el manifiesto
             assets = load_assets(path.parent)
 
             def make_segments(texts_list: list) -> list:
                 return [
-                    {"seg": i + 1, "start": t["start"], "end": t["end"], "text": t["text"], "speaker": speaker_name}
+                    {
+                        "seg": i + 1,
+                        "start": t["start"],
+                        "end": t["end"],
+                        "text": t["text"],
+                        "speaker": t.get("speaker", speaker_name),
+                    }
                     for i, t in enumerate(texts_list)
                 ]
 
@@ -136,7 +142,9 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             # ── Caché: el job ya fue procesado antes ──────────────────────────────
             # Detectamos si los segmentos TTS ya existen como señal de caché completo.
             seqs_trg = path.parent / "Seqs_trg"
-            already_done = seqs_trg.exists() and any(seqs_trg.glob("vocals_*.wav"))
+            already_done = seqs_trg.exists() and (
+                any(seqs_trg.glob("tts_*.wav")) or any(seqs_trg.glob("vocals_*.wav"))
+            )
 
             if already_done:
                 segments = make_segments(texts)

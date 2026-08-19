@@ -6,8 +6,12 @@ import io
 from pathlib import Path
 from typing import Union, Tuple, Any, Optional
 
-import stable_whisper
-import torchaudio
+try:
+    import stable_whisper
+    import torchaudio
+except ImportError:
+    stable_whisper = None
+    torchaudio = None
 
 from src.config import DEVICE, DRIVE_DIR
 from src.models import get_or_load_model
@@ -101,11 +105,15 @@ def run_main(
             source_lang=transcription.language,
         )
         if translated_texts:
-            translated_result = [
-                {"start": s, "end": e, "text": txt}
-                for (s, e), txt in zip(times, translated_texts)
-            ]
-        else: print("⚠️ No se pudo traducir, usando texto original")
+            translated_result = []
+            for (s, e), txt, orig in zip(times, translated_texts, result):
+                seg_dict = dict(orig)
+                seg_dict["start"] = s
+                seg_dict["end"] = e
+                seg_dict["text"] = txt
+                translated_result.append(seg_dict)
+        else:
+            print("⚠️ No se pudo traducir, usando texto original")
 
     try:
         output_name = generate_tiktok_title(url, translate if translate else transcription.language)
