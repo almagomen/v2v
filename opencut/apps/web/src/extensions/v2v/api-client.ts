@@ -1,4 +1,4 @@
-import { JobResponse, OpenCutProject, ProcessRequest, ProjectSummary } from './types';
+import type { JobResponse, OpenCutProject, ProcessRequest, ProjectSummary } from './types';
 
 export class V2VApiClient {
   private baseUrl: string;

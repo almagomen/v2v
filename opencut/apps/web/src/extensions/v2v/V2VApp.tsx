@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { V2VPanel } from './V2VPanel';
 import { V2VTimelineEditor } from './V2VTimelineEditor';
-import { OpenCutProject } from './types';
+import type { OpenCutProject } from './types';
 
 export const V2VApp: React.FC = () => {
   const [activeProject, setActiveProject] = useState<OpenCutProject | null>(null);

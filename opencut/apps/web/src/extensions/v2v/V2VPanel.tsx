@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from './api-client';
-import { ProjectSummary, OpenCutProject } from './types';
+import type { ProjectSummary, OpenCutProject } from './types';
 
 interface V2VPanelProps {
   onLoadProjectToTimeline?: (project: OpenCutProject) => void;

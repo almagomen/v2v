@@ -1,4 +1,4 @@
-export * from './types';
+export type * from './types';
 export * from './api-client';
 export * from './V2VPanel';
 export * from './V2VTimelineEditor';

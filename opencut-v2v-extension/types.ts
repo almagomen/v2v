@@ -78,3 +78,5 @@ export interface OpenCutProject {
   }>;
   mediaAssets: OpenCutMediaAsset[];
 }
+
+export const V2V_VERSION = "1.0.0";

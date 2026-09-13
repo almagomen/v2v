@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { OpenCutProject, OpenCutTrack, OpenCutTimelineElement } from './types';
+import type { OpenCutProject, OpenCutTrack, OpenCutTimelineElement } from './types';
 
 interface V2VTimelineEditorProps {
   project: OpenCutProject;
