@@ -14,16 +14,31 @@ from src.models import get_or_load_model
 from src.diarization import get_diarization_model, speaker_diarization, process_audio
 from src.translation import translate_text_list, generate_tiktok_title
 
-WHISPER_DIR = DRIVE_DIR / "whisper_turbo" if DRIVE_DIR else None
+def find_whisper_dir() -> Path | None:
+    """Busca dinámicamente el directorio del modelo whisper_turbo."""
+    candidates = []
+    if DRIVE_DIR:
+        candidates.append(DRIVE_DIR / "whisper_turbo")
+    candidates.extend([
+        Path("/content/drive/MyDrive/v2v/whisper_turbo"),
+        Path("/content/drive/MyDrive/whisper_turbo"),
+        Path("/content/v2v/whisper_turbo"),
+        Path("/content/whisper_turbo"),
+    ])
+    for p in candidates:
+        if p and p.exists():
+            return p
+    return candidates[0] if DRIVE_DIR else None
 
 
 def get_whisper_model():
+    whisper_dir = find_whisper_dir()
     return get_or_load_model(
         "whisper",
         stable_whisper.load_model,
         "turbo",
         device=DEVICE,
-        download_root=WHISPER_DIR,
+        download_root=whisper_dir,
     )
 
 

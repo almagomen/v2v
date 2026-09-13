@@ -12,15 +12,25 @@ from pyannote.core import Segment
 from src.config import DEVICE, DRIVE_DIR
 from src.models import get_or_load_model
 
-DIARIZATION_DIR = DRIVE_DIR / "speaker-diarization-community-1" if DRIVE_DIR else None
+def find_diarization_dir() -> Path | str:
+    """Busca dinámicamente el directorio del modelo diarization o usa fallback a HuggingFace."""
+    candidates = []
+    if DRIVE_DIR:
+        candidates.append(DRIVE_DIR / "speaker-diarization-community-1")
+    candidates.extend([
+        Path("/content/drive/MyDrive/v2v/speaker-diarization-community-1"),
+        Path("/content/drive/MyDrive/speaker-diarization-community-1"),
+        Path("/content/v2v/speaker-diarization-community-1"),
+        Path("/content/speaker-diarization-community-1"),
+    ])
+    for p in candidates:
+        if p and p.exists():
+            return p
+    return "pyannote/speaker-diarization-3.1"
 
 
 def _load_diarization_model() -> Pipeline:
-    pretrained = (
-        DIARIZATION_DIR
-        if DIARIZATION_DIR and DIARIZATION_DIR.exists()
-        else "pyannote/speaker-diarization-3.1"
-    )
+    pretrained = find_diarization_dir()
     model = Pipeline.from_pretrained(pretrained)
     model.to(torch.device(DEVICE))
     return model
