@@ -1,6 +1,7 @@
 """
 Diarización de hablantes con Pyannote.
 """
+from pathlib import Path
 import re
 from typing import Any
 
