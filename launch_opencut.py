@@ -45,17 +45,11 @@ def start_opencut_web():
 
 
 def start_colab_window(port: int = 5173):
-    """Expone el frontend OpenCut usando la utilidad nativa de Google Colab."""
-    try:
-        from google.colab import output
-        print(f"\n🌐 Conectando túnel nativo de Google Colab en puerto {port}...")
-        output.serve_kernel_port_as_window(port, anchor_text="🚀 Abrir Editor OpenCut + V2V")
-        print("\n" + "=" * 60)
-        print("🎉 ¡Túnel nativo de Google Colab listo!")
-        print("👉 Haz clic en '🚀 Abrir Editor OpenCut + V2V' en la salida de la celda.")
-        print("=" * 60 + "\n")
-    except Exception as e:
-        print(f"ℹ️ Entorno local (no Colab): abre http://localhost:{port}")
+    """Muestra información de conexión para Google Colab o entorno local."""
+    if is_colab():
+        print(f"\n🌐 Aplicación lista. Usa el enlace '🚀 Abrir Editor OpenCut + V2V' de la celda de Colab.")
+    else:
+        print(f"\n👉 Abre http://localhost:{port} en tu navegador.\n")
 
 
 def main():
