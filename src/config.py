@@ -18,7 +18,7 @@ else:
     BASE_DIR = Path(os.getenv("V2V_BASE_DIR", ".")).resolve()
 
 
-# Google Drive (solo Colab). No montamos aquí: en Colab ejecuta una celda con drive.mount("/content/drive") antes de lanzar Gradio.
+# Google Drive (solo Colab). No montamos aquí: en Colab ejecuta una celda con drive.mount("/content/drive") antes de lanzar OpenCut.
 _google_drive = os.getenv("DRIVE_MOUNT", "true").lower() in ("1", "true", "yes")
 google_drive = is_colab() and _google_drive
 DRIVE_DIR = Path("/content/drive/MyDrive/v2v") if google_drive else None

@@ -22,8 +22,11 @@ google-genai
 # TTS (Fish Audio API)
 requests
 
-# App
-# gradio>=4.0.0
+# App / API REST (FastAPI)
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+python-multipart>=0.0.9
+websockets>=12.0
 
 # Optional for local .env
 python-dotenv
