@@ -118,14 +118,15 @@ def download_video(
 
     opts = {
         "outtmpl": str(output_dir / "%(title)s" / "%(title)s.%(ext)s"),
-        "format": f"{video} + {audio}",
+        "format": f"{video} + {audio} / bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
         "logger": OneLineLogger(),
         "quiet": True,
-        'js_runtimes': {'node': {}},
-        'remote_components': ['ejs:github'],
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "referer": "https://www.google.com/",
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "ios", "web"],
+            }
+        },
     }
     if cookies_file and cookies_file.exists(): opts["cookiefile"] = str(cookies_file)
 
