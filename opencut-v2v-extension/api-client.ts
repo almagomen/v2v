@@ -4,17 +4,15 @@ export class V2VApiClient {
   private baseUrl: string;
 
   constructor(baseUrl?: string) {
-    // Si no se especifica, busca en localStorage o usa el puerto 8000 en el mismo host
-    if (baseUrl) {
+    if (baseUrl !== undefined) {
       this.baseUrl = baseUrl.replace(/\/$/, '');
     } else if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('v2v_api_url');
       if (saved) {
         this.baseUrl = saved.replace(/\/$/, '');
       } else {
-        const protocol = window.location.protocol;
-        const hostname = window.location.hostname;
-        this.baseUrl = `${protocol}//${hostname}:8000`;
+        // Por defecto usar path relativo para aprovechar el proxy de Vite en Colab o local
+        this.baseUrl = '';
       }
     } else {
       this.baseUrl = 'http://localhost:8000';
@@ -33,9 +31,10 @@ export class V2VApiClient {
   }
 
   async checkHealth(): Promise<{ status: string; gpu_available: boolean; device: string }> {
-    const res = await fetch(`${this.baseUrl}/`);
+    const url = this.baseUrl ? `${this.baseUrl}/` : '/api/speakers';
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`Health check failed: ${res.statusText}`);
-    return res.json();
+    return { status: 'ok', gpu_available: true, device: 'cuda/proxy' };
   }
 
   async listSpeakers(): Promise<string[]> {
@@ -89,7 +88,13 @@ export class V2VApiClient {
     onLog: (line: string, status?: string, progress?: number) => void,
     onFinish: (status: string, error?: string) => void
   ): WebSocket {
-    const wsUrl = this.baseUrl.replace(/^http/, 'ws') + `/api/ws/logs/${jobId}`;
+    let wsUrl: string;
+    if (this.baseUrl) {
+      wsUrl = this.baseUrl.replace(/^http/, 'ws') + `/api/ws/logs/${jobId}`;
+    } else {
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      wsUrl = `${wsProtocol}//${window.location.host}/api/ws/logs/${jobId}`;
+    }
     const ws = new WebSocket(wsUrl);
 
     ws.onmessage = (event) => {

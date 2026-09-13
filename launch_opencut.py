@@ -1,7 +1,7 @@
 """
 Lanzador principal de Video2Video + OpenCut.
 Inicia el backend FastAPI (puerto 8000) y el frontend OpenCut (puerto 5173).
-En Google Colab, crea un túnel público mediante cloudflared.
+En Google Colab, expone la ventana nativa mediante output.serve_kernel_port_as_window.
 """
 import os
 import subprocess
@@ -33,7 +33,7 @@ def start_api_server():
 def start_opencut_web():
     """Inicia el frontend de OpenCut con Vite."""
     print(f"🎬 Iniciando OpenCut Frontend en http://localhost:5173...")
-    
+
     # Intentar bun primero, luego npm/npx
     has_bun = subprocess.run(["bun", "--version"], capture_output=True).returncode == 0
     if has_bun:
@@ -44,50 +44,18 @@ def start_opencut_web():
     return subprocess.Popen(cmd, cwd=str(OPENCUT_WEB_DIR), shell=(sys.platform == "win32"))
 
 
-def start_colab_tunnel(port: int = 5173):
-    """Descarga e inicia cloudflared para exponer OpenCut con URL pública."""
-    print(f"\n🌐 Configurando túnel público para puerto {port}...")
-    cloudflared_path = Path("/usr/local/bin/cloudflared")
-    if not cloudflared_path.exists():
-        subprocess.run(
-            ["curl", "-sSL", "-o", str(cloudflared_path),
-             "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"],
-            check=True
-        )
-        subprocess.run(["chmod", "+x", str(cloudflared_path)], check=True)
-
-    log_file = Path("/tmp/cloudflared.log")
-    tunnel_proc = subprocess.Popen(
-        [str(cloudflared_path), "tunnel", "--url", f"http://localhost:{port}"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
-    # Leer URL pública de los logs de cloudflared
-    tunnel_url = None
-    time.sleep(3)
-    if tunnel_proc.stdout:
-        for _ in range(25):
-            line = tunnel_proc.stdout.readline()
-            if "trycloudflare.com" in line:
-                for word in line.split():
-                    if "trycloudflare.com" in word:
-                        tunnel_url = word.strip()
-                        break
-                if tunnel_url:
-                    break
-            time.sleep(0.5)
-
-    if tunnel_url:
+def start_colab_window(port: int = 5173):
+    """Expone el frontend OpenCut usando la utilidad nativa de Google Colab."""
+    try:
+        from google.colab import output
+        print(f"\n🌐 Conectando túnel nativo de Google Colab en puerto {port}...")
+        output.serve_kernel_port_as_window(port, anchor_text="🚀 Abrir Editor OpenCut + V2V")
         print("\n" + "=" * 60)
-        print(f"🎉 ¡OpenCut + V2V está disponible públicamente!")
-        print(f"🔗 Abre este enlace: {tunnel_url}")
+        print("🎉 ¡Túnel nativo de Google Colab listo!")
+        print("👉 Haz clic en '🚀 Abrir Editor OpenCut + V2V' en la salida de la celda.")
         print("=" * 60 + "\n")
-    else:
-        print("⚠️ No se pudo obtener la URL de cloudflared. Revisa http://localhost:5173")
-
-    return tunnel_proc
+    except Exception as e:
+        print(f"ℹ️ Entorno local (no Colab): abre http://localhost:{port}")
 
 
 def main():
@@ -103,12 +71,13 @@ def main():
     web_proc = start_opencut_web()
     time.sleep(3)
 
-    # 3. Túnel si es Colab
-    tunnel_proc = None
+    # 3. Túnel nativo si es Google Colab
     if is_colab():
-        tunnel_proc = start_colab_tunnel(port=5173)
+        start_colab_window(port=5173)
+    else:
+        print(f"\n👉 Abre http://localhost:5173 en tu navegador.\n")
 
-    print("\nPresiona Ctrl+C para detener todos los servicios.\n")
+    print("Presiona Ctrl+C para detener todos los servicios.\n")
     try:
         while True:
             time.sleep(1)
@@ -121,7 +90,7 @@ def main():
     except KeyboardInterrupt:
         print("\n👋 Deteniendo servidores...")
     finally:
-        for proc in (api_proc, web_proc, tunnel_proc):
+        for proc in (api_proc, web_proc):
             if proc and proc.poll() is None:
                 proc.terminate()
 

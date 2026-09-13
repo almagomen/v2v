@@ -37,8 +37,8 @@ En Colab: panel izquierdo → **Secrets** y añade `GOOGLE_API_KEY` y `FISH_API_
 1. Abre [colab_launch.ipynb](colab_launch.ipynb).
 2. **Runtime → Change runtime type → T4 GPU**.
 3. Añade en **Secrets**: `GOOGLE_API_KEY`, `FISH_API_KEY`.
-4. Ejecuta la celda del notebook. Levantará automáticamente FastAPI, el editor OpenCut y un túnel público `trycloudflare.com`.
-5. Abre el enlace público para acceder al editor OpenCut con doblaje V2V en tiempo real.
+4. Ejecuta la celda del notebook. Levantará automáticamente FastAPI, el editor OpenCut y creará el enlace nativo de Google Colab (`output.serve_kernel_port_as_window`).
+5. Haz clic en el enlace **🚀 Abrir Editor OpenCut + V2V** en la celda para abrir el editor con doblaje V2V en tiempo real.
 
 ---
 

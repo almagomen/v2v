@@ -164,7 +164,14 @@ Cuando un video de YouTube se procesa a través de V2V:
 
 El notebook `colab_launch.ipynb` automatiza la ejecución completa:
 
-1. **Celda 1**: Clona el repositorio e instala las dependencias de Python y Bun/Node.
-2. **Celda 2**: Configura variables de entorno (`GOOGLE_API_KEY`, `FISH_API_KEY`) y opcionalmente monta Google Drive.
-3. **Celda 3**: Inicia el servidor FastAPI en `:8000`, el servidor Vite de OpenCut en `:5173` y expone la aplicación con un túnel seguro (`cloudflared`).
-4. El usuario hace clic en el enlace público generado y tiene acceso completo al editor OpenCut con el pipeline V2V.
+1. **Dependencias**: Clona el repositorio en la rama `opencut_launch` e instala las dependencias de Python y Bun para OpenCut.
+2. **Secrets & GPU**: Configura variables de entorno (`GOOGLE_API_KEY`, `FISH_API_KEY`) y aprovecha la GPU T4/A100 para inferencia de modelos.
+3. **Túnel Nativo de Google Colab**:
+   Utiliza la utilidad integrada nativa de Colab:
+   ```python
+   from google.colab import output
+   output.serve_kernel_port_as_window(5173, anchor_text="🚀 Abrir Editor OpenCut + V2V")
+   ```
+   Esto evita túneles de terceros como ngrok o cloudflared, generando un enlace seguro y directo a la instancia de OpenCut servida por Vite en el puerto `5173`.
+4. **Proxy Transparente**: Vite está configurado con proxy para reenviar internamente todas las llamadas `/api` y WebSockets a FastAPI en el puerto `8000`, evitando problemas de CORS o puertos cruzados.
+5. El usuario hace clic en el botón **🚀 Abrir Editor OpenCut + V2V** en la celda y accede inmediatamente al editor en una ventana del navegador.
