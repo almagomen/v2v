@@ -1,11 +1,21 @@
-# Video2Video
+# Video2Video + OpenCut
 
-Pipeline de **traducción y doblaje** de videos de YouTube: descarga → transcripción (Whisper) → diarización (Pyannote) → traducción (Gemini) → TTS (Fish Audio) → render con ffmpeg.
+Pipeline de **traducción y doblaje con IA** integrado con el editor open-source **OpenCut**: descarga → transcripción (Whisper) → diarización (Pyannote) → traducción (Gemini) → TTS (Fish Audio) → edición interactiva en el timeline de OpenCut.
+
+## Características
+
+- **Pipeline de IA**: Whisper (STT) + Pyannote (Diarización) + Fish Audio TTS s2.1-pro (Clonado de voz).
+- **Editor OpenCut Integrado**: Timeline multitrack interactivo (Video, Audio Doblado en Español, Instrumental aislado por RoFormer y Subtítulos editables).
+- **Arquitectura Desacoplada**: Backend FastAPI en Python (GPU) y Frontend OpenCut (Vite + React) conectados vía API REST y WebSockets para streaming de logs.
+- **Git Subtree**: Facilita actualizar OpenCut con `git subtree pull` sin romper el código de IA.
+
+---
 
 ## Requisitos
 
 - Python 3.10+
-- GPU recomendada (Whisper, Pyannote, Roformer)
+- Node.js / Bun (para el frontend OpenCut)
+- GPU recomendada (Whisper, Pyannote, RoFormer)
 - **ffmpeg** en el PATH
 
 ## Variables de entorno / Secrets
@@ -18,33 +28,24 @@ Pipeline de **traducción y doblaje** de videos de YouTube: descarga → transcr
 
 En Colab: panel izquierdo → **Secrets** y añade `GOOGLE_API_KEY` y `FISH_API_KEY`.
 
+---
+
 ## Uso en Google Colab
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/TU_USUARIO/v2v/blob/main/colab_launch.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/almagomen/v2v/blob/opencut_launch/colab_launch.ipynb)
 
-1. Abre [colab_launch.ipynb](colab_launch.ipynb) (o el enlace de arriba tras sustituir `TU_USUARIO` por tu usuario de GitHub).
+1. Abre [colab_launch.ipynb](colab_launch.ipynb).
 2. **Runtime → Change runtime type → T4 GPU**.
 3. Añade en **Secrets**: `GOOGLE_API_KEY`, `FISH_API_KEY`.
-4. Ejecuta las celdas: clonar repo → `pip install -r requirements.txt` → `demo.launch(share=True)`.
-5. Usa el enlace público que muestra Gradio para abrir la app en el navegador.
+4. Ejecuta la celda del notebook. Levantará automáticamente FastAPI, el editor OpenCut y un túnel público `trycloudflare.com`.
+5. Abre el enlace público para acceder al editor OpenCut con doblaje V2V en tiempo real.
 
-Si no usas GitHub, sube esta carpeta a Colab (o a Drive y monta Drive), entra en la carpeta y ejecuta:
+---
 
-```bash
-pip install -r requirements.txt
-```
-
-Luego en una celda:
-
-```python
-from app_gradio import demo
-demo.launch(share=True)
-```
-
-## Instalación local
+## Ejecución Local
 
 ```bash
-git clone https://github.com/almagomen/v2v.git
+git clone https://github.com/almagomen/v2v.git -b opencut_launch
 cd v2v
 python -m venv .venv
 .venv\Scripts\activate   # Windows
@@ -52,35 +53,19 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Copia `.env.example` a `.env` y rellena `GOOGLE_API_KEY` y `FISH_API_KEY`.
+Inicia los servicios con el lanzador unificado:
 
 ```bash
-python app_gradio.py
+python launch_opencut.py
 ```
 
-## Estructura del repo
+Abre en tu navegador:
+- **Editor OpenCut + V2V**: `http://localhost:5173`
+- **FastAPI Docs**: `http://localhost:8000/docs`
 
-```
-v2v/
-├── README.md
-├── requirements.txt
-├── .env.example
-├── app_gradio.py       # Interfaz Gradio
-├── colab_launch.ipynb   # Notebook mínimo para Colab
-└── src/
-    ├── config.py       # Rutas, device, API keys
-    ├── models.py       # Caché de modelos
-    ├── audio_utils.py  # Ajuste duración, clone_voice_segments, merge
-    ├── translation.py  # Gemini: traducir, título TikTok
-    ├── download.py     # yt-dlp, Roformer
-    ├── stt.py          # Whisper, run_main
-    ├── diarization.py  # Pyannote
-    ├── tts.py          # Fish Audio
-    ├── pipeline.py     # process_video_queue, split_audio_sequences
-    ├── render.py       # ffmpeg, preview
-    └── edit_utils.py   # Edición de textos, regenerate_segments
-```
+---
 
-## Licencia
+## Documentación de la Integración
 
-Uso bajo tu propia responsabilidad. No incluyas claves API en el código ni en el repo.
+Para conocer todos los detalles de arquitectura, esquemas de datos y cómo replicar la integración paso a paso, consulta:
+👉 [INTEGRATION.md](INTEGRATION.md)
