@@ -43,29 +43,12 @@ def get_google_api_key() -> str | None:
     return os.getenv("GOOGLE_API_KEY")
 
 
-def get_lmnt_api_key() -> str | None:
+def get_fish_api_key() -> str | None:
     if is_colab():
         try:
             from google.colab import userdata
-            return userdata.get("LMNT_API_KEY") or None
-        except Exception: return os.getenv("LMNT_API_KEY")
-    return os.getenv("LMNT_API_KEY")
-
-def get_lmnt_auth0_cookie() -> str | None:
-    if is_colab():
-        try:
-            from google.colab import userdata
-            return userdata.get("AUTH0_COOKIE") or None
-        except Exception: return os.getenv("AUTH0_COOKIE")
-    return os.getenv("AUTH0_COOKIE")
-
-    
-def get_mixpanel_cookie() -> str | None:
-    if is_colab():
-        try:
-            from google.colab import userdata
-            return userdata.get("MIXPANEL_COOKIE") or None
-        except Exception: return os.getenv("MIXPANEL_COOKIE")
-    return os.getenv("MIXPANEL_COOKIE")
+            return userdata.get("FISH_API_KEY") or None
+        except Exception: return os.getenv("FISH_API_KEY")
+    return os.getenv("FISH_API_KEY")
 
 def get_drive_mount() -> bool: return _google_drive and is_colab()

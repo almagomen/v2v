@@ -16,9 +16,9 @@ import torchaudio
 from IPython.display import Audio, display
 from src.config import QUEUE_DIR, TEMP_DIR
 
-# Mapeo speaker: nombre en UI -> voice_id LMNT o nombre de voz
+# Mapeo speaker: nombre en UI -> reference_id Fish Audio o nombre de voz
 SPEAKER_OPTIONS = {
-    "mrbeast_lmnt": "d47094be-9814-4323-9000-e735e04d8732",
+    "mrbeast": "49898752f6994bc9a6ef1502214190de",
     "Dionisio Schuyler": "Dionisio Schuyler",
     "en-US-AndrewMultilingualNeural": "en-US-AndrewMultilingualNeural",
     "Chatterbox": "Chatterbox",
@@ -519,7 +519,7 @@ def build_demo():
             speaker_in = gr.Dropdown(
                 label="Voz / Speaker",
                 choices=list(SPEAKER_OPTIONS.keys()),
-                value="mrbeast_lmnt",
+                value="mrbeast",
             )
         btn = gr.Button("Procesar", variant="primary")
 

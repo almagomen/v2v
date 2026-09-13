@@ -19,7 +19,7 @@ sentencex
 # Translation (Gemini)
 google-genai
 
-# TTS (LMNT API)
+# TTS (Fish Audio API)
 requests
 
 # App
