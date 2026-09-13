@@ -11,7 +11,24 @@ from pathlib import Path
 from src.config import BASE_DIR, QUEUE_DIR, DRIVE_DIR, google_drive
 from src.models import get_or_load_model
 
-ROFORMER_DIR = DRIVE_DIR / "bs-roformer-revive3e" if DRIVE_DIR else None
+def find_roformer_dir() -> Path | None:
+    """Busca dinámicamente el directorio del modelo BS-RoFormer en Drive o rutas locales."""
+    candidates = []
+    if DRIVE_DIR:
+        candidates.append(DRIVE_DIR / "bs-roformer-revive3e")
+    candidates.extend([
+        Path("/content/drive/MyDrive/v2v/bs-roformer-revive3e"),
+        Path("/content/drive/MyDrive/bs-roformer-revive3e"),
+        Path("/content/v2v/bs-roformer-revive3e"),
+        Path("/content/bs-roformer-revive3e"),
+        BASE_DIR / "bs-roformer-revive3e",
+        Path("bs-roformer-revive3e").resolve(),
+    ])
+
+    for p in candidates:
+        if p and p.exists() and (p / "bs_roformer_revive3e.ckpt").exists() and (p / "config.yaml").exists():
+            return p
+    return None
 
 
 def _load_bs_roformer():
@@ -25,21 +42,22 @@ def _load_bs_roformer():
     from bs_roformer.utils import get_model_from_config
     from bs_roformer.inference import SafeLoaderWithTuple
 
-    if not ROFORMER_DIR or not ROFORMER_DIR.exists():
+    roformer_dir = find_roformer_dir()
+    if not roformer_dir:
+        searched = [str(c) for c in [
+            DRIVE_DIR / "bs-roformer-revive3e" if DRIVE_DIR else None,
+            Path("/content/drive/MyDrive/v2v/bs-roformer-revive3e"),
+            Path("/content/drive/MyDrive/bs-roformer-revive3e"),
+            Path("/content/bs-roformer-revive3e"),
+        ] if c]
         raise FileNotFoundError(
-            "No se encontró el directorio de BS-RoFormer. "
-            "Asegúrate de montar Drive y crear la carpeta 'bs-roformer-revive3e' en "
-            f"{DRIVE_DIR} con los archivos del modelo."
+            "No se encontraron los archivos de BS-RoFormer (bs_roformer_revive3e.ckpt y config.yaml).\n"
+            "Rutas verificadas:\n  - " + "\n  - ".join(searched) + "\n"
+            "Asegúrate de que Google Drive esté montado en /content/drive y que la carpeta 'bs-roformer-revive3e' exista con los archivos."
         )
 
-    model_path = ROFORMER_DIR / "bs_roformer_revive3e.ckpt"
-    config_path = ROFORMER_DIR / "config.yaml"
-
-    if not model_path.exists() or not config_path.exists():
-        raise FileNotFoundError(
-            "No se encontraron los archivos de BS-RoFormer en "
-            f"{ROFORMER_DIR}. Esperado: bs_roformer_revive3e.ckpt y config.yaml."
-        )
+    model_path = roformer_dir / "bs_roformer_revive3e.ckpt"
+    config_path = roformer_dir / "config.yaml"
 
     with open(config_path) as f:
         config = ConfigDict(yaml.load(f, Loader=SafeLoaderWithTuple))
