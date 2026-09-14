@@ -35,11 +35,11 @@ async def list_projects():
 
         try:
             with open(pkl_path, "rb") as f:
-                data = pickle.load(f)
-                texts, output_name, url, result, transcription, diarization = data
+                # Soporte para 6 campos (legacy) y 7 campos (con info de yt-dlp)
+                texts, output_name, url, result, transcription, diarization, *extra = pickle.load(f)
 
-            # Buscar video renderizado
-            video_files = list(folder.glob(f"{output_name}.mp4"))
+            # Buscar video: cualquier .mp4 en la carpeta del proyecto
+            video_files = [p for p in folder.glob("*.mp4") if not p.name.startswith("_")]
             has_video = bool(video_files)
 
             projects.append(ProjectSummary(
@@ -72,7 +72,8 @@ async def get_project(project_id: str):
         raise HTTPException(status_code=404, detail="result.pkl no encontrado")
 
     with open(pkl_path, "rb") as f:
-        texts, output_name, url, result, transcription, diarization = pickle.load(f)
+        # Soporte para 6 campos (legacy) y 7 campos (con info de yt-dlp)
+        texts, output_name, url, result, transcription, diarization, *extra = pickle.load(f)
 
     segments = [
         SegmentInfo(
