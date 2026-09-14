@@ -1,11 +1,13 @@
 """
 Endpoints para gestionar proyectos procesados y servir archivos.
 """
+import os
 import pickle
 from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, StreamingResponse
 
 from api.schemas import ProjectDetail, ProjectSummary, SegmentInfo
 from bridge.project_builder import build_opencut_project
@@ -127,8 +129,8 @@ async def get_opencut_project(project_id: str):
 
 
 @router.get("/{project_id}/files/{file_path:path}")
-async def get_project_file(project_id: str, file_path: str):
-    """Descarga un archivo de un proyecto (video, audio, etc)."""
+async def get_project_file(project_id: str, file_path: str, request: Request):
+    """Sirve un archivo de un proyecto con soporte de Range requests (necesario para <video>)."""
     queue_dir = _get_queue_dir()
     file_full_path = queue_dir / project_id / file_path
 
@@ -141,10 +143,52 @@ async def get_project_file(project_id: str, file_path: str):
     except ValueError:
         raise HTTPException(status_code=403, detail="Acceso denegado")
 
+    media_type = _guess_media_type(file_full_path.suffix)
+    file_size = os.path.getsize(str(file_full_path))
+
+    # --- Range request support (necesario para <video> seek en el navegador) ---
+    range_header = request.headers.get("range")
+    if range_header and file_full_path.suffix.lower() in (".mp4", ".webm", ".wav", ".mp3", ".m4a"):
+        try:
+            range_val = range_header.strip().replace("bytes=", "")
+            start_str, end_str = range_val.split("-")
+            start = int(start_str)
+            end = int(end_str) if end_str else file_size - 1
+            end = min(end, file_size - 1)
+            content_length = end - start + 1
+
+            def file_chunk_generator(path: str, start: int, end: int, chunk: int = 65536):
+                with open(path, "rb") as f:
+                    f.seek(start)
+                    remaining = end - start + 1
+                    while remaining > 0:
+                        data = f.read(min(chunk, remaining))
+                        if not data:
+                            break
+                        remaining -= len(data)
+                        yield data
+
+            headers = {
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
+                "Content-Type": media_type,
+            }
+            return StreamingResponse(
+                file_chunk_generator(str(file_full_path), start, end),
+                status_code=206,
+                headers=headers,
+                media_type=media_type,
+            )
+        except Exception:
+            pass  # Fallback a respuesta completa si hay error al parsear el range
+
+    # Respuesta completa con Accept-Ranges para indicar al navegador que soportamos Range
     return FileResponse(
         path=str(file_full_path),
         filename=file_full_path.name,
-        media_type=_guess_media_type(file_full_path.suffix),
+        media_type=media_type,
+        headers={"Accept-Ranges": "bytes", "Content-Length": str(file_size)},
     )
 
 

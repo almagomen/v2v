@@ -31,6 +31,13 @@ export const V2VTimelineEditor: React.FC<V2VTimelineEditorProps> = ({
   const videoAsset = project.mediaAssets.find((a) => a.type === 'video');
   const videoUrl = videoAsset?.url;
 
+  // Debug: mostrar URL real en consola para diagnóstico
+  React.useEffect(() => {
+    if (videoUrl) {
+      console.log('[V2V] Video URL:', videoUrl);
+    }
+  }, [videoUrl]);
+
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       setCurrentTime(videoRef.current.currentTime);
@@ -139,31 +146,49 @@ export const V2VTimelineEditor: React.FC<V2VTimelineEditorProps> = ({
       </div>
 
       <div className="flex-1 flex min-h-0 border-b border-neutral-800">
+        {/* Video Canvas Preview */}
         <div className="flex-1 flex flex-col items-center justify-center bg-black/60 p-4 relative">
           {videoUrl ? (
-            <div className="relative max-w-full max-h-full flex items-center justify-center rounded overflow-hidden shadow-2xl bg-black border border-neutral-800">
-              <video
-                ref={videoRef}
-                src={videoUrl}
-                onTimeUpdate={handleTimeUpdate}
-                onEnded={() => setIsPlaying(false)}
-                className="max-h-[420px] max-w-full rounded"
-              />
+            <div className="relative max-w-full max-h-full flex flex-col items-center justify-center gap-2">
+              <div className="relative rounded overflow-hidden shadow-2xl bg-black border border-neutral-800">
+                <video
+                  ref={videoRef}
+                  src={videoUrl}
+                  onTimeUpdate={handleTimeUpdate}
+                  onEnded={() => setIsPlaying(false)}
+                  onError={(e) => {
+                    const vid = e.currentTarget;
+                    console.error('[V2V] Error al cargar video:', vid.error?.message, 'src:', vid.src);
+                  }}
+                  className="max-h-[380px] max-w-full rounded"
+                  controls
+                  preload="metadata"
+                />
 
-              {(() => {
-                const subTrack = tracks.find((t) => t.type === 'text');
-                const activeSub = subTrack?.elements.find(
-                  (el) => currentTime >= el.startTime && currentTime <= el.startTime + el.duration
-                );
-                if (activeSub && activeSub.text) {
-                  return (
-                    <div className="absolute bottom-6 px-4 py-1.5 bg-black/75 backdrop-blur-sm text-yellow-300 font-semibold text-center text-sm rounded-md max-w-[85%] border border-yellow-500/20 shadow-lg">
-                      {activeSub.text}
-                    </div>
+                {/* Subtítulo dinámico sobrepuesto en el video */}
+                {(() => {
+                  const subTrack = tracks.find((t) => t.type === 'text');
+                  const activeSub = subTrack?.elements.find(
+                    (el) => currentTime >= el.startTime && currentTime <= el.startTime + el.duration
                   );
-                }
-                return null;
-              })()}
+                  if (activeSub && activeSub.text) {
+                    return (
+                      <div className="absolute bottom-14 px-4 py-1.5 bg-black/75 backdrop-blur-sm text-yellow-300 font-semibold text-center text-sm rounded-md max-w-[85%] border border-yellow-500/20 shadow-lg">
+                        {activeSub.text}
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+              </div>
+
+              {/* URL de debug visible para el usuario */}
+              <div className="text-[10px] text-neutral-600 font-mono truncate max-w-full px-2">
+                <span className="text-neutral-500">src: </span>
+                <a href={videoUrl} target="_blank" rel="noreferrer" className="text-emerald-700 hover:text-emerald-500 underline">
+                  {videoUrl}
+                </a>
+              </div>
             </div>
           ) : (
             <div className="text-neutral-500 text-sm flex flex-col items-center space-y-2">
