@@ -154,27 +154,46 @@ def download_video(
     from yt_dlp import YoutubeDL
 
     cookies_file = (DRIVE_DIR / "cookies.txt") if DRIVE_DIR else None
+    using_cookies = bool(cookies_file and cookies_file.exists())
 
-    # Configuración de video/audio única
+    # Selector de formato con fallbacks progresivos:
+    # - Preferimos avc1 (H.264) por máxima compatibilidad con torchaudio/ffmpeg
+    # - Para Shorts YouTube puede no tener avc1 en ciertos clientes → fallback a cualquier video
     video = "bv[vcodec^=avc1]"
     if resolution:
         video += f"[width<={resolution}]"
     audio = f"ba[language^={language}]" if language else "ba"
 
+    format_str = (
+        f"{video}+{audio}"
+        " / bv[ext=mp4]+ba"
+        " / bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+        " / bestvideo+bestaudio"
+        " / best"
+    )
+
+    # IMPORTANTE: android e ios NO soportan cookies → yt-dlp los descarta en silencio
+    # cuando hay cookiefile, dejando solo 'web' que puede no tener el formato avc1.
+    # → Con cookies usamos solo clientes compatibles con cookies.
+    # → Sin cookies usamos android/ios primero (evitan el n-sig challenge sin Deno).
+    if using_cookies:
+        player_clients = ["web", "mweb"]
+    else:
+        player_clients = ["android", "ios", "web"]
+
     opts = {
-        "format": f"{video} + {audio} / bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+        "format": format_str,
         "merge_output_format": "mp4",
         "keepvideo": True,
         "logger": OneLineLogger(),
         "quiet": True,
         "extractor_args": {
             "youtube": {
-                # player_client múltiple para evitar el error "n challenge solving failed"
-                "player_client": ["android", "ios", "web"],
+                "player_client": player_clients,
             }
         },
     }
-    if cookies_file and cookies_file.exists():
+    if using_cookies:
         opts["cookiefile"] = str(cookies_file)
 
     with YoutubeDL(opts) as ydl:
