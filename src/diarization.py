@@ -1,20 +1,27 @@
 """
 Diarización de hablantes con Pyannote.
 """
-from pathlib import Path
 import re
 from typing import Any
 
-import torch
-import torchaudio
-from pyannote.audio import Pipeline
-from pyannote.core import Segment
+try:
+    import torch
+    import torchaudio
+    from pyannote.audio import Pipeline
+    from pyannote.core import Segment
+except ImportError:
+    torch = None
+    torchaudio = None
+    Pipeline = None
+    Segment = None
 
 from src.config import DEVICE, DRIVE_DIR
 from src.models import get_or_load_model
 
-def find_diarization_dir() -> Path | str:
+
+def find_diarization_dir():
     """Busca dinámicamente el directorio del modelo diarization o usa fallback a HuggingFace."""
+    from pathlib import Path
     candidates = []
     if DRIVE_DIR:
         candidates.append(DRIVE_DIR / "speaker-diarization-community-1")
@@ -30,18 +37,18 @@ def find_diarization_dir() -> Path | str:
     return "pyannote/speaker-diarization-3.1"
 
 
-def _load_diarization_model() -> Pipeline:
+def _load_diarization_model() -> Any:
     pretrained = find_diarization_dir()
     model = Pipeline.from_pretrained(pretrained)
     model.to(torch.device(DEVICE))
     return model
 
 
-def get_diarization_model() -> Pipeline:
+def get_diarization_model() -> Any:
     return get_or_load_model("community-1", _load_diarization_model)
 
 
-def speaker_diarization(diarization_model: Pipeline, wav_audio: str, num_speakers: int | None = None) -> Any:
+def speaker_diarization(diarization_model: Any, wav_audio: str, num_speakers: int | None = None) -> Any:
     waveform, sample_rate = torchaudio.load(wav_audio)
     output = diarization_model(
         {"waveform": waveform, "sample_rate": sample_rate},

@@ -4,15 +4,20 @@ Transcripción STT con Whisper y procesamiento con diarización.
 import contextlib
 import io
 from pathlib import Path
-from typing import Union, Tuple, Any
+from typing import Union, Tuple, Any, Optional
 
-import stable_whisper
-import torchaudio
+try:
+    import stable_whisper
+    import torchaudio
+except ImportError:
+    stable_whisper = None
+    torchaudio = None
 
 from src.config import DEVICE, DRIVE_DIR
 from src.models import get_or_load_model
 from src.diarization import get_diarization_model, speaker_diarization, process_audio
 from src.translation import translate_text_list, generate_tiktok_title
+
 
 def find_whisper_dir() -> Path | None:
     """Busca dinámicamente el directorio del modelo whisper_turbo."""
@@ -88,9 +93,17 @@ def run_main(
     media: Union[str, Path],
     url: str,
     translate: Union[bool, str] = False,
+    title: Optional[str] = None,
 ) -> Tuple[list[dict], str, list[dict], Any, Any]:
     """
     Pipeline principal: transcribe, opcionalmente traduce, genera título.
+
+    Args:
+        media: ruta al video.
+        url: URL de YouTube (para generar título viral con Gemini).
+        translate: idioma destino de la traducción, o False para no traducir.
+        title: título original del video de YouTube (fallback si Gemini falla).
+
     Returns: (translated_result, output_name, result, transcription, diarization)
     """
     media_path = Path(media)
@@ -115,16 +128,30 @@ def run_main(
             source_lang=transcription.language,
         )
         if translated_texts:
-            translated_result = [
-                {"start": s, "end": e, "text": txt}
-                for (s, e), txt in zip(times, translated_texts)
-            ]
-        else: print("⚠️ No se pudo traducir, usando texto original")
+            # BUG FIX: preservar todos los metadatos del segmento original (speaker, words, etc.)
+            # En lugar de crear un dict nuevo que pierde el campo 'speaker'.
+            translated_result = []
+            for (s, e), txt, orig in zip(times, translated_texts, result):
+                seg_dict = dict(orig)
+                seg_dict["start"] = s
+                seg_dict["end"] = e
+                seg_dict["text"] = txt
+                translated_result.append(seg_dict)
+        else:
+            print("⚠️ No se pudo traducir, usando texto original")
 
-    output_name = generate_tiktok_title(url, translate if translate else transcription.language)
+    # Generar título viral con Gemini (con manejo de error robusto)
+    try:
+        output_name = generate_tiktok_title(url, translate if translate else transcription.language)
+    except Exception as e:
+        print(f"⚠️ Error al generar título viral (IA): {e}")
+        output_name = None
+
     if output_name:
         # Limpiar nombre para archivo (quitar caracteres inválidos en Windows)
         output_name = "".join(c for c in output_name if c not in r'\/:*?"<>|').replace('\n', ' ').strip() or "output"
-    else: output_name = media_path.stem
+    else:
+        # Fallback al título original de YouTube proporcionado por pipeline.py
+        output_name = title or media_path.stem
 
     return translated_result, output_name, result, transcription, diarization

@@ -5,7 +5,13 @@ Usa FISH_API_KEY desde config (env o Colab Secrets).
 import io
 
 import requests
-import torchaudio, torch
+
+try:
+    import torch
+    import torchaudio
+except ImportError:
+    torch = None
+    torchaudio = None
 
 from src.config import get_fish_api_key
 

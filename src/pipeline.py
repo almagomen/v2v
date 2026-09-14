@@ -4,10 +4,14 @@ Pipeline: cola de videos, transcripción, división en secuencias.
 import contextlib
 import io
 import pickle
+import traceback
 from pathlib import Path
 from typing import Union, Optional
 
-import torchaudio
+try:
+    import torchaudio
+except ImportError:
+    torchaudio = None
 
 from src.download import yt
 from src.stt import run_main
@@ -17,109 +21,189 @@ from src.config import QUEUE_DIR
 def process_video_queue(
     urls: list[str],
     translate_lang: Union[bool, str] = False,
+    on_stage: Optional[callable] = None,
+    current_idx: Optional[int] = None,
+    total_count: Optional[int] = None,
 ) -> list[dict]:
     """
     Procesa una cola de videos: descarga, transcribe y traduce.
     Si ya existe un procesamiento previo completo, lo carga de caché.
+
+    Args:
+        urls: Lista de URLs de YouTube a procesar.
+        translate_lang: Idioma de traducción, o False para mantener el original.
+        on_stage: Callback opcional para progreso en tiempo real: on_stage(url, stage, msg).
+                  Stages: "downloading", "transcribing", "ready", "error".
+        current_idx: Índice externo para mostrar progreso total correcto.
+        total_count: Total externo para mostrar progreso total correcto.
     """
     results = []
     for idx, u in enumerate(urls, 1):
-        print(f"⚙️ Procesando: {u}  [{idx}/{len(urls)}]")
+        display_idx = current_idx if current_idx is not None else idx
+        display_total = total_count if total_count is not None else len(urls)
+        print(f"⚙️ Procesando: {u}  [{display_idx}/{display_total}]")
+        if on_stage:
+            try:
+                on_stage(u, "downloading", f"⚙️ Procesando: {u}  [{display_idx}/{display_total}]")
+            except Exception:
+                pass
         try:
             # --- Pre-verificación de Caché por URL ---
             found_in_cache = False
             # Escanear carpetas en Queue para ver si alguna tiene este link
             for folder in QUEUE_DIR.glob("*"):
                 pkl_file = folder / "result.pkl"
-                if pkl_file.exists():
+                if pkl_file.exists() and pkl_file.is_file():
                     try:
                         with open(pkl_file, "rb") as f:
-                            cached_data = pickle.load(f)
-                            # pkl: (translated_result, output_name, url, result, transcription, diarization)
-                            if len(cached_data) >= 3 and cached_data[2] == u:
-                                print(f"♻️ Link en caché: {folder.name}")
-                                translated_result, output_name, url, result, transcription, diarization = cached_data
-                                
-                                # Encontrar el archivo de video original (.mp4) dentro de la carpeta
-                                # yt-dlp lo guarda como folder_name.mp4 dentro de folder_name/
-                                video_files = list(folder.glob("*.mp4"))
-                                # Excluir el resultante si tiene el mismo nombre, preferimos el original
-                                # pero si solo hay uno, usamos ese.
-                                if video_files:
-                                    path = video_files[0]
-                                    results.append({
-                                        "path": path,
-                                        "output_name": output_name,
-                                        "url": u,
-                                        "texts": translated_result,
-                                        "src_lang": transcription.language,
-                                        "result": result,
-                                        "transcription": transcription,
-                                        "diarization": diarization,
-                                        "cached": True
-                                    })
-                                    found_in_cache = True
-                                    break
-                    except: continue
-            
+                            # Estructura: (translated_result, output_name, url, result, transcription, diarization, info)
+                            (
+                                translated_result,
+                                output_name,
+                                cached_url,
+                                result,
+                                transcription,
+                                diarization,
+                                info,
+                                *extra,
+                            ) = pickle.load(f)
+
+                        # Solo adoptar si la URL coincide exactamente
+                        if cached_url != u:
+                            continue
+
+                        if not isinstance(info, dict):
+                            info = {}
+
+                        # Encontrar el archivo de video original (.mp4) dentro de la carpeta
+                        video_files = [p for p in folder.glob("*.mp4") if not p.name.startswith("_")]
+                        if video_files:
+                            path = video_files[0]
+                            results.append(
+                                {
+                                    "path": path,
+                                    "output_name": output_name,
+                                    "url": u,
+                                    "info": info,
+                                    "texts": translated_result,
+                                    "src_lang": getattr(transcription, "language", "es") if transcription else "es",
+                                    "result": result,
+                                    "transcription": transcription,
+                                    "diarization": diarization,
+                                    "cached": True,
+                                }
+                            )
+                            found_in_cache = True
+                            print(f"♻️ Caché detectada por URL: {output_name}")
+                            break
+                    except Exception:
+                        continue
+
             if found_in_cache:
                 continue
             # ---------------------------------------
 
             path, info = yt(u, vocals_separation=True)
             output_file = path.with_name("result.pkl")
-            
+
             # --- Lógica de Caché por Path (en caso de que el URL no se detectó antes pero el archivo sí existe) ---
             if output_file.exists():
                 print(f"♻️ Cargando caché: {path.name}")
                 with open(output_file, "rb") as f:
-                    cached_data = pickle.load(f)
-                    # El pkl guarda: (translated_result, output_name, url, result, transcription, diarization)
-                    translated_result, output_name, url, result, transcription, diarization = cached_data
-                
-                results.append({
-                    "path": path,
-                    "output_name": output_name,
-                    "url": u,
-                    "texts": translated_result,
-                    "src_lang": transcription.language,
-                    "result": result,
-                    "transcription": transcription,
-                    "diarization": diarization,
-                    "cached": True
-                })
+                    # Soporte para formato nuevo (7 campos) y antiguo (6 campos)
+                    (
+                        translated_result,
+                        output_name,
+                        url,
+                        result,
+                        transcription,
+                        diarization,
+                        info,
+                        *extra,
+                    ) = pickle.load(f)
+                    if not isinstance(info, dict):
+                        info = {}
+
+                results.append(
+                    {
+                        "path": path,
+                        "output_name": output_name,
+                        "url": u,
+                        "info": info,
+                        "texts": translated_result,
+                        "src_lang": getattr(transcription, "language", "es") if transcription else "es",
+                        "result": result,
+                        "transcription": transcription,
+                        "diarization": diarization,
+                        "cached": True,
+                    }
+                )
                 print(f"✅ {output_name}")
                 continue
             # -----------------------
 
-            print("📝 Transcribiendo audio (Whisper + diarización)...")
+            print("📝 Transcribiendo (Whisper + diarización)...")
+            if on_stage:
+                try:
+                    on_stage(u, "transcribing", "📝 Transcribiendo (Whisper + diarización)...")
+                except Exception:
+                    pass
+
+            # Pasar el título original del video para usarlo como fallback si Gemini falla
+            safe_title = info.get("title") if isinstance(info, dict) else None
             translated_result, output_name, result, transcription, diarization = run_main(
-                path, u, translate=translate_lang
+                path, u, translate=translate_lang, title=safe_title
             )
             if translate_lang:
                 print("🔤 Traduciendo texto con Gemini...")
-            
+
+            # Guardar caché con 7 campos (incluye info de yt-dlp)
             with open(output_file, "wb") as f:
                 pickle.dump(
-                    (translated_result, output_name, u, result, transcription, diarization),
+                    (
+                        translated_result,
+                        output_name,
+                        u,
+                        result,
+                        transcription,
+                        diarization,
+                        info,
+                    ),
                     f,
                 )
-            
+
             print(f"✅ {output_name}  🚩  {len(translated_result)} segmentos")
-            print("=" * 60 + "\n")
-            results.append({
-                "path": path,
-                "output_name": output_name,
-                "url": u,
-                "texts": translated_result,
-                "src_lang": transcription.language,
-                "result": result,
-                "transcription": transcription,
-                "diarization": diarization,
-                "cached": False
-            })
+
+            if on_stage:
+                try:
+                    on_stage(u, "ready", f"Listo: {output_name}")
+                except Exception:
+                    pass
+
+            results.append(
+                {
+                    "path": path,
+                    "output_name": output_name,
+                    "url": u,
+                    "info": info,
+                    "texts": translated_result,
+                    "src_lang": getattr(transcription, "language", "es") if transcription else "es",
+                    "result": result,
+                    "transcription": transcription,
+                    "diarization": diarization,
+                    "cached": False,
+                }
+            )
         except Exception as e:
+            error_trace = traceback.format_exc()
+            print(f"DEBUG: Error detectado en el pipeline:")
+            print(error_trace)
             print(f"❌ Error procesando {u}: {e}\n")
+            if on_stage:
+                try:
+                    on_stage(u, "error", str(e))
+                except Exception:
+                    pass
             continue
     return results
 
@@ -138,15 +222,18 @@ def split_audio_sequences(
     arr, org_sr = torchaudio.load(str(audio_path))
     generated_files = []
 
-    texts_to_process = texts if edit_indices is None else [texts[i - 1] for i in edit_indices]
+    texts_to_process = (
+        texts if edit_indices is None else [texts[i - 1] for i in edit_indices]
+    )
 
     for idx, text_dict in enumerate(texts_to_process):
         start = int(text_dict["start"] * org_sr)
         end = int(text_dict["end"] * org_sr)
         arr_split = arr[:, start:end]
 
-        seq_num = edit_indices[idx] if edit_indices else texts.index(text_dict) + 1
-        audio_filename = f"{audio_path.stem}_{seq_num:04d}.wav"
+        # Formato de 3 dígitos para nombres de secuencia (consistente con audio_utils)
+        seq_num = edit_indices[idx] if edit_indices else idx + 1
+        audio_filename = f"{audio_path.stem}_{seq_num:03d}.wav"
         audio_path_out = output_dir / audio_filename
 
         f_err = io.StringIO()
@@ -165,7 +252,10 @@ def split_all_sequences(video_paths: list[Path]) -> None:
             print(f"⚠️ Saltando {path.stem}: no hay archivo de textos")
             continue
         with open(texts_file, "rb") as f:
-            texts, output_name, url, result, transcription, diarization = pickle.load(f)
+            # Sincronización con el nuevo formato de 7 campos
+            texts, output_name, url, result, transcription, diarization, info, *rest = (
+                pickle.load(f)
+            )
         split_audio_sequences(
             audio_path=path.with_name("vocals.wav"),
             texts=texts,
