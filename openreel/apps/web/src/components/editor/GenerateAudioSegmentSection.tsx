@@ -176,7 +176,7 @@ export const GenerateAudioSegmentSection: React.FC<{
             <div>
               <DialogTitle className="text-xl font-bold text-white tracking-tight">AI Audio Generator</DialogTitle>
               <DialogDescription className="text-xs text-text-muted mt-0.5">
-                Genera nuevos segmentos de voz usando el clonado de voz LMNT.
+                Genera nuevos segmentos de voz usando Fish Audio (s2.1-pro-free).
               </DialogDescription>
             </div>
           </div>

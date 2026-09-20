@@ -92,43 +92,39 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     setIsV2VOpen,
   } = useV2VStore();
 
-  const [auth0Cookie, setAuth0Cookie] = React.useState("");
+  const [fishApiKey, setFishApiKey] = React.useState("");
   const [googleApiKey, setGoogleApiKey] = React.useState("");
-  const [showCookieSettings, setShowCookieSettings] = React.useState(false);
-  const [isSavingCookie, setIsSavingCookie] = React.useState(false);
-  const [showAuth0Cookie, setShowAuth0Cookie] = React.useState(false);
+  const [showTokenSettings, setShowTokenSettings] = React.useState(false);
+  const [isSavingTokens, setIsSavingTokens] = React.useState(false);
+  const [showFishApiKey, setShowFishApiKey] = React.useState(false);
   const [showGoogleApiKey, setShowGoogleApiKey] = React.useState(false);
 
   useEffect(() => {
-    // Cargar cookies al montar
-    const loadCookies = async () => {
+    // Cargar tokens al montar
+    const loadTokens = async () => {
       try {
-        const res = await v2vApi.getAuth0Cookie();
-        setAuth0Cookie(res.cookie || "");
+        const res = await v2vApi.getTokens();
+        setFishApiKey(res.fish_api_key || "");
         setGoogleApiKey(res.google_api_key || "");
       } catch (err) {
-        console.error("Error cargando cookies:", err);
+        console.error("Error cargando tokens:", err);
       }
     };
-    loadCookies();
+    loadTokens();
   }, []);
 
-  const handleSaveCookies = useCallback(async () => {
-    if (!auth0Cookie.trim()) {
-      toast.error("Error", "La cookie AUTH0_COOKIE no puede estar vacía.");
-      return;
-    }
-    setIsSavingCookie(true);
+  const handleSaveTokens = useCallback(async () => {
+    setIsSavingTokens(true);
     try {
-      await v2vApi.saveAuth0Cookie(auth0Cookie, googleApiKey);
-      toast.success("Configuración guardada", "Los tokens y cookies se han actualizado correctamente.");
-      setShowCookieSettings(false);
+      await v2vApi.saveTokens(fishApiKey, googleApiKey);
+      toast.success("Configuración guardada", "Los tokens de Fish Audio y Gemini se han actualizado correctamente.");
+      setShowTokenSettings(false);
     } catch (err) {
       toast.error("Error al guardar", err instanceof Error ? err.message : "No se pudo actualizar");
     } finally {
-      setIsSavingCookie(false);
+      setIsSavingTokens(false);
     }
-  }, [auth0Cookie, googleApiKey]);
+  }, [fishApiKey, googleApiKey]);
 
 
 
@@ -318,52 +314,52 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             </h2>
           </div>
           <button
-            onClick={() => setShowCookieSettings(!showCookieSettings)}
+            onClick={() => setShowTokenSettings(!showTokenSettings)}
             className={`p-1.5 rounded-lg border transition-all flex items-center gap-1.5 text-xs font-medium ${
-              showCookieSettings 
+              showTokenSettings 
                 ? "bg-primary/10 border-primary/20 text-primary shadow-sm" 
                 : "bg-background-tertiary border-border text-text-muted hover:text-text-primary hover:bg-background-secondary"
             }`}
-            title="Configurar cookies de sesión de LMNT"
+            title="Configurar tokens de Fish Audio y Gemini"
           >
-            <Settings size={13} className={showCookieSettings ? "animate-spin" : ""} style={{ animationDuration: "3s" }} />
+            <Settings size={13} className={showTokenSettings ? "animate-spin" : ""} style={{ animationDuration: "3s" }} />
             Tokens
           </button>
         </div>
 
-        {showCookieSettings && (
+        {showTokenSettings && (
           <div className="p-3.5 rounded-xl border border-primary/20 bg-primary/5 space-y-3 relative overflow-hidden">
             <div className="absolute top-0 right-0 w-24 h-24 bg-primary/10 rounded-full blur-2xl pointer-events-none" />
             
             <div className="relative">
               <h3 className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                Configurar Tokens de Acceso (LMNT / Gemini)
+                Configurar Tokens de Acceso (Fish Audio / Gemini)
               </h3>
               <p className="text-[10px] text-text-muted mt-0.5 leading-normal">
-                Configura la cookie AUTH0_COOKIE de LMNT y tu GOOGLE_API_KEY para traducciones y títulos virales de Gemini en caliente.
+                Configura tu FISH_AUDIO_API_KEY (modelo s2.1-pro-free) y tu GOOGLE_API_KEY para traducciones y doblaje en caliente.
               </p>
             </div>
 
             <div className="space-y-2 relative">
               <div>
                 <label className="text-[9px] text-text-muted block mb-1 font-medium">
-                  AUTH0_COOKIE (lmnt-auth0)
+                  FISH_AUDIO_API_KEY (Fish Audio)
                 </label>
                 <div className="relative flex items-center">
                   <input
-                    type={showAuth0Cookie ? "text" : "password"}
+                    type={showFishApiKey ? "text" : "password"}
                     className="w-full px-2.5 py-1.5 pr-8 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
-                    placeholder="Pega la cookie 'lmnt-auth0' completa aquí..."
-                    value={auth0Cookie}
-                    onChange={(e) => setAuth0Cookie(e.target.value)}
+                    placeholder="Pega tu API Key de Fish Audio aquí..."
+                    value={fishApiKey}
+                    onChange={(e) => setFishApiKey(e.target.value)}
                   />
                   <button
                     type="button"
-                    onClick={() => setShowAuth0Cookie(!showAuth0Cookie)}
+                    onClick={() => setShowFishApiKey(!showFishApiKey)}
                     className="absolute right-2.5 text-text-muted hover:text-text-primary transition-colors focus:outline-none"
                   >
-                    {showAuth0Cookie ? <EyeOff size={14} /> : <Eye size={14} />}
+                    {showFishApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
                   </button>
                 </div>
               </div>
@@ -392,12 +388,12 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
               <div className="flex gap-2 pt-1">
                 <Button
-                  onClick={handleSaveCookies}
-                  disabled={isSavingCookie}
+                  onClick={handleSaveTokens}
+                  disabled={isSavingTokens}
                   className="flex-1 text-xs h-8"
                   variant="default"
                 >
-                  {isSavingCookie ? (
+                  {isSavingTokens ? (
                     <>
                       <Loader2 size={12} className="animate-spin mr-1.5" />
                       Guardando...
@@ -407,8 +403,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                   )}
                 </Button>
                 <Button
-                  onClick={() => setShowCookieSettings(false)}
-                  disabled={isSavingCookie}
+                  onClick={() => setShowTokenSettings(false)}
+                  disabled={isSavingTokens}
                   className="text-xs h-8 px-3"
                   variant="secondary"
                 >
@@ -464,8 +460,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 ))
               ) : (
                 <>
-                  <option value="mrbeast_lmnt">mrbeast_lmnt</option>
-                  <option value="Dionisio Schuyler">Dionisio Schuyler</option>
+                  <option value="mrbeast">mrbeast</option>
+                  <option value="default_fish">default_fish</option>
                 </>
               )}
             </select>

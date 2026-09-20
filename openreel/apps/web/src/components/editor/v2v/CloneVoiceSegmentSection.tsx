@@ -452,7 +452,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
 
       <div className="space-y-2">
         <label className="text-[10px] text-text-secondary block mb-1">
-          Speaker (voz LMNT)
+          Speaker (voz Fish Audio)
         </label>
         <Select
           value={selectedVoice}

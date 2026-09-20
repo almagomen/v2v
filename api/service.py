@@ -8,23 +8,20 @@ from api.job_store import create_job, update_job, append_log, get_job
 from src.assets import load_assets
 
 SPEAKER_OPTIONS = {
-    "mrbeast_lmnt": "d47094be-9814-4323-9000-e735e04d8732",
-    "warrick_lmnt": "warrick",
-    "Dionisio Schuyler": "Dionisio Schuyler",
-    "en-US-AndrewMultilingualNeural": "en-US-AndrewMultilingualNeural",
-    "Chatterbox": "Chatterbox",
+    "mrbeast": "49898752f6994bc9a6ef1502214190de",
+    "default_fish": "",
 }
 
 # Lookup inverso: value/UUID → clave legible del diccionario
 # Permite que aunque el frontend envíe el UUID, el archivo en disco use el nombre legible.
-_SPEAKER_VALUE_TO_KEY: dict[str, str] = {v: k for k, v in SPEAKER_OPTIONS.items()}
+_SPEAKER_VALUE_TO_KEY: dict[str, str] = {v: k for k, v in SPEAKER_OPTIONS.items() if v}
 
 
 def resolve_speaker_key(speaker_input: str) -> str:
     """Devuelve la clave legible del diccionario para un speaker.
     
-    Acepta tanto la clave directa ('mrbeast_lmnt') como el valor/UUID
-    ('d47094be-...') y devuelve siempre la clave legible para nombrar archivos.
+    Acepta tanto la clave directa ('mrbeast') como el valor/UUID
+    ('49898752f6994bc9a6ef1502214190de') y devuelve siempre la clave legible para nombrar archivos.
     """
     # Primero intenta lookup inverso por value/UUID
     if speaker_input in _SPEAKER_VALUE_TO_KEY:

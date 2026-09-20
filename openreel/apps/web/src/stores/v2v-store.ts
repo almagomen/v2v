@@ -202,7 +202,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
   return {
     urls: saved.urls ?? "",
     translateLang: saved.translateLang ?? "None",
-    speaker: saved.speaker ?? "mrbeast_lmnt",
+    speaker: saved.speaker ?? "mrbeast",
 
     jobId: saved.jobId ?? null,
     progress: saved.progress ?? 0,
@@ -964,7 +964,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
       set({
         urls: "",
         translateLang: "None",
-        speaker: "mrbeast_lmnt",
+        speaker: "mrbeast",
         jobId: null,
         progress: 0,
         error: null,

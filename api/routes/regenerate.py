@@ -105,9 +105,9 @@ def _do_regenerate_segment(
         "start": start,
         "end": end,
         "text": text,
-        # Resolvemos siempre a la clave legible del diccionario (ej: 'mrbeast_lmnt')
-        # aunque el frontend haya enviado el UUID (ej: 'd47094be-...') como speaker.
-        # Esto garantiza que el archivo en disco se llame tts_mrbeast_lmnt_001.wav
+        # Resolvemos siempre a la clave legible del diccionario (ej: 'mrbeast')
+        # aunque el frontend haya enviado el ID de Fish Audio como speaker.
+        # Esto garantiza que el archivo en disco se llame tts_mrbeast_001.wav
         "speaker": resolve_speaker_key(speaker) if speaker else resolve_speaker_key(
             texts_original[seg_idx - 1].get("speaker", "SPEAKER_00")
         ),

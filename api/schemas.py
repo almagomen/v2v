@@ -9,7 +9,7 @@ class ProcessUrlsRequest(BaseModel):
     translate_lang: Optional[str] = Field(
         None, description="Idioma de traducción: es, pt, en, fr, de, it, o null"
     )
-    speaker: str = Field("mrbeast_lmnt", description="Nombre de voz/speaker")
+    speaker: str = Field("mrbeast", description="Nombre de voz/speaker")
 
 
 class ProcessUrlsResponse(BaseModel):
@@ -83,7 +83,7 @@ class RegenerateSegmentRequest(BaseModel):
     start: float
     end: float
     translate_lang: Optional[str] = None
-    speaker: str = "mrbeast_lmnt"
+    speaker: str = "mrbeast"
     speed: float = Field(1.0, description="Factor de velocidad (0.5 a 2.0)")
     target_duration: Optional[float] = Field(
         None, description="Duración objetivo en segundos para modo 's'"
@@ -95,7 +95,7 @@ class RegenerateVideoRequest(BaseModel):
     video_index: int = Field(0, description="Índice del video en el job")
     segments: list[SegmentSchema]
     translate_lang: Optional[str] = None
-    speaker: str = "mrbeast_lmnt"
+    speaker: str = "mrbeast"
 
 
 class ApplySpeedRequest(BaseModel):
@@ -110,7 +110,7 @@ class GenerateAudioSegmentRequest(BaseModel):
     job_id: Optional[str] = Field(None, description="ID del job")
     video_index: int = Field(0, description="Índice del video en el job")
     text: str
-    speaker: str = "mrbeast_lmnt"
+    speaker: str = "mrbeast"
 
 
 class SpeakerOption(BaseModel):
@@ -173,12 +173,12 @@ class RetranslateSegmentsResponse(BaseModel):
     segments: list[RetranslateSegmentItem]
 
 
-class CookieSettingsRequest(BaseModel):
-    cookie: str = Field(..., description="Nuevo valor para AUTH0_COOKIE")
+class TokenSettingsRequest(BaseModel):
+    fish_api_key: Optional[str] = Field(None, description="Nuevo valor para FISH_AUDIO_API_KEY")
     google_api_key: Optional[str] = Field(None, description="Nuevo valor para GOOGLE_API_KEY")
 
 
-class CookieSettingsResponse(BaseModel):
-    cookie: str
+class TokenSettingsResponse(BaseModel):
+    fish_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
     message: str = "Configuración actualizada exitosamente"

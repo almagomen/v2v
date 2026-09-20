@@ -10,8 +10,8 @@ from api.schemas import (
     VideoResult,
     SegmentSchema,
     JobPollResponse,
-    CookieSettingsRequest,
-    CookieSettingsResponse,
+    TokenSettingsRequest,
+    TokenSettingsResponse,
 )
 from api.job_store import get_job
 from api.service import start_process
@@ -168,22 +168,24 @@ def reconcile_jobs():
     return {"jobs": jobs_summary}
 
 
-@router.get("/settings/auth0-cookie", response_model=CookieSettingsResponse)
-def get_auth0_cookie():
-    from src.config import get_lmnt_auth0_cookie, get_google_api_key
-    return CookieSettingsResponse(
-        cookie=get_lmnt_auth0_cookie() or "",
+@router.get("/settings/tokens", response_model=TokenSettingsResponse)
+def get_tokens():
+    from src.config import get_google_api_key, get_fish_api_key
+    return TokenSettingsResponse(
+        fish_api_key=get_fish_api_key() or "",
         google_api_key=get_google_api_key() or "",
     )
 
 
-@router.post("/settings/auth0-cookie", response_model=CookieSettingsResponse)
-def post_auth0_cookie(req: CookieSettingsRequest):
+@router.post("/settings/tokens", response_model=TokenSettingsResponse)
+def post_tokens(req: TokenSettingsRequest):
     import os
     from pathlib import Path
 
-    cookie_val = req.cookie.strip()
-    os.environ["AUTH0_COOKIE"] = cookie_val
+    fish_api_val = (req.fish_api_key or "").strip()
+    if fish_api_val:
+        os.environ["FISH_AUDIO_API_KEY"] = fish_api_val
+        os.environ["FISH_API_KEY"] = fish_api_val
 
     google_api_val = ""
     if req.google_api_key:
@@ -195,24 +197,25 @@ def post_auth0_cookie(req: CookieSettingsRequest):
     try:
         lines = []
         exists = env_path.exists()
-        auth0_found = False
         google_found = False
+        fish_found = False
 
         if exists:
             with open(env_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
             
             for i, line in enumerate(lines):
-                if line.strip().startswith("AUTH0_COOKIE="):
-                    lines[i] = f"AUTH0_COOKIE={cookie_val}\n"
-                    auth0_found = True
+                if line.strip().startswith("FISH_AUDIO_API_KEY="):
+                    if fish_api_val:
+                        lines[i] = f"FISH_AUDIO_API_KEY={fish_api_val}\n"
+                    fish_found = True
                 elif line.strip().startswith("GOOGLE_API_KEY="):
                     if google_api_val:
                         lines[i] = f"GOOGLE_API_KEY={google_api_val}\n"
-                        google_found = True
+                    google_found = True
 
-        if not auth0_found:
-            lines.append(f"AUTH0_COOKIE={cookie_val}\n")
+        if not fish_found and fish_api_val:
+            lines.append(f"FISH_AUDIO_API_KEY={fish_api_val}\n")
         if not google_found and google_api_val:
             lines.append(f"GOOGLE_API_KEY={google_api_val}\n")
 
@@ -221,8 +224,8 @@ def post_auth0_cookie(req: CookieSettingsRequest):
     except Exception as e:
         print(f"Error escribiendo en .env: {e}")
 
-    return CookieSettingsResponse(
-        cookie=cookie_val,
+    return TokenSettingsResponse(
+        fish_api_key=fish_api_val or None,
         google_api_key=google_api_val or None,
-        message="Configuración actualizada en caliente",
+        message="Configuración de tokens actualizada en caliente",
     )

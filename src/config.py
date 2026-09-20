@@ -52,26 +52,22 @@ def get_google_api_key() -> str | None:
     return None
 
 
-def get_lmnt_api_key() -> str | None:
+def get_fish_api_key() -> str | None:
+    # Priorizar variable de entorno (para cambios dinámicos desde la UI o .env)
+    env_key = os.getenv("FISH_AUDIO_API_KEY") or os.getenv("FISH_API_KEY")
+    if env_key:
+        return env_key
     if is_colab():
         try:
             from google.colab import userdata
-            return userdata.get("LMNT_API_KEY") or None
-        except Exception: return os.getenv("LMNT_API_KEY")
-    return os.getenv("LMNT_API_KEY")
-
-def get_lmnt_auth0_cookie() -> str | None:
-    # Priorizar variable de entorno (para cambios dinámicos desde la UI)
-    env_cookie = os.getenv("AUTH0_COOKIE")
-    if env_cookie:
-        return env_cookie
-    if is_colab():
-        try:
-            from google.colab import userdata
-            return userdata.get("AUTH0_COOKIE") or None
+            return (
+                userdata.get("FISH_AUDIO_API_KEY")
+                or userdata.get("FISH_API_KEY")
+                or None
+            )
         except Exception:
-            pass
-    return None
+            return os.getenv("FISH_AUDIO_API_KEY") or os.getenv("FISH_API_KEY")
+    return os.getenv("FISH_AUDIO_API_KEY") or os.getenv("FISH_API_KEY")
 
 
 def get_drive_mount() -> bool: return _google_drive and is_colab()
