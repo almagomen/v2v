@@ -1,4 +1,4 @@
-import { Film, Volume2, Image, Type, Shapes, Layers } from "lucide-react";
+import { Film, Volume2, Image, Type, Shapes, Layers } from "@/icons/lucide-compat";
 import type { Track } from "@openreel/core";
 import type {
   SnapPoint,
@@ -134,6 +134,82 @@ export const generateWaveformPath = (
   return points.join(" ");
 };
 
+interface ClipWaveformBarOptions {
+  barCount: number;
+  mediaDuration: number;
+  inPoint: number;
+  outPoint: number;
+  reversed?: boolean;
+}
+
+/**
+ * Samples the source-media waveform over the range represented by a timeline
+ * clip. Each bar uses the highest peak in its source-time bucket so short
+ * transients remain visible while genuinely silent buckets stay at zero.
+ */
+export const getClipWaveformBarAmplitudes = (
+  waveformData: Float32Array | number[] | null | undefined,
+  options: ClipWaveformBarOptions,
+): number[] => {
+  const barCount = Math.max(0, Math.floor(options.barCount));
+  if (barCount === 0) return [];
+
+  if (
+    !waveformData ||
+    waveformData.length === 0 ||
+    !Number.isFinite(options.mediaDuration) ||
+    options.mediaDuration <= 0
+  ) {
+    return Array.from({ length: barCount }, () => 0);
+  }
+
+  const mediaDuration = options.mediaDuration;
+  const sourceStart = Math.max(0, Math.min(mediaDuration, options.inPoint));
+  const sourceEnd = Math.max(
+    sourceStart,
+    Math.min(mediaDuration, options.outPoint),
+  );
+  const sourceDuration = sourceEnd - sourceStart;
+
+  if (sourceDuration <= 0) {
+    return Array.from({ length: barCount }, () => 0);
+  }
+
+  return Array.from({ length: barCount }, (_, barIndex) => {
+    const displayIndex = options.reversed
+      ? barCount - barIndex - 1
+      : barIndex;
+    const bucketStartTime =
+      sourceStart + (displayIndex / barCount) * sourceDuration;
+    const bucketEndTime =
+      sourceStart + ((displayIndex + 1) / barCount) * sourceDuration;
+    const startSample = Math.max(
+      0,
+      Math.min(
+        waveformData.length - 1,
+        Math.floor((bucketStartTime / mediaDuration) * waveformData.length),
+      ),
+    );
+    const endSample = Math.max(
+      startSample + 1,
+      Math.min(
+        waveformData.length,
+        Math.ceil((bucketEndTime / mediaDuration) * waveformData.length),
+      ),
+    );
+
+    let peak = 0;
+    for (let sampleIndex = startSample; sampleIndex < endSample; sampleIndex++) {
+      const sample = Number(waveformData[sampleIndex]);
+      if (Number.isFinite(sample)) {
+        peak = Math.max(peak, Math.abs(sample));
+      }
+    }
+
+    return Math.min(1, peak);
+  });
+};
+
 export const formatTimecode = (
   timeInSeconds: number,
   frameRate: number = 30,
@@ -153,6 +229,15 @@ export const formatTimecode = (
 };
 
 export const getTrackInfo = (track: Track, index: number): TrackInfo => {
+  if (track.mode === "standard") {
+    return {
+      label: `T${index + 1}`,
+      icon: Layers,
+      color: "bg-fg-muted",
+      textColor: "text-fg-2",
+      bgLight: "bg-fg-muted/10",
+    };
+  }
   switch (track.type) {
     case "video":
       return {
@@ -174,9 +259,9 @@ export const getTrackInfo = (track: Track, index: number): TrackInfo => {
       return {
         label: `I${index + 1}`,
         icon: Image,
-        color: "bg-purple-500",
-        textColor: "text-purple-400",
-        bgLight: "bg-purple-500/20",
+        color: "bg-primary",
+        textColor: "text-primary",
+        bgLight: "bg-primary/20",
       };
     case "text":
       return {
@@ -209,31 +294,31 @@ export const getClipStyle = (trackType: string): ClipStyle => {
   switch (trackType) {
     case "video":
       return {
-        bg: "bg-primary/10",
-        border: "border-primary/30",
-        text: "text-white/90",
+        bg: "bg-[linear-gradient(160deg,#bcd3e8,#5d7a93)]",
+        border: "border-transparent",
+        text: "text-white",
         selectedText: "text-white",
       };
     case "audio":
       return {
-        bg: "bg-blue-500/10",
-        border: "border-blue-500/30",
-        text: "text-text-secondary",
-        selectedText: "text-blue-400",
+        bg: "bg-[#e6f4ea]",
+        border: "border-[#cfe8d6]",
+        text: "text-[#4a7a55]",
+        selectedText: "text-[#4a7a55]",
       };
     case "image":
       return {
-        bg: "bg-purple-500/10",
-        border: "border-purple-500/30",
-        text: "text-purple-300",
-        selectedText: "text-purple-400",
+        bg: "bg-[linear-gradient(160deg,#c3b1e8,#6a4aa0)]",
+        border: "border-transparent",
+        text: "text-white",
+        selectedText: "text-white",
       };
     default:
       return {
-        bg: "bg-gray-500/10",
-        border: "border-gray-500/30",
-        text: "text-text-secondary",
-        selectedText: "text-text-primary",
+        bg: "bg-[linear-gradient(160deg,#cdd4e0,#8a93a8)]",
+        border: "border-transparent",
+        text: "text-white",
+        selectedText: "text-white",
       };
   }
 };

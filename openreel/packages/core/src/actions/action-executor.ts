@@ -12,6 +12,7 @@ import type {
   SubtitleAction,
   MediaAction,
   ProjectAction,
+  MarkerAction,
 } from "../types/actions";
 import type {
   Project,
@@ -25,21 +26,132 @@ import type {
   SubtitleStyle,
   MediaItem,
   TransitionType,
+  Marker,
 } from "../types";
 import type {
   MutableTimeline,
   MutableTrack,
   MutableClip,
 } from "../utils/immutable-updates";
+import type { BlendMode } from "../video/types";
+import type { EmphasisAnimation } from "../graphics/types";
+import type { ShapeClip, StickerClip, SVGClip } from "../graphics/types";
+import type { TextClip } from "../text/types";
+import type { AdjustmentLayer } from "../video/adjustment-layer-engine";
+import type { MotionCompositionInstance } from "../motion/types";
+import type { ClipColorGrading } from "../video/color-grading-engine";
+import {
+  registerMotionShader,
+  unregisterMotionShader,
+  isBuiltinMotionShaderId,
+} from "../motion/shaders/registry";
+import type { MotionShaderDef } from "../motion/shaders/types";
 import { ActionValidator } from "./action-validator";
 import { ActionHistory } from "./action-history";
 import { InverseActionGenerator } from "./inverse-action-generator";
+import { getActionHandler } from "./registry";
+import "./handlers";
+import { calculateProjectDuration } from "../timeline/project-duration";
+
+interface MutableProjectItems {
+  textClips?: TextClip[];
+  shapeClips?: ShapeClip[];
+  svgClips?: SVGClip[];
+  stickerClips?: StickerClip[];
+  adjustmentLayers?: AdjustmentLayer[];
+  motionInstances?: MotionCompositionInstance[];
+}
+
+interface TrackOwnedItems {
+  textClips: TextClip[];
+  shapeClips: ShapeClip[];
+  svgClips: SVGClip[];
+  stickerClips: StickerClip[];
+  adjustmentLayers: AdjustmentLayer[];
+  motionInstances: MotionCompositionInstance[];
+}
+
+function getTrackOwnedItems(project: Project, trackId: string): TrackOwnedItems {
+  return {
+    textClips: (project.textClips ?? []).filter((item) => item.trackId === trackId),
+    shapeClips: (project.shapeClips ?? []).filter((item) => item.trackId === trackId),
+    svgClips: (project.svgClips ?? []).filter((item) => item.trackId === trackId),
+    stickerClips: (project.stickerClips ?? []).filter(
+      (item) => item.trackId === trackId,
+    ),
+    adjustmentLayers: (project.adjustmentLayers ?? []).filter(
+      (item) => item.trackId === trackId,
+    ),
+    motionInstances: (project.motionInstances ?? []).filter(
+      (item) => item.trackId === trackId,
+    ),
+  };
+}
+
+function removeTrackOwnedItems(project: Project, trackId: string): void {
+  const mutable = project as Project & MutableProjectItems;
+  mutable.textClips = (project.textClips ?? []).filter(
+    (item) => item.trackId !== trackId,
+  );
+  mutable.shapeClips = (project.shapeClips ?? []).filter(
+    (item) => item.trackId !== trackId,
+  );
+  mutable.svgClips = (project.svgClips ?? []).filter(
+    (item) => item.trackId !== trackId,
+  );
+  mutable.stickerClips = (project.stickerClips ?? []).filter(
+    (item) => item.trackId !== trackId,
+  );
+  mutable.adjustmentLayers = (project.adjustmentLayers ?? []).filter(
+    (item) => item.trackId !== trackId,
+  );
+  mutable.motionInstances = (project.motionInstances ?? []).filter(
+    (item) => item.trackId !== trackId,
+  );
+}
+
+function restoreTrackOwnedItems(project: Project, items: TrackOwnedItems): void {
+  const mutable = project as Project & MutableProjectItems;
+  mutable.textClips = [...(project.textClips ?? []), ...items.textClips];
+  mutable.shapeClips = [...(project.shapeClips ?? []), ...items.shapeClips];
+  mutable.svgClips = [...(project.svgClips ?? []), ...items.svgClips];
+  mutable.stickerClips = [...(project.stickerClips ?? []), ...items.stickerClips];
+  mutable.adjustmentLayers = [
+    ...(project.adjustmentLayers ?? []),
+    ...items.adjustmentLayers,
+  ];
+  mutable.motionInstances = [
+    ...(project.motionInstances ?? []),
+    ...items.motionInstances,
+  ];
+}
 
 export class ActionExecutor {
   private validator: ActionValidator;
   private history: ActionHistory;
   private inverseGenerator: InverseActionGenerator;
   private lastAddedIds: Map<string, string> = new Map();
+
+  private isSameTransitionPlacement(
+    candidate: Transition,
+    transition: Transition,
+  ): boolean {
+    if (candidate.id === transition.id) {
+      return true;
+    }
+
+    if (candidate.clipBId || transition.clipBId) {
+      return (
+        candidate.clipAId === transition.clipAId &&
+        candidate.clipBId === transition.clipBId
+      );
+    }
+
+    return (
+      candidate.clipAId === transition.clipAId &&
+      (candidate.edge ?? "out") === (transition.edge ?? "out")
+    );
+  }
 
   constructor(history?: ActionHistory) {
     this.validator = new ActionValidator();
@@ -67,7 +179,13 @@ export class ActionExecutor {
     );
     try {
       await this.applyAction(action as TimelineAction, project);
-      this.history.push(action, inverseAction);
+      // Resolve generated-id markers while this action's newly-created entity is
+      // still the latest one. Deferring resolution until undo makes every entry
+      // in a grouped add operation target the final created entity instead.
+      const resolvedInverseAction = inverseAction
+        ? this.resolveSpecialMarkers(inverseAction)
+        : null;
+      this.history.push(action, resolvedInverseAction);
 
       return {
         success: true,
@@ -204,6 +322,16 @@ export class ActionExecutor {
   ): Promise<void> {
     const type = action.type;
 
+    const handler = getActionHandler(type);
+    if (handler) {
+      await handler.apply(action as Action, project, {
+        lastAddedIds: this.lastAddedIds,
+      });
+      this.recalculateTimelineDuration(project);
+      this.markProjectModified(project);
+      return;
+    }
+
     if (type.startsWith("project/")) {
       this.applyProjectAction(action as ProjectAction, project);
     } else if (type.startsWith("media/")) {
@@ -224,21 +352,22 @@ export class ActionExecutor {
       this.applyAudioAction(action as AudioAction, project);
     } else if (type.startsWith("subtitle/")) {
       this.applySubtitleAction(action as SubtitleAction, project);
+    } else if (type.startsWith("marker/")) {
+      this.applyMarkerAction(action as MarkerAction, project);
     }
 
     // Recompute timeline duration from clips after any action that may affect it
     this.recalculateTimelineDuration(project);
+    this.markProjectModified(project);
   }
 
   private recalculateTimelineDuration(project: Project): void {
-    let maxEnd = 0;
-    for (const track of project.timeline.tracks) {
-      for (const clip of track.clips) {
-        const end = clip.startTime + clip.duration;
-        if (end > maxEnd) maxEnd = end;
-      }
-    }
-    (project.timeline as MutableTimeline).duration = maxEnd;
+    (project.timeline as MutableTimeline).duration =
+      calculateProjectDuration(project);
+  }
+
+  private markProjectModified(project: Project): void {
+    (project as { modifiedAt: number }).modifiedAt = Date.now();
   }
 
   private applyProjectAction(action: ProjectAction, project: Project): void {
@@ -256,11 +385,47 @@ export class ActionExecutor {
         (project as any).modifiedAt = Date.now();
         break;
 
+      case "project/setCanvasBackground":
+        (project as any).timeline = {
+          ...project.timeline,
+          backgroundFillMode: action.params.backgroundFillMode,
+          layoutBackgroundColor: action.params.layoutBackgroundColor,
+        };
+        (project as any).modifiedAt = Date.now();
+        break;
+
       case "project/create":
         (project as any).name = action.params.name;
         (project as any).settings = action.params.settings;
         (project as any).modifiedAt = Date.now();
         break;
+
+      case "project/registerGeneratedShader": {
+        const def = action.params.def;
+        if (isBuiltinMotionShaderId(def.id)) break;
+        const existing: readonly MotionShaderDef[] =
+          project.generatedShaders ?? [];
+        const next = [
+          ...existing.filter((entry) => entry.id !== def.id),
+          def,
+        ];
+        (project as any).generatedShaders = next;
+        (project as any).modifiedAt = Date.now();
+        registerMotionShader(def);
+        break;
+      }
+
+      case "project/removeGeneratedShader": {
+        const shaderId = action.params.shaderId;
+        const existing: readonly MotionShaderDef[] =
+          project.generatedShaders ?? [];
+        (project as any).generatedShaders = existing.filter(
+          (entry) => entry.id !== shaderId,
+        );
+        (project as any).modifiedAt = Date.now();
+        unregisterMotionShader(shaderId);
+        break;
+      }
     }
   }
 
@@ -340,6 +505,9 @@ export class ActionExecutor {
           trackType: string;
           position?: number;
           trackId?: string;
+          mode?: "standard";
+          role?: Track["role"];
+          name?: string;
         };
         const trackNames: Record<string, string> = {
           video: "Video",
@@ -349,13 +517,23 @@ export class ActionExecutor {
           graphics: "Graphics",
         };
         const trackCount =
-          timeline.tracks.filter(
-            (t: MutableTrack) => t.type === params.trackType,
+          timeline.tracks.filter((track: MutableTrack) =>
+            params.mode === "standard"
+              ? track.mode === "standard"
+              : track.type === params.trackType,
           ).length + 1;
         const newTrack: MutableTrack = {
-          id: params.trackId ?? `track-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: params.trackId ?? `track-${crypto.randomUUID()}`,
           type: params.trackType as Track["type"],
-          name: `${trackNames[params.trackType] || params.trackType} ${trackCount}`,
+          mode: params.mode,
+          role: params.role,
+          name:
+            params.name ??
+            `${
+              params.mode === "standard"
+                ? "Track"
+                : trackNames[params.trackType] || params.trackType
+            } ${trackCount}`,
           clips: [],
           transitions: [],
           locked: false,
@@ -378,21 +556,123 @@ export class ActionExecutor {
         break;
       }
 
+      case "track/duplicate": {
+        const params = action.params as {
+          sourceTrackId: string;
+          position?: number;
+          trackId?: string;
+          itemIdMap?: Record<string, string>;
+          transitionIdMap?: Record<string, string>;
+        };
+        const sourceIndex = timeline.tracks.findIndex(
+          (track: MutableTrack) => track.id === params.sourceTrackId,
+        );
+        if (sourceIndex < 0) break;
+        const source = timeline.tracks[sourceIndex];
+        const trackId = params.trackId ?? `track-${crypto.randomUUID()}`;
+        params.trackId = trackId;
+        const ownedItems = getTrackOwnedItems(project, source.id);
+        const sourceItemIds = [
+          ...source.clips.map((clip) => clip.id),
+          ...ownedItems.textClips.map((item) => item.id),
+          ...ownedItems.shapeClips.map((item) => item.id),
+          ...ownedItems.svgClips.map((item) => item.id),
+          ...ownedItems.stickerClips.map((item) => item.id),
+          ...ownedItems.adjustmentLayers.map((item) => item.id),
+          ...ownedItems.motionInstances.map((item) => item.id),
+        ];
+        params.itemIdMap ??= Object.fromEntries(
+          sourceItemIds.map((id) => [id, `item-${crypto.randomUUID()}`]),
+        );
+        params.transitionIdMap ??= Object.fromEntries(
+          source.transitions.map((transition) => [
+            transition.id,
+            `transition-${crypto.randomUUID()}`,
+          ]),
+        );
+        const duplicateItem = <T extends { id: string; trackId?: string }>(
+          item: T,
+        ): T => ({
+          ...structuredClone(item),
+          id: params.itemIdMap![item.id]!,
+          trackId,
+        });
+        const names = new Set(timeline.tracks.map((track) => track.name));
+        const baseName = `${source.name} Copy`;
+        let name = baseName;
+        let suffix = 2;
+        while (names.has(name)) {
+          name = `${baseName} ${suffix}`;
+          suffix += 1;
+        }
+        const duplicate: MutableTrack = {
+          ...structuredClone(source),
+          id: trackId,
+          name,
+          clips: source.clips.map((clip) => ({
+            ...structuredClone(clip),
+            id: params.itemIdMap![clip.id]!,
+            trackId,
+          })),
+          transitions: source.transitions.map((transition) => ({
+            ...structuredClone(transition),
+            id: params.transitionIdMap![transition.id]!,
+            clipAId:
+              params.itemIdMap![transition.clipAId] ?? transition.clipAId,
+            clipBId: transition.clipBId
+              ? (params.itemIdMap![transition.clipBId] ?? transition.clipBId)
+              : undefined,
+          })),
+        };
+        const position = params.position ?? sourceIndex + 1;
+        timeline.tracks = [
+          ...timeline.tracks.slice(0, position),
+          duplicate,
+          ...timeline.tracks.slice(position),
+        ];
+        restoreTrackOwnedItems(project, {
+          textClips: ownedItems.textClips.map(duplicateItem),
+          shapeClips: ownedItems.shapeClips.map(duplicateItem),
+          svgClips: ownedItems.svgClips.map(duplicateItem),
+          stickerClips: ownedItems.stickerClips.map(duplicateItem),
+          adjustmentLayers: ownedItems.adjustmentLayers.map((layer) => ({
+            ...duplicateItem(layer),
+            affectedTracks:
+              layer.affectedTracks === "all"
+                ? "all"
+                : layer.affectedTracks.map((affectedTrackId) =>
+                    affectedTrackId === source.id ? trackId : affectedTrackId,
+                  ),
+          })),
+          motionInstances: ownedItems.motionInstances.map(duplicateItem),
+        });
+        this.lastAddedIds.set("track", trackId);
+        break;
+      }
+
       case "track/remove": {
         const params = action.params as { trackId: string };
         timeline.tracks = timeline.tracks.filter(
           (t: MutableTrack) => t.id !== params.trackId,
         );
+        removeTrackOwnedItems(project, params.trackId);
         break;
       }
 
       case "track/restore": {
-        const params = action.params as { track: Track; position: number };
+        const params = action.params as {
+          track: Track;
+          position: number;
+          items?: TrackOwnedItems;
+        };
         timeline.tracks = [
           ...timeline.tracks.slice(0, params.position),
           params.track,
           ...timeline.tracks.slice(params.position),
         ];
+        if (params.items) {
+          restoreTrackOwnedItems(project, params.items);
+        }
         break;
       }
 
@@ -427,6 +707,14 @@ export class ActionExecutor {
         break;
       }
 
+      case "track/rename": {
+        const params = action.params as { trackId: string; name: string };
+        timeline.tracks = timeline.tracks.map((t: MutableTrack) =>
+          t.id === params.trackId ? { ...t, name: params.name } : t,
+        );
+        break;
+      }
+
       case "track/mute": {
         const params = action.params as { trackId: string; muted: boolean };
         timeline.tracks = timeline.tracks.map((t: MutableTrack) =>
@@ -439,6 +727,63 @@ export class ActionExecutor {
         const params = action.params as { trackId: string; solo: boolean };
         timeline.tracks = timeline.tracks.map((t: MutableTrack) =>
           t.id === params.trackId ? { ...t, solo: params.solo } : t,
+        );
+        break;
+      }
+    }
+  }
+
+  private applyMarkerAction(
+    action: MarkerAction | { type: string; params: Record<string, unknown> },
+    project: Project,
+  ): void {
+    const timeline = project.timeline as MutableTimeline;
+
+    switch (action.type) {
+      case "marker/add": {
+        const params = action.params as {
+          time: number;
+          label: string;
+          color: string;
+        };
+        const newMarker: Marker = {
+          id: `marker-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+          time: params.time,
+          label: params.label,
+          color: params.color,
+        };
+        timeline.markers = [...timeline.markers, newMarker];
+        this.lastAddedIds.set("marker", newMarker.id);
+        break;
+      }
+
+      case "marker/restore": {
+        const params = action.params as { marker: Marker; position: number };
+        const markers = [...timeline.markers];
+        const position = Math.min(
+          Math.max(params.position, 0),
+          markers.length,
+        );
+        markers.splice(position, 0, { ...params.marker });
+        timeline.markers = markers;
+        break;
+      }
+
+      case "marker/remove": {
+        const params = action.params as { markerId: string };
+        timeline.markers = timeline.markers.filter(
+          (m) => m.id !== params.markerId,
+        );
+        break;
+      }
+
+      case "marker/update": {
+        const params = action.params as {
+          markerId: string;
+          updates: Partial<Marker>;
+        };
+        timeline.markers = timeline.markers.map((m) =>
+          m.id === params.markerId ? { ...m, ...params.updates } : m,
         );
         break;
       }
@@ -458,7 +803,19 @@ export class ActionExecutor {
           mediaId: string;
           startTime: number;
           duration?: number;
+          inPoint?: number;
+          outPoint?: number;
+          volume?: number;
+          effects?: unknown[];
+          audioEffects?: unknown[];
+          keyframes?: unknown[];
+          transform?: Record<string, unknown>;
+          fade?: { fadeIn: number; fadeOut: number };
+          speed?: number;
+          reversed?: boolean;
           audioTrackIndex?: number;
+          sourceClip?: Clip;
+          clipId?: string;
         };
         const track = timeline.tracks.find(
           (t: MutableTrack) => t.id === params.trackId,
@@ -474,29 +831,46 @@ export class ActionExecutor {
             (mediaItem?.metadata.duration && mediaItem.metadata.duration > 0
               ? mediaItem.metadata.duration
               : 5);
-          const newClip = {
-            id: crypto.randomUUID(),
-            mediaId: params.mediaId,
-            trackId: params.trackId,
-            startTime: params.startTime,
-            duration: clipDuration,
-            inPoint: 0,
-            outPoint: clipDuration,
-            effects: [],
-            audioEffects: [],
-            transform: {
-              position: { x: 0, y: 0 },
-              scale: { x: 1, y: 1 },
-              rotation: 0,
-              anchor: { x: 0.5, y: 0.5 },
-              opacity: 1,
-            },
-            volume: 1,
-            keyframes: [],
-            ...(params.audioTrackIndex !== undefined
-              ? { audioTrackIndex: params.audioTrackIndex }
-              : {}),
+          const defaultTransform = {
+            position: { x: 0, y: 0 },
+            scale: { x: 1, y: 1 },
+            rotation: 0,
+            anchor: { x: 0.5, y: 0.5 },
+            opacity: 1,
+            fitMode: "contain" as const,
           };
+          const newClip = params.sourceClip
+            ? {
+                ...structuredClone(params.sourceClip),
+                id: params.clipId ?? crypto.randomUUID(),
+                trackId: params.trackId,
+                startTime: params.startTime,
+              }
+            : {
+                id: params.clipId ?? crypto.randomUUID(),
+                mediaId: params.mediaId,
+                trackId: params.trackId,
+                startTime: params.startTime,
+                duration: clipDuration,
+                inPoint: params.inPoint ?? 0,
+                outPoint: params.outPoint ?? clipDuration,
+                effects: (params.effects as never[]) ?? [],
+                audioEffects: (params.audioEffects as never[]) ?? [],
+                transform: params.transform
+                  ? { ...defaultTransform, ...params.transform }
+                  : defaultTransform,
+                volume: params.volume ?? 1,
+                keyframes: (params.keyframes as never[]) ?? [],
+                ...(params.fade ? { fade: params.fade } : {}),
+                ...(params.speed !== undefined ? { speed: params.speed } : {}),
+                ...(params.reversed !== undefined
+                  ? { reversed: params.reversed }
+                  : {}),
+                ...(params.audioTrackIndex !== undefined
+                  ? { audioTrackIndex: params.audioTrackIndex }
+                  : {}),
+              };
+          params.clipId = newClip.id;
           track.clips = [...track.clips, newClip];
           this.lastAddedIds.set("clip", newClip.id);
         }
@@ -666,6 +1040,67 @@ export class ActionExecutor {
         break;
       }
 
+      case "clip/setBlendMode": {
+        const params = action.params as {
+          clipId: string;
+          blendMode: BlendMode;
+        };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) =>
+            clip.id === params.clipId
+              ? { ...clip, blendMode: params.blendMode }
+              : clip,
+          ),
+        }));
+        break;
+      }
+
+      case "clip/setBlendOpacity": {
+        const params = action.params as { clipId: string; opacity: number };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) =>
+            clip.id === params.clipId
+              ? { ...clip, blendOpacity: params.opacity }
+              : clip,
+          ),
+        }));
+        break;
+      }
+
+      case "clip/setEmphasisAnimation": {
+        const params = action.params as {
+          clipId: string;
+          emphasisAnimation: EmphasisAnimation;
+        };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) =>
+            clip.id === params.clipId
+              ? { ...clip, emphasisAnimation: params.emphasisAnimation }
+              : clip,
+          ),
+        }));
+        break;
+      }
+
+      case "clip/setColorGrading": {
+        const params = action.params as {
+          clipId: string;
+          colorGrading?: ClipColorGrading;
+        };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) =>
+            clip.id === params.clipId
+              ? { ...clip, colorGrading: params.colorGrading }
+              : clip,
+          ),
+        }));
+        break;
+      }
+
       case "clip/rippleRestore": {
         const params = action.params as {
           clip: Clip;
@@ -804,6 +1239,130 @@ export class ActionExecutor {
         }
         break;
       }
+
+      case "clip/closeGapBefore": {
+        // Close the gap before the target clip by sliding it (and every
+        // later clip on the same track) left until it butts up against
+        // the preceding clip (or the start of the timeline).
+        const params = action.params as { clipId: string };
+        const clip = this.findClip(timeline, params.clipId);
+        if (clip) {
+          const track = timeline.tracks.find((t) => t.id === clip.trackId);
+          if (track) {
+            const sorted = [...track.clips].sort(
+              (a, b) => a.startTime - b.startTime,
+            );
+            const idx = sorted.findIndex((c) => c.id === clip.id);
+            if (idx >= 0) {
+              const prev = idx > 0 ? sorted[idx - 1] : null;
+              const target = prev ? prev.startTime + prev.duration : 0;
+              const gap = clip.startTime - target;
+              if (gap > 0) {
+                const shiftIds = new Set(
+                  sorted.slice(idx).map((c) => c.id),
+                );
+                timeline.tracks = timeline.tracks.map((t: MutableTrack) => {
+                  if (t.id !== track.id) return t;
+                  return {
+                    ...t,
+                    clips: t.clips.map((c: MutableClip) =>
+                      shiftIds.has(c.id)
+                        ? { ...c, startTime: c.startTime - gap }
+                        : c,
+                    ),
+                  };
+                });
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case "track/consolidate": {
+        // Walk the track left-to-right and shift each clip backward so
+        // there is no empty space between consecutive clips. Already
+        // packed tracks are left alone.
+        const params = action.params as { trackId: string };
+        timeline.tracks = timeline.tracks.map((t: MutableTrack) => {
+          if (t.id !== params.trackId) return t;
+          const sorted = [...t.clips].sort(
+            (a, b) => a.startTime - b.startTime,
+          );
+          let cursor = 0;
+          const newPositions = new Map<string, number>();
+          for (const c of sorted) {
+            const newStart = Math.max(0, cursor);
+            newPositions.set(c.id, newStart);
+            cursor = newStart + c.duration;
+          }
+          return {
+            ...t,
+            clips: t.clips.map((c: MutableClip) => {
+              const ns = newPositions.get(c.id);
+              return ns !== undefined && ns !== c.startTime
+                ? { ...c, startTime: ns }
+                : c;
+            }),
+          };
+        });
+        break;
+      }
+
+      case "track/restorePositions": {
+        // Inverse of track/consolidate — restore the captured per-clip
+        // start times.
+        const params = action.params as {
+          trackId: string;
+          positions: Array<{ clipId: string; startTime: number }>;
+        };
+        const lookup = new Map(
+          params.positions.map((p) => [p.clipId, p.startTime] as const),
+        );
+        timeline.tracks = timeline.tracks.map((t: MutableTrack) => {
+          if (t.id !== params.trackId) return t;
+          return {
+            ...t,
+            clips: t.clips.map((c: MutableClip) => {
+              const ns = lookup.get(c.id);
+              return ns !== undefined && ns !== c.startTime
+                ? { ...c, startTime: ns }
+                : c;
+            }),
+          };
+        });
+        break;
+      }
+    }
+
+    // A compound instance has a normal timeline clip as its editable shell.
+    // Keep the persisted instance timing in lockstep so inspector state,
+    // autosave and export never observe stale coordinates after an edit/undo.
+    if (
+      action.type === "clip/move" ||
+      action.type === "clip/trim" ||
+      action.type === "clip/slip" ||
+      action.type === "clip/trimToPlayhead"
+    ) {
+      const clipId = (action.params as { clipId?: string }).clipId;
+      const updatedClip = clipId ? this.findClip(timeline, clipId) : null;
+      if (updatedClip && project.nestedInstances?.some((item) => item.id === clipId)) {
+        (project as Project & { nestedInstances: typeof project.nestedInstances }).nestedInstances = project.nestedInstances.map(
+          (item) =>
+            item.id === clipId
+              ? {
+                  ...item,
+                  trackId: updatedClip.trackId,
+                  startTime: updatedClip.startTime,
+                  duration: updatedClip.duration,
+                  inPoint: updatedClip.inPoint,
+                  outPoint: updatedClip.outPoint,
+                  transform: updatedClip.transform,
+                  volume: updatedClip.volume,
+                }
+              : item,
+        );
+      }
     }
   }
 
@@ -819,19 +1378,29 @@ export class ActionExecutor {
           clipId: string;
           effectType: string;
           params?: Record<string, unknown>;
+          effectId?: string;
+          index?: number;
+          enabled?: boolean;
         };
         const newEffect = {
-          id: `effect-${Date.now()}`,
+          id: params.effectId ?? `effect-${Date.now()}`,
           type: params.effectType,
           params: params.params || {},
-          enabled: true,
+          enabled: params.enabled ?? true,
         };
 
         timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
           ...track,
           clips: track.clips.map((clip: MutableClip) =>
             clip.id === params.clipId
-              ? { ...clip, effects: [...clip.effects, newEffect] }
+              ? (() => {
+                  const effects = [...clip.effects];
+                  const index = Number.isInteger(params.index)
+                    ? Math.max(0, Math.min(effects.length, params.index!))
+                    : effects.length;
+                  effects.splice(index, 0, newEffect);
+                  return { ...clip, effects };
+                })()
               : clip,
           ),
         }));
@@ -901,6 +1470,30 @@ export class ActionExecutor {
         break;
       }
 
+      case "effect/toggle": {
+        const params = action.params as {
+          clipId: string;
+          effectId: string;
+          enabled: boolean;
+        };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) =>
+            clip.id === params.clipId
+              ? {
+                  ...clip,
+                  effects: clip.effects.map((e: Effect) =>
+                    e.id === params.effectId
+                      ? { ...e, enabled: params.enabled }
+                      : e,
+                  ),
+                }
+              : clip,
+          ),
+        }));
+        break;
+      }
+
       case "effect/reorder": {
         const params = action.params as {
           clipId: string;
@@ -937,14 +1530,24 @@ export class ActionExecutor {
 
     timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
       ...track,
-      clips: track.clips.map((clip: MutableClip) =>
-        clip.id === action.params.clipId
-          ? {
-              ...clip,
-              transform: { ...clip.transform, ...action.params.transform },
-            }
-          : clip,
-      ),
+      clips: track.clips.map((clip: MutableClip) => {
+        if (clip.id !== action.params.clipId) return clip;
+        const prev = clip.transform;
+        const next = action.params.transform;
+        // Deep-merge nested objects so a partial-axis update (e.g.
+        // { position: { x } }) does not drop the other axis, matching the
+        // store's own deep-merge behavior.
+        return {
+          ...clip,
+          transform: {
+            ...prev,
+            ...next,
+            position: { ...prev.position, ...(next.position ?? {}) },
+            scale: { ...prev.scale, ...(next.scale ?? {}) },
+            anchor: { ...prev.anchor, ...(next.anchor ?? {}) },
+          },
+        };
+      }),
     }));
   }
 
@@ -1081,6 +1684,41 @@ export class ActionExecutor {
         break;
       }
 
+      case "transition/set": {
+        const params = action.params as { transition: Transition };
+        const clipA = this.findClip(timeline, params.transition.clipAId);
+        if (clipA) {
+          timeline.tracks = timeline.tracks.map((track: MutableTrack) =>
+            track.id === clipA.trackId
+              ? {
+                  ...track,
+                  transitions: [
+                    ...(track.transitions || []).filter(
+                      (t: Transition) =>
+                        !this.isSameTransitionPlacement(t, params.transition),
+                    ),
+                    params.transition,
+                  ],
+                }
+              : track,
+          );
+        }
+        break;
+      }
+
+      case "transition/restoreTrack": {
+        const params = action.params as {
+          trackId: string;
+          transitions: Transition[];
+        };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) =>
+          track.id === params.trackId
+            ? { ...track, transitions: params.transitions }
+            : track,
+        );
+        break;
+      }
+
       case "transition/remove": {
         const params = action.params as { transitionId: string };
         timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
@@ -1114,6 +1752,7 @@ export class ActionExecutor {
       case "transition/update": {
         const params = action.params as {
           transitionId: string;
+          type?: TransitionType;
           duration?: number;
           params?: Record<string, unknown>;
         };
@@ -1123,6 +1762,7 @@ export class ActionExecutor {
             t.id === params.transitionId
               ? {
                   ...t,
+                  ...(params.type !== undefined && { type: params.type }),
                   ...(params.duration !== undefined && {
                     duration: params.duration,
                   }),
@@ -1202,6 +1842,106 @@ export class ActionExecutor {
                     ...clip.automation,
                     volume: params.points,
                   },
+                }
+              : clip,
+          ),
+        }));
+        break;
+      }
+
+      case "audio/addEffect": {
+        const params = action.params as { clipId: string; effect: Effect };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) =>
+            clip.id === params.clipId
+              ? {
+                  ...clip,
+                  audioEffects: [...(clip.audioEffects ?? []), params.effect],
+                }
+              : clip,
+          ),
+        }));
+        break;
+      }
+
+      case "audio/restoreEffect": {
+        const params = action.params as {
+          clipId: string;
+          effect: Effect;
+          index: number;
+        };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) => {
+            if (clip.id !== params.clipId) return clip;
+            const audioEffects = [...(clip.audioEffects ?? [])];
+            audioEffects.splice(params.index, 0, params.effect);
+            return { ...clip, audioEffects };
+          }),
+        }));
+        break;
+      }
+
+      case "audio/removeEffect": {
+        const params = action.params as { clipId: string; effectId: string };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) =>
+            clip.id === params.clipId
+              ? {
+                  ...clip,
+                  audioEffects: (clip.audioEffects ?? []).filter(
+                    (e: Effect) => e.id !== params.effectId,
+                  ),
+                }
+              : clip,
+          ),
+        }));
+        break;
+      }
+
+      case "audio/updateEffect": {
+        const params = action.params as {
+          clipId: string;
+          effectId: string;
+          params: Record<string, unknown>;
+        };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) =>
+            clip.id === params.clipId
+              ? {
+                  ...clip,
+                  audioEffects: (clip.audioEffects ?? []).map((e: Effect) =>
+                    e.id === params.effectId
+                      ? { ...e, params: { ...e.params, ...params.params } }
+                      : e,
+                  ),
+                }
+              : clip,
+          ),
+        }));
+        break;
+      }
+
+      case "audio/toggleEffect": {
+        const params = action.params as {
+          clipId: string;
+          effectId: string;
+          enabled: boolean;
+        };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) =>
+            clip.id === params.clipId
+              ? {
+                  ...clip,
+                  audioEffects: (clip.audioEffects ?? []).map((e: Effect) =>
+                    e.id === params.effectId
+                      ? { ...e, enabled: params.enabled }
+                      : e,
+                  ),
                 }
               : clip,
           ),

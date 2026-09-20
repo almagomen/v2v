@@ -13,22 +13,6 @@ const isAlignedLinkedClip = (clip: Clip, candidate: Clip): boolean =>
   Math.abs(candidate.startTime - clip.startTime) < LINK_TOLERANCE_SECONDS &&
   Math.abs(candidate.inPoint - clip.inPoint) < LINK_TOLERANCE_SECONDS;
 
-const getTrackTypePriority = (
-  currentTrackType: Track["type"] | undefined,
-  candidateTrackType: Track["type"],
-): number => {
-  if (currentTrackType === "audio") {
-    if (candidateTrackType === "video") return 0;
-    if (candidateTrackType === "image") return 1;
-  }
-
-  if (candidateTrackType === "audio") return 0;
-  if (candidateTrackType === "video") return 1;
-  if (candidateTrackType === "image") return 2;
-
-  return 3;
-};
-
 export const findClipTrack = (
   timeline: TimelineWithTracks,
   clipId: string,
@@ -47,7 +31,6 @@ export const getLinkedAudioClips = (
   clip: Clip,
   timeline: TimelineWithTracks,
 ): Array<{ clip: Clip; track: Track }> => {
-  const currentTrack = timeline.tracks.find((track) => track.id === clip.trackId);
   const linkedClips: Array<{ clip: Clip; track: Track }> = [];
 
   for (const track of timeline.tracks) {
@@ -62,11 +45,7 @@ export const getLinkedAudioClips = (
     }
   }
 
-  return linkedClips.sort(
-    (left, right) =>
-      getTrackTypePriority(currentTrack?.type, left.track.type) -
-      getTrackTypePriority(currentTrack?.type, right.track.type),
-  );
+  return linkedClips;
 };
 
 export const resolveClipAudioEffects = (
@@ -110,7 +89,7 @@ export const resolveAudibleAudioTarget = (
   }
 
   const linkedAudioClip = getLinkedAudioClips(clip, timeline).find(
-    (entry) => entry.track.type === "audio" && entry.clip.volume > 0,
+    (entry) => entry.clip.volume > 0,
   );
 
   return linkedAudioClip?.clip ?? clip;

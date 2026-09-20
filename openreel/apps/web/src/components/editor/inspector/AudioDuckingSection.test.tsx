@@ -13,6 +13,48 @@ const createProjectWithPersistedDucking = (): Project => {
 
   return {
     ...project,
+    mediaLibrary: {
+      items: [
+        {
+          id: "media-music",
+          name: "Music",
+          type: "audio",
+          fileHandle: null,
+          blob: null,
+          metadata: {
+            duration: 8,
+            width: 0,
+            height: 0,
+            frameRate: 0,
+            codec: "aac",
+            sampleRate: 48_000,
+            channels: 2,
+            fileSize: 1,
+          },
+          thumbnailUrl: null,
+          waveformData: null,
+        },
+        {
+          id: "media-dialogue",
+          name: "Dialogue",
+          type: "video",
+          fileHandle: null,
+          blob: null,
+          metadata: {
+            duration: 5,
+            width: 1920,
+            height: 1080,
+            frameRate: 30,
+            codec: "h264",
+            sampleRate: 48_000,
+            channels: 2,
+            fileSize: 1,
+          },
+          thumbnailUrl: null,
+          waveformData: null,
+        },
+      ],
+    },
     timeline: {
       ...project.timeline,
       duration: 8,

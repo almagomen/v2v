@@ -26,6 +26,10 @@ import {
   getPanFromAudioEffects,
   getPreviewAudioEffects,
 } from "../audio/audio-effect-routing";
+import {
+  getMediaItemCapabilities,
+  trackHasAudioItems,
+} from "../timeline/timeline-items";
 
 export class PlaybackController {
   private videoEngine: VideoEngine | null = null;
@@ -154,7 +158,7 @@ export class PlaybackController {
     this.project = project;
     this.state = "stopped";
     this.masterClock.setDuration(project.timeline.duration);
-    this.clearAudioBuffer();
+    this.pruneAudioBuffers(project);
   }
 
   setDisplayCanvas(canvas: HTMLCanvasElement | OffscreenCanvas): void {
@@ -405,7 +409,13 @@ export class PlaybackController {
     const startTime = performance.now();
 
     try {
-      const frame = await this.videoEngine.renderFrame(this.project, time);
+      const frame = await this.videoEngine.renderFrame(
+        this.project,
+        time,
+        undefined,
+        undefined,
+        { realtime: true },
+      );
 
       const renderTime = performance.now() - startTime;
       this.trackFrameRenderTime(renderTime);
@@ -445,20 +455,36 @@ export class PlaybackController {
       };
     }
 
+    if (this.isRenderingFrame) {
+      return {
+        frame: null,
+        renderTime: 0,
+        fromCache: false,
+        timedOut: false,
+      };
+    }
+    this.isRenderingFrame = true;
+
     const startTime = performance.now();
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const renderPromise = this.videoEngine.renderFrame(
+      this.project,
+      time,
+      undefined,
+      undefined,
+      { realtime: true },
+    );
 
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
+        timeoutId = setTimeout(() => {
           reject(new Error("Frame render timeout"));
         }, this.config.frameRenderTimeout);
       });
 
       // Race between render and timeout
-      const frame = await Promise.race([
-        this.videoEngine.renderFrame(this.project, time),
-        timeoutPromise,
-      ]);
+      const frame = await Promise.race([renderPromise, timeoutPromise]);
 
       const renderTime = performance.now() - startTime;
       this.trackFrameRenderTime(renderTime);
@@ -480,6 +506,18 @@ export class PlaybackController {
       const renderTime = performance.now() - startTime;
 
       if (error instanceof Error && error.message === "Frame render timeout") {
+        // The render is still in flight and the timeout won the race. When
+        // the late frame resolves its ImageBitmap would otherwise be orphaned
+        // (never assigned to currentFrame, never closed), leaking GPU memory
+        // on every dropped scrub frame. Close it when it lands.
+        renderPromise
+          .then((late) => {
+            if (late && late !== this.currentFrame) {
+              late.image.close();
+            }
+          })
+          .catch(() => {});
+
         return {
           frame: null,
           renderTime,
@@ -495,6 +533,11 @@ export class PlaybackController {
         fromCache: false,
         timedOut: false,
       };
+    } finally {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+      this.isRenderingFrame = false;
     }
   }
 
@@ -531,11 +574,12 @@ export class PlaybackController {
   private setupTracksInAudioGraph(): void {
     if (!this.project) return;
 
-    const hasSoloTracks = this.project.timeline.tracks.some((t) => t.solo);
+    const audioTracks = this.project.timeline.tracks.filter((track) =>
+      trackHasAudioItems(this.project!, track.id),
+    );
+    const hasSoloTracks = audioTracks.some((track) => track.solo);
 
-    for (const track of this.project.timeline.tracks) {
-      if (track.type !== "audio" && track.type !== "video") continue;
-
+    for (const track of audioTracks) {
       this.realtimeAudioGraph.createTrack({
         trackId: track.id,
         volume: 1.0,
@@ -558,14 +602,14 @@ export class PlaybackController {
     const { timeline, mediaLibrary } = this.project;
 
     for (const track of timeline.tracks) {
-      if (track.type !== "audio" && track.type !== "video") continue;
-
       for (const clip of track.clips) {
         const clipEnd = clip.startTime + clip.duration;
         if (clipEnd <= time || clip.startTime > time + 1) continue;
 
         const mediaItem = mediaLibrary.items.find((m) => m.id === clip.mediaId);
-        if (!mediaItem?.blob) continue;
+        if (!mediaItem?.blob || !getMediaItemCapabilities(mediaItem).audio) {
+          continue;
+        }
 
         const cachedBuffer = this.getOrDecodeAudioBuffer(mediaItem);
         if (!cachedBuffer) continue;
@@ -600,11 +644,13 @@ export class PlaybackController {
     const mediaIdsToPreload = new Set<string>();
 
     for (const track of timeline.tracks) {
-      if (track.type !== "audio" && track.type !== "video") continue;
-
       for (const clip of track.clips) {
         const mediaItem = mediaLibrary.items.find((m) => m.id === clip.mediaId);
-        if (mediaItem?.blob && !this.audioBufferCache.has(mediaItem.id)) {
+        if (
+          mediaItem?.blob &&
+          getMediaItemCapabilities(mediaItem).audio &&
+          !this.audioBufferCache.has(mediaItem.id)
+        ) {
           mediaIdsToPreload.add(mediaItem.id);
         }
       }
@@ -678,6 +724,34 @@ export class PlaybackController {
   private clearAudioBuffer(): void {
     this.stopAudioPlayback();
     this.audioBufferCache.clear();
+    this.audioDecodePromises.clear();
+  }
+
+  private pruneAudioBuffers(project: Project): void {
+    const referenced = new Set<string>();
+    for (const track of project.timeline.tracks) {
+      for (const clip of track.clips) {
+        const mediaItem = project.mediaLibrary.items.find(
+          (candidate) => candidate.id === clip.mediaId,
+        );
+        if (getMediaItemCapabilities(mediaItem).audio) {
+          referenced.add(clip.mediaId);
+        }
+      }
+    }
+
+    for (const mediaId of [...this.audioBufferCache.keys()]) {
+      if (!referenced.has(mediaId)) {
+        this.audioBufferCache.delete(mediaId);
+      }
+    }
+    for (const mediaId of [...this.audioDecodePromises.keys()]) {
+      if (!referenced.has(mediaId)) {
+        this.audioDecodePromises.delete(mediaId);
+      }
+    }
+
+    this.stopAudioPlayback();
   }
 
   private trackFrameRenderTime(time: number): void {

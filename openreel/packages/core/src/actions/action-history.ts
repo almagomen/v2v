@@ -33,24 +33,47 @@ const ACTION_DESCRIPTIONS: Record<
   "clip/split": () => "Split clip",
   "clip/rippleDelete": () => "Ripple delete",
   "clip/duplicate": () => "Duplicate clip",
+  "clip/setBlendMode": () => "Change blend mode",
+  "clip/setBlendOpacity": () => "Adjust blend opacity",
+  "clip/setEmphasisAnimation": () => "Set emphasis animation",
+  "clip/setColorGrading": () => "Color grading",
   "track/add": (params) => `Add ${params.trackType} track`,
+  "track/duplicate": () => "Duplicate track",
   "track/remove": () => "Remove track",
+  "track/rename": () => "Rename track",
   "effect/add": (params) => `Add ${params.effectType} effect`,
   "effect/remove": () => "Remove effect",
   "effect/update": () => "Update effect",
+  "effect/toggle": () => "Toggle effect",
+  "effect/setStack": () => "Replace effect stack",
   "transform/update": () => "Transform clip",
   "keyframe/add": (params) => `Add ${params.property} keyframe`,
   "keyframe/remove": () => "Remove keyframe",
   "transition/add": (params) => `Add ${params.transitionType} transition`,
+  "transition/set": () => "Add transition",
+  "transition/update": () => "Update transition",
   "transition/remove": () => "Remove transition",
   "audio/setVolume": () => "Adjust volume",
   "audio/setFade": () => "Adjust fade",
+  "audio/addEffect": () => "Add audio effect",
+  "audio/removeEffect": () => "Remove audio effect",
+  "audio/updateEffect": () => "Update audio effect",
+  "audio/toggleEffect": () => "Toggle audio effect",
   "subtitle/add": () => "Add subtitle",
   "subtitle/remove": () => "Remove subtitle",
+  "marker/add": () => "Add marker",
+  "marker/remove": () => "Remove marker",
+  "marker/update": () => "Update marker",
   "project/rename": () => "Rename project",
   "project/updateSettings": () => "Update settings",
+  "project/setCanvasBackground": () => "Change canvas background",
+  "project/registerGeneratedShader": () => "Add generated shader",
+  "project/removeGeneratedShader": () => "Remove generated shader",
   "media/import": () => "Import media",
   "media/delete": () => "Delete media",
+  "clip/closeGapBefore": () => "Close gap",
+  "track/consolidate": () => "Remove gaps",
+  "track/restorePositions": () => "Restore positions",
 };
 
 function getActionDescription(action: Action): string {
@@ -62,11 +85,61 @@ function getActionDescription(action: Action): string {
   return `${parts[0]}: ${parts[1] || "action"}`;
 }
 
+// Action types whose rapid repetition (slider drags, etc.) should be
+// coalesced into a single undo step. Anything not in this set — clip/add,
+// clip/remove, track/add, etc. — is always treated as a discrete user
+// action even when fired in quick succession.
+const AUTO_GROUPABLE_TYPES = new Set<string>([
+  "transform/update",
+  "effect/update",
+  "audio/setVolume",
+  "audio/setFade",
+  "audio/updateEffect",
+  "transition/update",
+  "clip/setBlendOpacity",
+  "clip/setColorGrading",
+  "clip/move",
+  "clip/trim",
+  "clip/slip",
+  "clip/slide",
+  "clip/roll",
+  "clip/setSpeed",
+  "clip/setChromaKey",
+  "clip/setStabilization",
+  "keyframe/move",
+  "keyframe/update",
+  "project/updateSettings",
+  "project/setCanvasBackground",
+]);
+
+// Param keys that identify the target entity. Two actions of the same
+// type are only grouped if they refer to the same target.
+const TARGET_PARAM_KEYS = [
+  "clipId",
+  "effectId",
+  "trackId",
+  "keyframeId",
+  "transitionId",
+  "subtitleId",
+];
+
+function getActionTargetId(action: Action): string | null {
+  const params = action.params as Record<string, unknown>;
+  for (const key of TARGET_PARAM_KEYS) {
+    const value = params[key];
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
 export class ActionHistory {
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
   private maxHistorySize: number;
   private currentGroupId: string | null = null;
+  private groupDepth = 0;
   private snapshots: HistorySnapshot[] = [];
   private listeners: Set<() => void> = new Set();
   private lastActionTime: number = 0;
@@ -90,17 +163,32 @@ export class ActionHistory {
     const timeSinceLastAction = now - this.lastActionTime;
     this.lastActionTime = now;
 
-    const shouldAutoGroup =
-      timeSinceLastAction < this.autoGroupWindow &&
-      this.undoStack.length > 0 &&
-      this.undoStack[this.undoStack.length - 1].action.type === action.type;
+    const lastEntry =
+      this.undoStack.length > 0
+        ? this.undoStack[this.undoStack.length - 1]
+        : null;
 
+    // Only auto-group when:
+    // - The action type is one of the "rapid update" types (slider drag,
+    //   trim handle, etc.) — not creation/deletion actions.
+    // - The previous entry has the same type AND targets the same entity
+    //   (same clipId, effectId, etc.), so two distinct operations don't
+    //   collapse just because they happened back-to-back.
     let groupId = this.currentGroupId;
-    if (shouldAutoGroup && !groupId) {
-      groupId = `auto-${now}`;
-      const lastEntry = this.undoStack[this.undoStack.length - 1];
-      if (!lastEntry.groupId) {
-        this.undoStack[this.undoStack.length - 1] = { ...lastEntry, groupId };
+    if (
+      !groupId &&
+      lastEntry &&
+      timeSinceLastAction < this.autoGroupWindow &&
+      lastEntry.action.type === action.type &&
+      AUTO_GROUPABLE_TYPES.has(action.type)
+    ) {
+      const lastTarget = getActionTargetId(lastEntry.action);
+      const currentTarget = getActionTargetId(action);
+      if (lastTarget !== null && lastTarget === currentTarget) {
+        groupId = lastEntry.groupId ?? `auto-${now}`;
+        if (!lastEntry.groupId) {
+          this.undoStack[this.undoStack.length - 1] = { ...lastEntry, groupId };
+        }
       }
     }
 
@@ -130,11 +218,21 @@ export class ActionHistory {
   }
 
   beginGroup(_description?: string): string {
+    if (this.currentGroupId) {
+      this.groupDepth += 1;
+      return this.currentGroupId;
+    }
     this.currentGroupId = `group-${Date.now()}`;
+    this.groupDepth = 1;
     return this.currentGroupId;
   }
 
   endGroup(): void {
+    if (this.groupDepth > 1) {
+      this.groupDepth -= 1;
+      return;
+    }
+    this.groupDepth = 0;
     this.currentGroupId = null;
     this.notify();
   }
@@ -276,6 +374,7 @@ export class ActionHistory {
     this.redoStack = [];
     this.snapshots = [];
     this.currentGroupId = null;
+    this.groupDepth = 0;
     this.notify();
   }
 

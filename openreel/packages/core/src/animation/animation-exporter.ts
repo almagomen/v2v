@@ -23,6 +23,7 @@ import type { Project, MediaItem } from "../types/project";
 import type { Clip, Keyframe, EasingType } from "../types/timeline";
 import type { TextClip } from "../text/types";
 import type { ShapeClip, ShapeType } from "../graphics/types";
+import { getMediaItemCapabilities } from "../timeline/timeline-items";
 
 export interface ExportResult {
   success: boolean;
@@ -377,13 +378,11 @@ export class AnimationExporter {
     const audioTracks: AudioTrackConfig[] = [];
 
     for (const track of project.timeline.tracks) {
-      if (track.type !== "audio") continue;
-
       for (const clip of track.clips) {
         const mediaItem = project.mediaLibrary.items.find(
           (item) => item.id === clip.mediaId,
         );
-        if (!mediaItem || mediaItem.type !== "audio") continue;
+        if (!mediaItem || !getMediaItemCapabilities(mediaItem).audio) continue;
 
         audioTracks.push({
           assetId: clip.mediaId,

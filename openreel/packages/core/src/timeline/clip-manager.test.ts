@@ -633,4 +633,26 @@ describe("ClipManager - Helper Methods", () => {
     const clips = clipManager.getTrackClips(timeline, "non-existent");
     expect(clips.length).toBe(0);
   });
+
+  it("accepts every media kind on every normal track", () => {
+    const trackTypes: Track["type"][] = [
+      "video",
+      "audio",
+      "image",
+      "text",
+      "graphics",
+    ];
+    const mediaTypes = ["video", "audio", "image"] as const;
+
+    for (const trackType of trackTypes) {
+      for (const mediaType of mediaTypes) {
+        expect(
+          clipManager.canTrackAcceptClip(
+            createMockTrack({ type: trackType }),
+            mediaType,
+          ),
+        ).toBe(true);
+      }
+    }
+  });
 });

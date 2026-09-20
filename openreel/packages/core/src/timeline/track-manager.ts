@@ -291,20 +291,8 @@ export function getTrackClips(track: Track): Clip[] {
 }
 
 export function canAcceptMediaType(
-  track: Track,
-  mediaType: "video" | "audio" | "image",
+  _track: Track,
+  _mediaType: "video" | "audio" | "image",
 ): boolean {
-  // Video tracks can accept video and image
-  if (track.type === "video") {
-    return mediaType === "video" || mediaType === "image";
-  }
-  // Audio tracks can only accept audio
-  if (track.type === "audio") {
-    return mediaType === "audio";
-  }
-  // Image tracks can only accept images
-  if (track.type === "image") {
-    return mediaType === "image";
-  }
-  return false;
+  return true;
 }

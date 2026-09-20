@@ -43,3 +43,34 @@ export {
   type CreateCompoundClipOptions,
   type FlattenResult,
 } from "./nested-sequence-engine";
+
+export { calculateProjectDuration } from "./project-duration";
+
+export {
+  UNIVERSAL_TRACKS_CAPABILITY,
+  UNIVERSAL_TRACKS_MIN_READER_VERSION,
+  getTimelineItems,
+  getTrackItems,
+  resolveTimelineItem,
+  getTimelineItemCapabilities,
+  getMediaItemCapabilities,
+  getVisibleTrackRenderOrder,
+  trackHasVisualItems,
+  trackHasAudioItems,
+  isStandardTrack,
+  projectUsesUniversalTracks,
+  withUniversalTracksCapability,
+  type TimelineItemKind,
+  type TimelineItemCapabilities,
+  type ResolvedTimelineItem,
+  type TimelineTrackRenderEntry,
+} from "./timeline-items";
+
+export {
+  isTimelineIntervalClear,
+  resolveTimelinePlacement,
+  timelineIntervalsOverlap,
+  type TimelinePlacementPolicy,
+  type TimelinePlacementRequest,
+  type TimelinePlacementResult,
+} from "./timeline-placement";

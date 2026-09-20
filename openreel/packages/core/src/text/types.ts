@@ -4,7 +4,10 @@ import type {
   EasingType,
   ClipMetadata,
 } from "../types/timeline";
-import type { EmphasisAnimation } from "../graphics/types";
+import type {
+  EmphasisAnimation,
+  MotionShaderParamValue,
+} from "../graphics/types";
 
 export interface TextClip {
   readonly id: string;
@@ -16,11 +19,43 @@ export interface TextClip {
   readonly transform: Transform;
   readonly animation?: TextAnimation;
   readonly keyframes: Keyframe[];
+  /** Ordered visual effects applied after text rasterization. */
+  readonly effects?: import("../types/timeline").Effect[];
   readonly blendMode?: import("../video/types").BlendMode;
   readonly blendOpacity?: number;
   readonly emphasisAnimation?: EmphasisAnimation;
   readonly behindSubject?: boolean;
   readonly metadata?: ClipMetadata;
+  /**
+   * Optional 3D rendering pass. When present, the text is extruded
+   * via THREE.TextGeometry instead of being rasterized to a canvas
+   * texture. Falls back to 2D canvas rendering if the font cannot be
+   * loaded.
+   */
+  readonly text3d?: Text3DSettings;
+}
+
+export interface Text3DSettings {
+  /** Enable 3D extrusion */
+  readonly enabled: boolean;
+  /** Extrusion depth, in world units (relative to font size) */
+  readonly depth: number;
+  /** Bevel thickness (0 disables bevel) */
+  readonly bevelThickness: number;
+  /** Bevel size on each face */
+  readonly bevelSize: number;
+  /** Bevel segments (round corners — higher = smoother) */
+  readonly bevelSegments: number;
+  /** Front-face color (hex). Defaults to TextStyle.color when omitted. */
+  readonly frontColor?: string;
+  /** Side / extruded color (hex). Defaults to a darker shade of frontColor. */
+  readonly sideColor?: string;
+  /** Metalness 0..1 — only meaningful when material is "physical". */
+  readonly metalness?: number;
+  /** Roughness 0..1 — only meaningful when material is "physical". */
+  readonly roughness?: number;
+  /** Material kind. "basic" is unlit, "physical" picks up the scene light. */
+  readonly material?: "basic" | "physical";
 }
 
 export interface TextStyle {
@@ -41,6 +76,13 @@ export interface TextStyle {
   readonly lineHeight: number;
   readonly letterSpacing: number;
   readonly textDecoration?: TextDecoration;
+  readonly shader?: TextShaderStyle;
+}
+
+export interface TextShaderStyle {
+  readonly shaderId: string;
+  readonly params: Record<string, MotionShaderParamValue>;
+  readonly progress?: number;
 }
 
 export type FontWeight =
@@ -90,7 +132,13 @@ export type TextAnimationPreset =
   | "split"
   | "flip"
   | "word-by-word"
-  | "rainbow";
+  | "rainbow"
+  | "rise"
+  | "drop"
+  | "elastic"
+  | "swing"
+  | "zoom-blur"
+  | "cascade";
 
 export interface TextAnimationParams {
   // Fade parameters
@@ -148,6 +196,8 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
   fontWeight: "bold",
   fontStyle: "normal",
   color: "#ffffff",
+  strokeColor: "#111827",
+  strokeWidth: 2,
   textAlign: "center",
   verticalAlign: "middle",
   lineHeight: 1.2,

@@ -21,6 +21,12 @@ import {
   resolveClipVolumeAutomation,
 } from "./clip-audio-resolution";
 import { scheduleVolumeAutomationOnGain } from "./clip-volume-automation";
+import { scheduleClipFadeEnvelope } from "./clip-fade-envelope";
+import { getTrackTransitionAudioFades } from "./transition-audio-fades";
+import {
+  getMediaItemCapabilities,
+  trackHasAudioItems,
+} from "../timeline/timeline-items";
 
 const SEGMENTED_AUDIO_DECODE_THRESHOLD_SECONDS = 120;
 
@@ -120,6 +126,7 @@ export class AudioEngine {
   private config: AudioEngineConfig;
   private trackNodes: Map<string, AudioTrackNodes> = new Map();
   private mediaBuffers: Map<string, AudioBuffer> = new Map();
+  private noAudioMedia: Set<string> = new Set();
   private segmentedAudioDecoders: Map<string, SegmentedAudioDecoder> = new Map();
   private effectsEngine: AudioEffectsEngine | null = null;
 
@@ -203,7 +210,7 @@ export class AudioEngine {
   ): Promise<RenderedAudio> {
     this.ensureInitialized();
 
-    const { timeline, mediaLibrary, settings } = project;
+    const { mediaLibrary, settings } = project;
     const sampleRate = settings.sampleRate || this.config.sampleRate;
     const channels = settings.channels || this.config.channels;
     const safeDuration = Math.max(duration, 0.001);
@@ -214,7 +221,7 @@ export class AudioEngine {
       sampleRate,
     );
     const audioTracks = this.getAudioTracksAtTime(
-      timeline,
+      project,
       startTime,
       duration,
     );
@@ -286,17 +293,21 @@ export class AudioEngine {
   }
 
   private getAudioTracksAtTime(
-    timeline: Timeline,
+    project: Project,
     startTime: number,
     duration: number,
   ): AudioTrackRenderInfo[] {
     const result: AudioTrackRenderInfo[] = [];
     const endTime = startTime + duration;
+    const { timeline, mediaLibrary } = project;
 
     timeline.tracks.forEach((track, index) => {
-      if (track.type !== "audio" && track.type !== "video") return;
-
-      const clips = this.getClipsInRange(track, startTime, endTime);
+      const clips = this.getClipsInRange(track, startTime, endTime).filter(
+        (clip) =>
+          getMediaItemCapabilities(
+            mediaLibrary.items.find((item) => item.id === clip.mediaId),
+          ).audio,
+      );
       if (clips.length === 0) return;
 
       result.push({
@@ -305,7 +316,7 @@ export class AudioEngine {
         muted: track.muted,
         solo: track.solo,
         clips: clips.map((clip) =>
-          this.createClipRenderInfo(clip, startTime, endTime, timeline),
+          this.createClipRenderInfo(clip, startTime, endTime, timeline, track),
         ),
       });
     });
@@ -329,6 +340,7 @@ export class AudioEngine {
     rangeStart: number,
     rangeEnd: number,
     timeline: Timeline,
+    track: Track,
   ): AudioClipRenderInfo {
     const clipStart = Math.max(clip.startTime, rangeStart);
     const clipEnd = Math.min(clip.startTime + clip.duration, rangeEnd);
@@ -338,6 +350,7 @@ export class AudioEngine {
     const pan = getPanFromAudioEffects(
       clipAudioEffects.length > 0 ? clipAudioEffects : clip.effects,
     );
+    const transitionFades = getTrackTransitionAudioFades(track, clip.id);
 
     return {
       clipId: clip.id,
@@ -346,12 +359,13 @@ export class AudioEngine {
       clipOffset: offsetInClip,
       timelineStartTime: clipStart,
       duration: clipEnd - clipStart,
+      clipDuration: clip.duration,
       volume: clip.volume,
       volumeAutomation: resolveClipVolumeAutomation(clip, timeline),
       pan,
       effects: clipAudioEffects,
-      fadeIn: clip.fade?.fadeIn,
-      fadeOut: clip.fade?.fadeOut,
+      fadeIn: Math.max(clip.fade?.fadeIn ?? 0, transitionFades.fadeIn),
+      fadeOut: Math.max(clip.fade?.fadeOut ?? 0, transitionFades.fadeOut),
       speed: (clip as any).speed || 1,
       reversed: (clip as any).reversed || false,
       audioTrackIndex: clip.audioTrackIndex,
@@ -366,6 +380,7 @@ export class AudioEngine {
     const cacheKey = `${mediaItem.id}:${audioTrackIndex}`;
     const cached = this.mediaBuffers.get(cacheKey);
     if (cached) return cached;
+    if (this.noAudioMedia.has(cacheKey)) return null;
 
     if (!mediaItem.blob) {
       console.warn(`No blob available for media item ${mediaItem.id}`);
@@ -382,8 +397,11 @@ export class AudioEngine {
         this.mediaBuffers.set(cacheKey, audioBuffer);
         return audioBuffer;
       }
-    } catch {
-      // mediabunny extraction failed
+    } catch (error) {
+      if (error instanceof Error && error.name === "NoAudioStreamError") {
+        this.noAudioMedia.add(cacheKey);
+        return null;
+      }
     }
 
     if (audioTrackIndex === 0) {
@@ -393,10 +411,12 @@ export class AudioEngine {
         this.mediaBuffers.set(cacheKey, audioBuffer);
         return audioBuffer;
       } catch {
+        this.noAudioMedia.add(cacheKey);
         return null;
       }
     }
 
+    this.noAudioMedia.add(cacheKey);
     return null;
   }
 
@@ -408,12 +428,14 @@ export class AudioEngine {
     if (!mediaItem.blob) return null;
 
     try {
-      const { getFFmpegFallback } = await import("../media/ffmpeg-fallback");
-      const ffmpeg = getFFmpegFallback();
-      const wavBlob = await ffmpeg.extractAudioAsWav(mediaItem.blob, audioTrackIndex);
+      const { extractAudioWav } = await import("../media/extract-audio");
+      const wavBlob = await extractAudioWav(mediaItem.blob, audioTrackIndex);
       const arrayBuffer = await wavBlob.arrayBuffer();
       return await context.decodeAudioData(arrayBuffer);
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.name === "NoAudioStreamError") {
+        throw error;
+      }
       return null;
     }
   }
@@ -700,20 +722,14 @@ export class AudioEngine {
     clipInfo: AudioClipRenderInfo,
     startTime: number,
   ): void {
-    const { fadeIn, fadeOut, duration } = clipInfo;
-
-    gainNode.gain.setValueAtTime(1, startTime);
-
-    if (fadeIn && fadeIn > 0) {
-      gainNode.gain.setValueAtTime(0, startTime);
-      gainNode.gain.linearRampToValueAtTime(1, startTime + fadeIn);
-    }
-
-    if (fadeOut && fadeOut > 0) {
-      const fadeOutStart = startTime + duration - fadeOut;
-      gainNode.gain.setValueAtTime(1, fadeOutStart);
-      gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
-    }
+    scheduleClipFadeEnvelope(gainNode.gain, {
+      startTime,
+      clipOffset: clipInfo.clipOffset,
+      rangeDuration: clipInfo.duration,
+      clipDuration: clipInfo.clipDuration,
+      fadeIn: clipInfo.fadeIn,
+      fadeOut: clipInfo.fadeOut,
+    });
   }
 
   async mixTracks(
@@ -757,9 +773,9 @@ export class AudioEngine {
     return offlineContext.startRendering();
   }
 
-  getChannelStates(timeline: Timeline): AudioChannelState[] {
-    return timeline.tracks
-      .filter((track) => track.type === "audio" || track.type === "video")
+  getChannelStates(project: Project): AudioChannelState[] {
+    return project.timeline.tracks
+      .filter((track) => trackHasAudioItems(project, track.id))
       .map((track) => ({
         trackId: track.id,
         volume: 1, // Default volume, would be stored in track

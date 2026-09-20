@@ -7,6 +7,8 @@ export interface ValidationResult {
 
 export interface ProjectFileWithMetadata {
   version: string;
+  minimumReaderVersion?: string;
+  capabilities?: readonly string[];
   project: any;
   metadata?: {
     exportedAt: number;

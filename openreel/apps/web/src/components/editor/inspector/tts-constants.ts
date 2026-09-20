@@ -1,17 +1,7 @@
-import type { ElevenLabsModel, Voice } from "./tts-types";
-
-export const TTS_PROVIDERS = [
-  { id: "piper" as const, label: "Piper (Free)", description: "Built-in open-source TTS" },
-  { id: "elevenlabs" as const, label: "ElevenLabs", description: "Premium AI voices" },
-];
+import type { ElevenLabsModel } from "./tts-types";
 
 export const FALLBACK_MODELS: ElevenLabsModel[] = [
   { model_id: "eleven_v3", name: "Eleven v3", description: "Latest ElevenLabs model", can_do_text_to_speech: true, languages: [] },
-];
-
-export const PIPER_VOICES: Voice[] = [
-  { id: "amy", name: "Amy", gender: "female", language: "en-US" },
-  { id: "ryan", name: "Ryan", gender: "male", language: "en-US" },
 ];
 
 export const ENHANCE_SYSTEM_PROMPT = `You are a professional voice director transforming text into expressive, emotionally rich scripts for ElevenLabs v3 TTS. Your goal is to turn narration into performance.

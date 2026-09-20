@@ -1,21 +1,16 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import type { TtsProvider } from "../../../../stores/settings-store";
 import { useProjectStore } from "../../../../stores/project-store";
 import { useTtsAudioStore } from "../../../../stores/tts-store";
-import { PIPER_VOICES } from "../tts-constants";
 import type { ElevenLabsVoice } from "../tts-types";
 
 interface UseTtsActionsOptions {
-  provider: TtsProvider;
   selectedVoice: string;
   text: string;
-  speed: number;
   enhanceText: boolean;
   enhancedPreview: string | null;
   allVoices: ElevenLabsVoice[];
   favoriteVoices: Array<{ voiceId: string; name: string; previewUrl?: string }>;
   generateWithElevenLabs: (text: string, voiceId: string, signal?: AbortSignal) => Promise<Blob>;
-  generateWithPiper: (text: string, voice: string, speed: number, signal?: AbortSignal) => Promise<Blob>;
   enhanceViaLlm: (text: string, signal?: AbortSignal) => Promise<string>;
   setText: (text: string) => void;
   setError: (error: string | null) => void;
@@ -43,16 +38,13 @@ interface UseTtsActionsReturn {
 
 export function useTtsActions(options: UseTtsActionsOptions): UseTtsActionsReturn {
   const {
-    provider,
     selectedVoice,
     text,
-    speed,
     enhanceText,
     enhancedPreview,
     allVoices,
     favoriteVoices,
     generateWithElevenLabs,
-    generateWithPiper,
     enhanceViaLlm,
     setText,
     setError,
@@ -120,15 +112,12 @@ export function useTtsActions(options: UseTtsActionsOptions): UseTtsActionsRetur
   }, [storeSetAudio, storeClearAudio]);
 
   const getSelectedVoiceName = useCallback((): string => {
-    if (provider === "piper") {
-      return PIPER_VOICES.find((v) => v.id === selectedVoice)?.name ?? "TTS";
-    }
     const fav = favoriteVoices.find((v) => v.voiceId === selectedVoice);
     if (fav) return fav.name;
     const apiVoice = allVoices.find((v) => v.voice_id === selectedVoice);
     if (apiVoice) return apiVoice.name;
     return "TTS";
-  }, [provider, selectedVoice, favoriteVoices, allVoices]);
+  }, [selectedVoice, favoriteVoices, allVoices]);
 
   const handleEnhance = useCallback(async () => {
     if (!text.trim()) {
@@ -170,9 +159,7 @@ export function useTtsActions(options: UseTtsActionsOptions): UseTtsActionsRetur
     try {
       const finalText = (enhanceText && enhancedPreview) ? enhancedPreview : text.trim();
 
-      const blob = provider === "elevenlabs"
-        ? await generateWithElevenLabs(finalText, selectedVoice, controller.signal)
-        : await generateWithPiper(finalText, selectedVoice, speed, controller.signal);
+      const blob = await generateWithElevenLabs(finalText, selectedVoice, controller.signal);
 
       storeSetAudio(blob);
 
@@ -186,7 +173,7 @@ export function useTtsActions(options: UseTtsActionsOptions): UseTtsActionsRetur
     } finally {
       setIsGenerating(false);
     }
-  }, [text, enhancedPreview, enhanceText, selectedVoice, speed, provider, generateWithPiper, generateWithElevenLabs, setError, storeSetAudio]);
+  }, [text, enhancedPreview, enhanceText, selectedVoice, generateWithElevenLabs, setError, storeSetAudio]);
 
   const togglePlayback = useCallback(() => {
     if (!audioRef.current || !audioUrl) return;

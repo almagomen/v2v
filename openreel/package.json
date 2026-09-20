@@ -1,6 +1,6 @@
 {
   "name": "openreel",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "description": "Professional video, audio, and photo editing in your browser",
   "type": "module",
@@ -14,6 +14,8 @@
     "test": "pnpm -r test:run",
     "test:watch": "pnpm -r test",
     "lint": "pnpm -r lint",
+    "check:mobile-offline": "node scripts/check-mobile-offline.mjs",
+    "check:retired-cloud-gpu": "node scripts/check-retired-cloud-gpu.mjs",
     "typecheck": "pnpm -r typecheck",
     "clean": "pnpm -r clean",
     "claude:help": "cat scripts/claude-review.md",
@@ -48,10 +50,17 @@
     "node": ">=18.0.0",
     "pnpm": ">=8.0.0"
   },
-  "packageManager": "pnpm@9.0.0",
+  "packageManager": "pnpm@11.7.0",
   "dependencies": {
     "@ffmpeg/core": "0.12.6",
     "@ffmpeg/core-mt": "0.12.6",
     "mediabunny": "^1.25.3"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "devDependencies": {
+    "@astryxdesign/cli": "^0.1.1"
   }
 }

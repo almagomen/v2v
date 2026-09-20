@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState } from "react";
 import {
   Mic,
   Loader2,
@@ -6,22 +6,26 @@ import {
   Settings,
   Sparkles,
   AlertTriangle,
-} from "lucide-react";
-import { Slider, Switch } from "@openreel/ui";
-import { toast } from "../../../stores/notification-store";
-import { useSettingsStore, type TtsProvider } from "../../../stores/settings-store";
+} from "@/icons/lucide-compat";
+import { ToolcraftButton as Button } from "@openreel/ui";
+import { ToolcraftCard as Card } from "@openreel/ui";
+import { ToolcraftIconButton as IconButton } from "@openreel/ui";
+import { ToolcraftText as Text } from "@openreel/ui";
+import { ToolcraftTextAreaControl } from "@openreel/ui";
+import { MockToggle } from "./shell/InspectorControls";
+import { useSettingsStore } from "../../../stores/settings-store";
 import { useElevenLabsApi } from "./hooks/useElevenLabsApi";
 import { useTtsActions } from "./hooks/useTtsActions";
 import { VoiceBrowser } from "./VoiceBrowser";
 import { ModelSelector } from "./ModelSelector";
 import { EnhancedTextPreview } from "./EnhancedTextPreview";
 import { AudioResult } from "./AudioResult";
-import { TTS_PROVIDERS } from "./tts-constants";
 
 export const TextToSpeechPanel: React.FC = () => {
   const {
-    defaultTtsProvider,
     defaultLlmProvider,
+    llmBaseUrl,
+    llmModel,
     openSettings,
     settingsOpen,
     configuredServices,
@@ -31,19 +35,10 @@ export const TextToSpeechPanel: React.FC = () => {
 
   const hasElevenLabsKey = configuredServices.includes("elevenlabs");
 
-  const defaultProvider: TtsProvider =
-    defaultTtsProvider === "elevenlabs" && hasElevenLabsKey
-      ? "elevenlabs"
-      : "piper";
-
-  const [provider, setProvider] = useState<TtsProvider>(defaultProvider);
   const [text, setText] = useState("");
   const [selectedVoice, setSelectedVoice] = useState<string>(
-    defaultProvider === "elevenlabs" && favoriteVoices.length > 0
-      ? favoriteVoices[0].voiceId
-      : "amy",
+    favoriteVoices.length > 0 ? favoriteVoices[0].voiceId : "",
   );
-  const [speed, setSpeed] = useState(1.0);
   const [error, setError] = useState<string | null>(null);
   const [enhanceText, setEnhanceText] = useState(false);
   const [enhancedPreview, setEnhancedPreview] = useState<string | null>(null);
@@ -54,14 +49,14 @@ export const TextToSpeechPanel: React.FC = () => {
     isLoadingVoices,
     isLoadingModels,
     generateWithElevenLabs,
-    generateWithPiper,
     enhanceViaLlm,
   } = useElevenLabsApi({
-    provider,
     hasElevenLabsKey,
     settingsOpen,
     elevenLabsModel,
     defaultLlmProvider,
+    llmBaseUrl,
+    llmModel,
   });
 
   const {
@@ -80,18 +75,14 @@ export const TextToSpeechPanel: React.FC = () => {
     saveToMedia,
     addToTimeline,
     downloadAudio,
-    setGeneratedAudio,
   } = useTtsActions({
-    provider,
     selectedVoice,
     text,
-    speed,
     enhanceText,
     enhancedPreview,
     allVoices,
     favoriteVoices,
     generateWithElevenLabs,
-    generateWithPiper,
     enhanceViaLlm,
     setText,
     setError,
@@ -104,24 +95,6 @@ export const TextToSpeechPanel: React.FC = () => {
     return elevenLabsModel;
   };
 
-  const warnUnsavedAudio = useCallback(() => {
-    if (hasUnsavedAudio) {
-      toast.warning("Unsaved audio discarded", "Save to media or download next time to keep it.");
-    }
-  }, [hasUnsavedAudio]);
-
-  const handleProviderSwitch = useCallback((newProvider: TtsProvider) => {
-    if (newProvider === provider) return;
-    warnUnsavedAudio();
-    setProvider(newProvider);
-    setSelectedVoice(
-      newProvider === "elevenlabs"
-        ? (favoriteVoices.length > 0 ? favoriteVoices[0].voiceId : "")
-        : "amy",
-    );
-    setGeneratedAudio(null);
-  }, [provider, warnUnsavedAudio, favoriteVoices, setGeneratedAudio]);
-
   const charCount = text.length;
   const maxChars = 5000;
 
@@ -129,92 +102,80 @@ export const TextToSpeechPanel: React.FC = () => {
     <div className="space-y-3 w-full min-w-0 max-w-full">
       <audio ref={audioRef as React.RefObject<HTMLAudioElement>} onEnded={handleAudioEnded} className="hidden" />
 
-      <div className="flex items-center justify-between p-2 bg-primary/10 rounded-lg border border-primary/30">
+      <Card
+        variant="green"
+        padding={2}
+        className="flex items-center justify-between border border-primary/30"
+      >
         <div className="flex items-center gap-2">
-          <Mic size={16} className="text-primary" />
-          <div>
-            <span className="text-[11px] font-medium text-text-primary">
+          <Mic size={16} className="text-primary" aria-hidden />
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <Text type="body" color="primary" weight="bold" display="block" className="text-[11px]">
               Text to Speech
-            </span>
-            <p className="text-[9px] text-text-muted">AI voice generation</p>
+            </Text>
+            <Text type="supporting" color="secondary" display="block" className="text-[9px]">
+              User-keyed ElevenLabs voice generation
+            </Text>
           </div>
         </div>
-        <button
+        <IconButton
+          label="API Key Settings"
+          icon={<Settings size={14} aria-hidden />}
+          variant="ghost"
+          size="sm"
           onClick={() => openSettings("api-keys")}
-          className="p-1.5 rounded-md hover:bg-background-tertiary text-text-muted hover:text-text-primary transition-colors"
-          title="API Key Settings"
-        >
-          <Settings size={14} />
-        </button>
-      </div>
+          className="text-fg-3 hover:text-fg"
+        />
+      </Card>
 
-      <div className="space-y-2">
-        <label className="text-[10px] font-medium text-text-secondary">
-          Provider
-        </label>
-        <div className="flex gap-1.5">
-          {TTS_PROVIDERS.map((p) => {
-            const isDisabled = p.id === "elevenlabs" && !hasElevenLabsKey;
-            return (
-              <button
-                key={p.id}
-                onClick={() => {
-                  if (isDisabled) {
-                    openSettings("api-keys");
-                    return;
-                  }
-                  handleProviderSwitch(p.id);
-                }}
-                className={`flex-1 px-2 py-1.5 rounded-lg text-[10px] transition-colors ${
-                  provider === p.id
-                    ? "bg-primary text-white font-medium"
-                    : isDisabled
-                      ? "bg-background-tertiary text-text-muted border border-border opacity-60 cursor-default"
-                      : "bg-background-tertiary text-text-secondary hover:text-text-primary border border-border"
-                }`}
-                title={isDisabled ? "Add ElevenLabs API key in Settings" : p.description}
-              >
-                {p.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      {!hasElevenLabsKey && (
+        <Card variant="yellow" padding={2} className="border border-amber-500/30">
+          <Text type="supporting" className="text-[10px] text-amber-400">
+            Add your ElevenLabs API key to enable speech generation. OpenReel no longer hosts a speech server.
+          </Text>
+        </Card>
+      )}
 
-      {provider === "elevenlabs" && hasElevenLabsKey && (
+      {hasElevenLabsKey && (
         <ModelSelector allModels={allModels} isLoadingModels={isLoadingModels} />
       )}
 
       <div className="space-y-2">
-        <label className="text-[10px] font-medium text-text-secondary">
-          Text
-        </label>
-        <textarea
+        <ToolcraftTextAreaControl
+          label="Text"
           value={text}
-          onChange={(e) => { setText(e.target.value); setEnhancedPreview(null); }}
+          onChange={(value) => {
+            setText(value);
+            setEnhancedPreview(null);
+          }}
           placeholder="Enter the text you want to convert to speech..."
-          className="w-full h-24 px-3 py-2 text-[11px] bg-background-tertiary rounded-lg border border-border focus:border-primary focus:outline-none resize-none"
           maxLength={maxChars}
+          rows={4}
+          width="100%"
         />
         <div className="flex items-center justify-between">
-          {provider === "elevenlabs" ? (
-            <div className="flex items-center gap-1.5">
-              <Switch
-                checked={enhanceText}
-                onCheckedChange={setEnhanceText}
-                className="scale-75 origin-left"
-              />
-              <label className="text-[9px] text-text-muted flex items-center gap-1 cursor-pointer" onClick={() => setEnhanceText(!enhanceText)}>
-                <Sparkles size={10} className={enhanceText ? "text-amber-400" : ""} />
-                Enhance for TTS
-              </label>
-            </div>
-          ) : (
-            <div />
-          )}
-          <span className={`text-[9px] ${charCount > maxChars * 0.9 ? "text-red-400" : "text-text-muted"}`}>
+          <div className="flex items-center gap-1.5">
+            <MockToggle
+              ariaLabel="Enhance for TTS"
+              checked={enhanceText}
+              onChange={setEnhanceText}
+            />
+            <Text
+              type="supporting"
+              color="secondary"
+              className="flex items-center gap-1 text-[9px] cursor-pointer"
+              onClick={() => setEnhanceText(!enhanceText)}
+            >
+              <Sparkles size={10} className={enhanceText ? "text-amber-400" : ""} aria-hidden />
+              Enhance for TTS
+            </Text>
+          </div>
+          <Text
+            type="supporting"
+            className={`text-[9px] ${charCount > maxChars * 0.9 ? "text-red-400" : "text-fg-3"}`}
+          >
             {charCount}/{maxChars}
-          </span>
+          </Text>
         </div>
 
         {enhancedPreview && enhanceText && (
@@ -227,81 +188,88 @@ export const TextToSpeechPanel: React.FC = () => {
       </div>
 
       <VoiceBrowser
-        provider={provider}
         selectedVoice={selectedVoice}
         onSelectVoice={setSelectedVoice}
         allVoices={allVoices}
         isLoadingVoices={isLoadingVoices}
       />
 
-      {provider === "piper" && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-[10px] font-medium text-text-secondary">Speed</label>
-            <span className="text-[10px] text-text-muted">{speed.toFixed(1)}x</span>
-          </div>
-          <Slider min={0.5} max={2.0} step={0.1} value={[speed]} onValueChange={(value) => setSpeed(value[0])} />
-          <div className="flex justify-between text-[8px] text-text-muted">
-            <span>0.5x</span>
-            <span>1.0x</span>
-            <span>2.0x</span>
-          </div>
-        </div>
-      )}
-
       {error && (
-        <div className="p-2 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center justify-between gap-2">
-          <p className="text-[10px] text-red-400">{error}</p>
+        <Card
+          variant="red"
+          padding={2}
+          className="flex items-center justify-between gap-2 border border-red-500/30"
+        >
+          <Text type="supporting" className="text-[10px] text-red-400">
+            {error}
+          </Text>
           {(error.includes("API key") || error.includes("Session locked") || error.includes("Unlock")) && (
-            <button
+            <Button
+              label="Open Settings"
+              variant="secondary"
+              size="sm"
               onClick={() => openSettings("api-keys")}
-              className="shrink-0 px-2 py-1 rounded text-[9px] font-medium bg-red-500/20 text-red-300 hover:bg-red-500/30 transition-colors"
-            >
-              Open Settings
-            </button>
+              className="shrink-0 text-[9px]"
+            />
           )}
-        </div>
+        </Card>
       )}
 
       {successMsg && (
-        <div className="p-2 bg-green-500/10 border border-green-500/30 rounded-lg">
-          <p className="text-[10px] text-green-400">{successMsg}</p>
-        </div>
+        <Card variant="green" padding={2} className="border border-green-500/30">
+          <Text type="supporting" className="text-[10px] text-green-400">
+            {successMsg}
+          </Text>
+        </Card>
       )}
 
-      {enhanceText && provider === "elevenlabs" && !enhancedPreview && (
-        <button
+      {enhanceText && !enhancedPreview && (
+        <Button
+          label={isEnhancing ? "Enhancing..." : "Enhance Text"}
+          icon={
+            isEnhancing ? (
+              <Loader2 size={14} className="animate-spin" aria-hidden />
+            ) : (
+              <Sparkles size={14} aria-hidden />
+            )
+          }
+          variant="primary"
+          size="md"
           onClick={handleEnhance}
-          disabled={isEnhancing || !text.trim()}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 text-white rounded-lg text-[11px] font-medium transition-all hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isEnhancing ? (
-            <><Loader2 size={14} className="animate-spin" /> Enhancing...</>
-          ) : (
-            <><Sparkles size={14} /> Enhance Text</>
-          )}
-        </button>
+          isDisabled={isEnhancing || !text.trim()}
+          isLoading={isEnhancing}
+          className="w-full"
+        />
       )}
 
-      <button
+      <Button
+        label={isGenerating ? "Generating..." : "Generate Speech"}
+        icon={
+          isGenerating ? (
+            <Loader2 size={14} className="animate-spin" aria-hidden />
+          ) : (
+            <Volume2 size={14} aria-hidden />
+          )
+        }
+        variant="primary"
+        size="md"
         onClick={generateSpeech}
-        disabled={isGenerating || !text.trim() || (provider === "elevenlabs" && !selectedVoice) || (enhanceText && provider === "elevenlabs" && !enhancedPreview)}
-        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white rounded-lg text-[11px] font-medium transition-all hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {isGenerating ? (
-          <><Loader2 size={14} className="animate-spin" /> Generating...</>
-        ) : (
-          <><Volume2 size={14} /> Generate Speech</>
-        )}
-      </button>
+        isDisabled={isGenerating || !hasElevenLabsKey || !text.trim() || !selectedVoice || (enhanceText && !enhancedPreview)}
+        isLoading={isGenerating}
+        className="w-full"
+      />
 
       {hasUnsavedAudio && (
-        <div className="flex items-center gap-1.5 px-2 py-1.5 bg-amber-500/10 border border-amber-500/30 rounded-lg">
-          <AlertTriangle size={12} className="text-amber-400 shrink-0" />
-          <p className="text-[9px] text-amber-400">
+        <Card
+          variant="yellow"
+          padding={2}
+          className="flex items-center gap-1.5 border border-amber-500/30"
+        >
+          <AlertTriangle size={12} className="text-amber-400 shrink-0" aria-hidden />
+          <Text type="supporting" className="text-[9px] text-amber-400">
             Unsaved audio — save to media, add to timeline, or download to keep it.
-          </p>
-        </div>
+          </Text>
+        </Card>
       )}
 
       {generatedAudio && (
@@ -317,10 +285,9 @@ export const TextToSpeechPanel: React.FC = () => {
         />
       )}
 
-      <p className="text-[9px] text-text-muted text-center">
-        Powered by {provider === "elevenlabs" ? "ElevenLabs" : "Piper TTS"}
-        {provider === "elevenlabs" && ` · ${getSelectedModelName()}`}
-      </p>
+      <Text type="supporting" color="secondary" className="block text-[9px] text-center">
+        Powered by ElevenLabs · {getSelectedModelName()}
+      </Text>
     </div>
   );
 };

@@ -52,13 +52,30 @@ export interface MaskKeyframe {
 export interface Mask {
   id: string;
   clipId: string;
-  type: "shape" | "drawn";
+  type: "shape" | "drawn" | "track-matte";
   path: BezierPath;
   feathering: number;
   inverted: boolean;
   expansion: number;
   opacity: number;
   keyframes: MaskKeyframe[];
+  /**
+   * For "track-matte" masks, the id of the source clip whose
+   * rendered alpha (or bounding box, for layers without alpha) is
+   * used to drive the mask shape. Equivalent to Premiere's Track
+   * Matte Key — the source acts as the matte, this clip is the fill.
+   */
+  sourceClipId?: string;
+  /**
+   * Which channel of the source clip drives the matte:
+   *   - "alpha"     : use the source's alpha channel directly
+   *   - "luminance" : use the source's brightness (white = visible)
+   *   - "bounds"    : use the source's bounding box (no per-pixel
+   *                   sampling required — works for any clip type and
+   *                   animates via the source's keyframes)
+   * Default is "bounds" since it requires no GPU plumbing.
+   */
+  matteSource?: "alpha" | "luminance" | "bounds";
 }
 
 export interface MaskDefinition {
@@ -192,6 +209,42 @@ export function createDefaultPath(): BezierPath {
       { x: 0.75, y: 0.25 },
       { x: 0.75, y: 0.75 },
       { x: 0.25, y: 0.75 },
+    ],
+    closed: true,
+  };
+}
+
+/**
+ * Derive a rectangular BezierPath that fits the bounding box of a
+ * clip with the given normalized transform (position is the clip's
+ * center in 0..1 space, scale is relative to a 1x1 frame).
+ *
+ * Used by the track-matte rendering path: the source clip's bounds
+ * become the mask shape, so the mask animates as the source clip
+ * moves / scales / has its keyframes interpolated.
+ *
+ * Width/Height are the source clip's natural aspect inside the canvas;
+ * we approximate them with the scale factors. For a more accurate
+ * track matte the caller can use the source clip's actual rendered
+ * extent.
+ */
+export function boundsPathFromTransform(transform: {
+  position: { x: number; y: number };
+  scale: { x: number; y: number };
+}): BezierPath {
+  // The clip occupies a normalized 0..1 box. A scale of 1,1 means it
+  // covers the full frame; smaller scales make the box smaller.
+  // Position is the box's center.
+  const halfW = 0.5 * Math.max(0.01, Math.abs(transform.scale.x));
+  const halfH = 0.5 * Math.max(0.01, Math.abs(transform.scale.y));
+  const cx = transform.position.x;
+  const cy = transform.position.y;
+  return {
+    points: [
+      { x: cx - halfW, y: cy - halfH },
+      { x: cx + halfW, y: cy - halfH },
+      { x: cx + halfW, y: cy + halfH },
+      { x: cx - halfW, y: cy + halfH },
     ],
     closed: true,
   };
@@ -351,6 +404,21 @@ export class MaskEngine {
     this.maskCtx = this.maskCanvas.getContext("2d")!;
   }
 
+  // Match the working canvases to the incoming frame so the source is masked at
+  // its native resolution/aspect (the drawImage(...,this.width,this.height)
+  // calls become 1:1) instead of being stretched to the fixed engine size. The
+  // normalized 0..1 mask path then scales to the frame and stays aligned.
+  private resizeTo(width: number, height: number): void {
+    if (width <= 0 || height <= 0) return;
+    if (this.width === width && this.height === height) return;
+    this.width = width;
+    this.height = height;
+    this.canvas.width = width;
+    this.canvas.height = height;
+    this.maskCanvas.width = width;
+    this.maskCanvas.height = height;
+  }
+
   createShapeMask(clipId: string, shape: MaskShape): Mask {
     const path = shapeToPath(shape);
     const mask: Mask = {
@@ -386,12 +454,104 @@ export class MaskEngine {
     return mask;
   }
 
+  /**
+   * Create a track-matte mask that derives its shape from another
+   * clip on the timeline (Premiere "Track Matte Key" equivalent).
+   * The mask path starts as a full-frame rectangle; the renderer is
+   * responsible for replacing it at compositing time with the
+   * source clip's actual alpha / luminance / bounds (per matteSource).
+   */
+  createTrackMatteMask(
+    clipId: string,
+    sourceClipId: string,
+    matteSource: "alpha" | "luminance" | "bounds" = "bounds",
+  ): Mask {
+    const mask: Mask = {
+      id: generateId(),
+      clipId,
+      type: "track-matte",
+      path: createDefaultPath(),
+      feathering: 0,
+      inverted: false,
+      expansion: 0,
+      opacity: 1,
+      keyframes: [],
+      sourceClipId,
+      matteSource,
+    };
+
+    this.masks.set(mask.id, mask);
+    return mask;
+  }
+
+  duplicateMask(maskId: string, clipId?: string): Mask | null {
+    const source = this.masks.get(maskId);
+    if (!source) return null;
+
+    const copyPoint = (point: BezierPoint): BezierPoint => ({
+      x: point.x,
+      y: point.y,
+      ...(point.handleIn
+        ? { handleIn: { x: point.handleIn.x, y: point.handleIn.y } }
+        : {}),
+      ...(point.handleOut
+        ? { handleOut: { x: point.handleOut.x, y: point.handleOut.y } }
+        : {}),
+    });
+    const duplicate: Mask = {
+      ...source,
+      id: generateId(),
+      clipId: clipId ?? source.clipId,
+      path: {
+        closed: source.path.closed,
+        points: source.path.points.map(copyPoint),
+      },
+      keyframes: source.keyframes.map((keyframe) => ({
+        ...keyframe,
+        id: generateId(),
+        path: {
+          closed: keyframe.path.closed,
+          points: keyframe.path.points.map(copyPoint),
+        },
+      })),
+    };
+    this.masks.set(duplicate.id, duplicate);
+    return duplicate;
+  }
+
+  /** Update the source clip a track-matte mask is bound to. */
+  setMatteSource(
+    maskId: string,
+    sourceClipId: string,
+    matteSource?: "alpha" | "luminance" | "bounds",
+  ): void {
+    const mask = this.masks.get(maskId);
+    if (mask) {
+      this.masks.set(maskId, {
+        ...mask,
+        sourceClipId,
+        matteSource: matteSource ?? mask.matteSource,
+      });
+    }
+  }
+
   getMask(maskId: string): Mask | undefined {
     return this.masks.get(maskId);
   }
 
   getMasksForClip(clipId: string): Mask[] {
     return Array.from(this.masks.values()).filter((m) => m.clipId === clipId);
+  }
+
+  getAllMasks(): Mask[] {
+    return Array.from(this.masks.values());
+  }
+
+  loadMasks(masks: Mask[]): void {
+    this.masks.clear();
+    for (const mask of masks) {
+      this.masks.set(mask.id, mask);
+    }
   }
 
   updateMaskPath(maskId: string, path: BezierPath): void {
@@ -424,6 +584,16 @@ export class MaskEngine {
       this.masks.set(maskId, {
         ...mask,
         expansion: Math.max(-100, Math.min(100, pixels)),
+      });
+    }
+  }
+
+  setOpacity(maskId: string, opacity: number): void {
+    const mask = this.masks.get(maskId);
+    if (mask) {
+      this.masks.set(maskId, {
+        ...mask,
+        opacity: Math.max(0, Math.min(1, opacity)),
       });
     }
   }
@@ -524,6 +694,7 @@ export class MaskEngine {
     time?: number,
   ): Promise<MaskResult> {
     const startTime = performance.now();
+    this.resizeTo(image.width, image.height);
     const path =
       time !== undefined
         ? this.getMaskAtTime(mask.id, time) || mask.path
@@ -566,6 +737,7 @@ export class MaskEngine {
     mask: MaskDefinition,
   ): Promise<MaskResult> {
     const startTime = performance.now();
+    this.resizeTo(image.width, image.height);
     this.ctx.clearRect(0, 0, this.width, this.height);
     this.maskCtx.clearRect(0, 0, this.width, this.height);
     this.generateMaskShape(mask);
@@ -582,9 +754,12 @@ export class MaskEngine {
     this.ctx.drawImage(this.maskCanvas, 0, 0);
     this.ctx.globalCompositeOperation = "source-over";
     if (mask.opacity < 1) {
-      this.ctx.globalAlpha = mask.opacity;
-      this.ctx.drawImage(this.canvas, 0, 0);
-      this.ctx.globalAlpha = 1;
+      const tempCanvas = new OffscreenCanvas(this.width, this.height);
+      const tempCtx = tempCanvas.getContext("2d")!;
+      tempCtx.globalAlpha = mask.opacity;
+      tempCtx.drawImage(this.canvas, 0, 0);
+      this.ctx.clearRect(0, 0, this.width, this.height);
+      this.ctx.drawImage(tempCanvas, 0, 0);
     }
 
     const result = await createImageBitmap(this.canvas);
@@ -599,11 +774,12 @@ export class MaskEngine {
   private generateMaskFromPath(path: BezierPath, inverted: boolean): void {
     const ctx = this.maskCtx;
 
-    // Fill with white for inverted masks, black otherwise
+    ctx.globalCompositeOperation = "source-over";
     if (inverted) {
       ctx.fillStyle = "white";
       ctx.fillRect(0, 0, this.width, this.height);
-      ctx.fillStyle = "black";
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.fillStyle = "white";
     } else {
       ctx.fillStyle = "white";
     }
@@ -612,6 +788,7 @@ export class MaskEngine {
     this.drawBezierPath(ctx, path);
     ctx.closePath();
     ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
   }
 
   private drawBezierPath(
@@ -652,11 +829,12 @@ export class MaskEngine {
   private generateMaskShape(mask: MaskDefinition): void {
     const ctx = this.maskCtx;
 
-    // Fill with white for inverted masks, black otherwise
+    ctx.globalCompositeOperation = "source-over";
     if (mask.inverted) {
       ctx.fillStyle = "white";
       ctx.fillRect(0, 0, this.width, this.height);
-      ctx.fillStyle = "black";
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.fillStyle = "white";
     } else {
       ctx.fillStyle = "white";
     }
@@ -680,6 +858,7 @@ export class MaskEngine {
 
     ctx.closePath();
     ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
   }
 
   private drawRectangleMask(

@@ -1,16 +1,19 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Eye, EyeOff, Volume2, Lock, Trash2, ChevronDown, ChevronRight, Pencil } from "lucide-react";
+import { Eye, EyeOff, Volume2, VolumeX, Lock, Trash2, Pencil, AlignLeft, Link2, Unlink } from "@/icons/lucide-compat";
+import {
+  ToolcraftContextMenu as ContextMenu,
+  type ToolcraftContextMenuOption as ContextMenuOption,
+} from "@openreel/ui";
+import { ToolcraftTextInputControl } from "@openreel/ui";
 import type { Track } from "@openreel/core";
+import {
+  getTrackItems,
+  trackHasAudioItems,
+  trackHasVisualItems,
+} from "@openreel/core";
 import { useProjectStore } from "../../../stores/project-store";
 import { useTimelineStore } from "../../../stores/timeline-store";
 import { getTrackInfo } from "./utils";
-import {
-  ContextMenu,
-  ContextMenuTrigger,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-} from "@openreel/ui";
 
 interface TrackHeaderProps {
   track: Track;
@@ -18,6 +21,7 @@ interface TrackHeaderProps {
   onDragStart: (e: React.DragEvent, trackId: string) => void;
   onDragOver: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent, targetTrackId: string) => void;
+  onDragEnd: () => void;
   keyframeCount?: number;
 }
 
@@ -27,27 +31,59 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
   onDragStart,
   onDragOver,
   onDrop,
-  keyframeCount = 0,
+  onDragEnd,
 }) => {
-  const { lockTrack, hideTrack, muteTrack, removeTrack, renameTrack } = useProjectStore();
-  const { isTrackExpanded, toggleTrackExpanded, getTrackHeight } = useTimelineStore();
-  const isExpanded = isTrackExpanded(track.id);
+  const {
+    lockTrack,
+    hideTrack,
+    muteTrack,
+    soloTrack,
+    removeTrack,
+    renameTrack,
+    consolidateTrack,
+    groupTracks,
+    project,
+  } = useProjectStore();
+  const { getTrackHeight } = useTimelineStore();
 
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(track.name);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const trackInfo = getTrackInfo(track, index);
-  const TrackIcon = trackInfo.icon;
-  const isVisual =
-    track.type === "video" ||
-    track.type === "image" ||
-    track.type === "text" ||
-    track.type === "graphics";
+  const isVisual = trackHasVisualItems(project, track.id);
+  const isAudio = trackHasAudioItems(project, track.id);
+  const hasSoloedAudioTrack = project.timeline.tracks.some(
+    (candidate) =>
+      trackHasAudioItems(project, candidate.id) && candidate.solo,
+  );
+  const effectivelyMuted =
+    isAudio && (track.muted || (hasSoloedAudioTrack && !track.solo));
+  const groupCandidates = project.timeline.tracks.filter(
+    (candidate) =>
+      candidate.id !== track.id &&
+      candidate.groupId !== track.groupId,
+  );
 
   const handleRemoveTrack = async () => {
     await removeTrack(track.id);
   };
+
+  const handleRemoveGaps = async () => {
+    await consolidateTrack(track.id);
+  };
+
+  // Only enable "Remove Gaps" if there's actually a gap on this track.
+  const hasGaps = React.useMemo(() => {
+    const sorted = getTrackItems(project, track.id);
+    if (sorted.length === 0) return false;
+    if (sorted[0].startTime > 0.0001) return true;
+    for (let i = 1; i < sorted.length; i++) {
+      const prevEnd = sorted[i - 1].startTime + sorted[i - 1].duration;
+      if (sorted[i].startTime - prevEnd > 0.0001) return true;
+    }
+    return false;
+  }, [project, track.id]);
 
   const startRename = () => {
     setRenameValue(track.name);
@@ -71,39 +107,73 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
     }
   }, [isRenaming]);
 
+  const menuItems: ContextMenuOption[] = [
+    {
+      label: "Rename Track",
+      icon: <Pencil size={14} aria-hidden />,
+      onClick: startRename,
+    },
+    {
+      label: "Remove Gaps",
+      icon: <AlignLeft size={14} aria-hidden />,
+      isDisabled: !hasGaps,
+      onClick: handleRemoveGaps,
+    },
+    ...(track.groupId
+      ? [
+          {
+            label: "Ungroup Track",
+            icon: <Unlink size={14} aria-hidden />,
+            onClick: () => groupTracks(track.id),
+          } satisfies ContextMenuOption,
+        ]
+      : []),
+    ...(groupCandidates.length > 0
+      ? [
+          {
+            type: "section" as const,
+            title: "Move & trim together",
+            items: groupCandidates.map((candidate) => ({
+              label: `Group with ${candidate.name}`,
+              icon: <Link2 size={14} aria-hidden />,
+              onClick: () => groupTracks(track.id, candidate.id),
+            })),
+          } satisfies ContextMenuOption,
+        ]
+      : []),
+    { type: "divider" },
+    {
+      label: "Delete Track",
+      icon: <Trash2 size={14} aria-hidden />,
+      onClick: handleRemoveTrack,
+    },
+  ];
+
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          draggable={!isRenaming}
-          onDragStart={(e) => onDragStart(e, track.id)}
-          onDragOver={onDragOver}
-          onDrop={(e) => onDrop(e, track.id)}
-          style={{ height: getTrackHeight(track.id) }}
-          className={`border-b border-border flex flex-col justify-between py-2 px-3 relative group transition-colors cursor-grab active:cursor-grabbing ${
-            track.hidden ? "opacity-50" : ""
-          } ${
-            track.locked ? "bg-background-secondary/50" : "bg-background-tertiary"
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {keyframeCount > 0 && (
-              <button
-                onClick={(e) => { e.stopPropagation(); toggleTrackExpanded(track.id); }}
-                className="p-0.5 rounded transition-colors hover:bg-background-elevated text-text-muted"
-                title={isExpanded ? "Collapse keyframes" : "Expand keyframes"}
-              >
-                {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-              </button>
-            )}
-            <div className={`w-5 h-5 rounded flex items-center justify-center shrink-0 ${trackInfo.bgLight}`}>
-              <TrackIcon size={12} className={trackInfo.textColor} />
-            </div>
+    <ContextMenu items={menuItems} menuWidth={180} size="sm">
+      <div
+        draggable={!isRenaming}
+        onDragStart={(e) => onDragStart(e, track.id)}
+        onDragOver={onDragOver}
+        onDrop={(e) => onDrop(e, track.id)}
+        onDragEnd={onDragEnd}
+        style={{ height: getTrackHeight(track.id, track.type) }}
+        className={`border-b border-border flex items-center gap-2.5 px-4 relative group transition-colors cursor-grab active:cursor-grabbing ${
+          track.hidden || effectivelyMuted ? "opacity-60" : ""
+        } ${
+          track.locked ? "bg-bg-2/50" : "bg-bg-1"
+        }`}
+      >
+          <div className="min-w-0 flex-1">
             {isRenaming ? (
-              <input
+              <ToolcraftTextInputControl
                 ref={inputRef}
+                label="Track name"
+                isLabelHidden
+                size="sm"
+                width="100%"
                 value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
+                onChange={setRenameValue}
                 onBlur={commitRename}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") commitRename();
@@ -111,89 +181,97 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                   e.stopPropagation();
                 }}
                 onClick={(e) => e.stopPropagation()}
-                className="text-[11px] font-semibold bg-background-elevated border border-primary/50 rounded px-1 w-[70px] outline-none text-text-primary"
               />
             ) : (
               <span
-                className={`text-[11px] font-semibold truncate max-w-[70px] ${trackInfo.textColor}`}
+                className="block truncate text-[13px] font-semibold text-fg-2 cursor-grab active:cursor-grabbing"
                 onDoubleClick={startRename}
               >
                 {track.name || trackInfo.label}
               </span>
             )}
-            {keyframeCount > 0 && (
-              <span className="text-[8px] text-text-muted bg-background-elevated px-1 py-0.5 rounded">
-                {keyframeCount}
-              </span>
-            )}
           </div>
 
-          <div className="flex items-center gap-1 text-text-secondary">
+          <div className="flex items-center gap-2.5 shrink-0">
+            {track.groupId && (
+              <Link2
+                size={13}
+                className="text-accent"
+                aria-label="Track is grouped"
+              />
+            )}
             {isVisual && (
               <button
-                onClick={(e) => { e.stopPropagation(); hideTrack(track.id, !track.hidden); }}
-                className={`p-1 rounded transition-colors ${
-                  track.hidden
-                    ? "text-yellow-500 bg-yellow-500/10"
-                    : "text-text-muted hover:bg-background-elevated hover:text-text-primary"
-                }`}
-                title={track.hidden ? "Show track" : "Hide track"}
+                type="button"
+                aria-label={track.hidden ? "Show track" : "Hide track"}
+                className="text-fg-muted hover:text-fg-2 transition-colors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  hideTrack(track.id, !track.hidden);
+                }}
               >
-                {track.hidden ? <EyeOff size={12} /> : <Eye size={12} />}
+                {track.hidden ? (
+                  <EyeOff size={15} strokeWidth={1.7} aria-hidden />
+                ) : (
+                  <Eye size={15} strokeWidth={1.7} aria-hidden />
+                )}
               </button>
             )}
-            {track.type !== "image" && track.type !== "text" && track.type !== "graphics" && (
-              <button
-                onClick={(e) => { e.stopPropagation(); muteTrack(track.id, !track.muted); }}
-                className={`p-1 rounded transition-colors ${
-                  track.muted
-                    ? "text-red-500 bg-red-500/10"
-                    : "text-text-muted hover:bg-background-elevated hover:text-text-primary"
-                }`}
-                title={track.muted ? "Unmute" : "Mute"}
-              >
-                <Volume2 size={12} />
-              </button>
+            {isAudio && (
+              <>
+                <button
+                  type="button"
+                  aria-label={track.muted ? `Unmute ${track.name}` : `Mute ${track.name}`}
+                  aria-pressed={track.muted}
+                  title={track.muted ? "Unmute track" : "Mute track"}
+                  className={`transition-colors ${
+                    track.muted ? "text-destructive" : "text-fg-muted hover:text-fg-2"
+                  }`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    muteTrack(track.id, !track.muted);
+                  }}
+                >
+                  {track.muted ? (
+                    <VolumeX size={15} strokeWidth={1.7} aria-hidden />
+                  ) : (
+                    <Volume2 size={15} strokeWidth={1.7} aria-hidden />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  aria-label={track.solo ? `Clear solo ${track.name}` : `Solo ${track.name}`}
+                  aria-pressed={track.solo}
+                  title={track.solo ? "Clear solo" : "Solo track"}
+                  className={`flex h-[18px] min-w-[18px] items-center justify-center rounded px-1 text-[9px] font-black transition-colors ${
+                    track.solo
+                      ? "bg-status-warning text-black"
+                      : "text-fg-muted hover:bg-hover hover:text-fg-2"
+                  }`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    soloTrack(track.id, !track.solo);
+                  }}
+                >
+                  S
+                </button>
+              </>
             )}
             <button
-              onClick={(e) => { e.stopPropagation(); lockTrack(track.id, !track.locked); }}
-              className={`p-1 rounded transition-colors ${
-                track.locked
-                  ? "text-yellow-500 bg-yellow-500/10"
-                  : "text-text-muted hover:bg-background-elevated hover:text-text-primary"
+              type="button"
+              aria-label={track.locked ? "Unlock" : "Lock"}
+              className={`transition-colors ${
+                track.locked ? "text-fg-2" : "text-fg-muted hover:text-fg-2"
               }`}
-              title={track.locked ? "Unlock" : "Lock"}
+              onClick={(e) => {
+                e.stopPropagation();
+                lockTrack(track.id, !track.locked);
+              }}
             >
-              <Lock size={12} />
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); handleRemoveTrack(); }}
-              className="p-1 rounded transition-colors hover:bg-red-500/20 text-red-400/50 hover:text-red-400"
-              title="Delete track"
-            >
-              <Trash2 size={12} />
+              <Lock size={13} strokeWidth={1.8} aria-hidden />
             </button>
           </div>
-
-          <div
-            className={`absolute left-0 top-0 w-1 h-full ${trackInfo.color} opacity-60 group-hover:opacity-100 transition-opacity`}
-          />
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="min-w-[160px]">
-        <ContextMenuItem onClick={startRename}>
-          <Pencil className="mr-2 h-4 w-4" />
-          Rename Track
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          onClick={handleRemoveTrack}
-          className="text-red-400 focus:text-red-400 hover:text-red-400"
-        >
-          <Trash2 className="mr-2 h-4 w-4" />
-          Delete Track
-        </ContextMenuItem>
-      </ContextMenuContent>
+      </div>
     </ContextMenu>
   );
 };

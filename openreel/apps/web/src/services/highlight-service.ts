@@ -1,7 +1,6 @@
 import {
   analyzeAudioForHighlights,
   type TranscriptWord,
-  type AudioSegmentMetrics,
 } from "@openreel/core";
 
 export interface HighlightResult {
@@ -28,8 +27,6 @@ const DEFAULT_PREFERENCES: HighlightPreferences = {
 
 type ProgressCallback = (phase: string, progress: number, message: string) => void;
 
-const API_BASE = import.meta.env.VITE_CLOUD_API_URL || "https://openreel-cloud.niiyeboah1996.workers.dev";
-
 export async function extractHighlights(
   audioBuffer: AudioBuffer,
   transcript: TranscriptWord[],
@@ -41,41 +38,55 @@ export async function extractHighlights(
   onProgress?.("analyze", 10, "Analyzing audio energy...");
   const analysis = analyzeAudioForHighlights(audioBuffer, transcript);
 
-  onProgress?.("analyze", 30, "Preparing data for AI...");
-  const energyData = analysis.segments
-    .filter((seg) => !seg.isSilence)
-    .map((seg: AudioSegmentMetrics) => ({
-      start: seg.start,
-      end: seg.end,
-      rmsDb: seg.rmsDb,
-      peakDb: seg.peakDb,
-    }));
+  onProgress?.("rank", 35, "Ranking energetic moments locally...");
+  const usable = analysis.segments.filter((segment) => !segment.isSilence);
+  if (usable.length === 0) return [];
 
-  onProgress?.("ai", 40, "Sending to AI for highlight detection...");
+  const windowDuration = Math.min(
+    prefs.maxClipDuration,
+    Math.max(prefs.minClipDuration, 15),
+  );
+  const maxRms = Math.max(...usable.map((segment) => segment.rmsDb));
+  const minRms = Math.min(...usable.map((segment) => segment.rmsDb));
+  const rmsRange = Math.max(maxRms - minRms, 1);
 
-  const response = await fetch(`${API_BASE}/highlights`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      transcript: transcript.map((w) => ({
-        text: w.text,
-        start: w.start,
-        end: w.end,
-      })),
-      energy: energyData,
-      duration: analysis.duration,
-      preferences: prefs,
-    }),
+  const candidates = usable.map((anchor) => {
+    const start = Math.min(
+      Math.max(0, anchor.start - windowDuration / 3),
+      Math.max(0, analysis.duration - windowDuration),
+    );
+    const end = Math.min(analysis.duration, start + windowDuration);
+    const windowSegments = usable.filter(
+      (segment) => segment.end > start && segment.start < end,
+    );
+    const energy =
+      windowSegments.reduce(
+        (total, segment) => total + (segment.rmsDb - minRms) / rmsRange,
+        0,
+      ) / Math.max(windowSegments.length, 1);
+    const speech =
+      windowSegments.reduce((total, segment) => total + segment.speechRate, 0) /
+      Math.max(windowSegments.length, 1);
+    const score = Math.min(10, Math.max(1, 1 + energy * 7 + Math.min(speech, 2) * 1));
+    return { start, end, score };
   });
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error((errorData as { error?: string }).error || `API error: ${response.status}`);
+  const selected: HighlightResult[] = [];
+  for (const candidate of candidates.sort((a, b) => b.score - a.score)) {
+    const overlaps = selected.some(
+      (item) => candidate.start < item.end && candidate.end > item.start,
+    );
+    if (overlaps) continue;
+    selected.push({
+      ...candidate,
+      title: `Highlight ${selected.length + 1}`,
+      reason: transcript.length > 0
+        ? "Strong local audio energy and speech activity"
+        : "Strong local audio energy",
+    });
+    if (selected.length >= prefs.targetClipCount) break;
   }
 
-  onProgress?.("ai", 80, "Processing AI response...");
-  const data = (await response.json()) as { highlights: HighlightResult[] };
-
-  onProgress?.("done", 100, "Highlights ready");
-  return data.highlights;
+  onProgress?.("done", 100, "Local highlights ready");
+  return selected.sort((a, b) => a.start - b.start);
 }

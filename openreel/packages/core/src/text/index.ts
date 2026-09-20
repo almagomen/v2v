@@ -3,7 +3,6 @@ export * from "./title-engine";
 export * from "./text-animation";
 export * from "./subtitle-engine";
 export * from "./speech-to-text-engine";
-export * from "./transcription-service";
 export * from "./caption-animation-renderer";
 export * from "./text-animation-presets";
 export * from "./character-animator";

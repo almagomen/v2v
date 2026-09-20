@@ -1,5 +1,6 @@
 import {
   textAnimationEngine,
+  titleEngine,
   type TextClip,
   type ShapeClip,
   type SVGClip,
@@ -11,6 +12,10 @@ import {
   AnimationEngine,
   type Keyframe,
   type EmphasisAnimation,
+  isNeutralColorGrading,
+  type TransitionEdge,
+  resolveCanvasFitDimensions,
+  type Clip,
 } from "@openreel/core";
 import * as THREE from "three";
 
@@ -537,30 +542,6 @@ export const getAnimatedTransform = (
   return result;
 };
 
-const fontLoadingPromises = new Map<string, Promise<void>>();
-
-const ensureFontLoaded = async (
-  fontFamily: string,
-  fontSize: number,
-): Promise<void> => {
-  const fontKey = `${fontSize}px "${fontFamily}"`;
-
-  if (!fontLoadingPromises.has(fontKey)) {
-    const loadPromise = document.fonts.load(fontKey).then(() => {});
-    fontLoadingPromises.set(fontKey, loadPromise);
-    setTimeout(() => fontLoadingPromises.delete(fontKey), 30000);
-  }
-
-  try {
-    await Promise.race([
-      fontLoadingPromises.get(fontKey),
-      new Promise((resolve) => setTimeout(resolve, 100)),
-    ]);
-  } catch {
-    // Font load failed, continue with fallback
-  }
-};
-
 export const renderTextClipToCanvas = (
   ctx: CanvasRenderingContext2D,
   textClip: TextClip,
@@ -573,8 +554,8 @@ export const renderTextClipToCanvas = (
     textClip,
     clipLocalTime,
   );
-  let { opacity, transform, style, visibleText, characterStates } =
-    animatedState;
+  let { opacity, transform } = animatedState;
+  const { style, visibleText } = animatedState;
 
   if (opacity <= 0 || visibleText.length === 0) {
     return;
@@ -603,14 +584,17 @@ export const renderTextClipToCanvas = (
     };
   }
 
-  // 3D transforms or blend modes require THREE.js rendering since Canvas 2D can't support them
-  // This ensures proper perspective and blending that Canvas 2D doesn't natively support
+  // 3D transforms, 3D extrusion, or blend modes require THREE.js
+  // rendering since Canvas 2D can't support them. This ensures proper
+  // perspective, depth, and blending that Canvas 2D doesn't natively
+  // support.
   const has3DTransforms =
     transform.rotate3d &&
     (transform.rotate3d.x !== 0 || transform.rotate3d.y !== 0);
   const hasBlendMode = textClip.blendMode && textClip.blendMode !== "normal";
+  const has3DText = textClip.text3d?.enabled === true;
 
-  if (has3DTransforms || hasBlendMode) {
+  if (has3DTransforms || hasBlendMode || has3DText) {
     // Lazy-initialize THREE.js renderer (reused for all 3D text rendering)
     if (!threeJSRenderer) {
       threeJSRenderer = new ThreeJSLayerRenderer(canvasWidth, canvasHeight);
@@ -648,118 +632,17 @@ export const renderTextClipToCanvas = (
     return;
   }
 
-  ensureFontLoaded(style.fontFamily, style.fontSize);
-
-  ctx.save();
-
-  const posX = transform.position.x * canvasWidth;
-  const posY = transform.position.y * canvasHeight;
-
-  ctx.translate(posX, posY);
-  ctx.rotate((transform.rotation * Math.PI) / 180);
-  ctx.scale(transform.scale.x, transform.scale.y);
-  ctx.globalAlpha = opacity;
-
-  const fontWeight =
-    typeof style.fontWeight === "number"
-      ? style.fontWeight
-      : style.fontWeight === "bold"
-        ? 700
-        : 400;
-  ctx.font = `${style.fontStyle} ${fontWeight} ${style.fontSize}px "${style.fontFamily}"`;
-  ctx.textAlign = style.textAlign as CanvasTextAlign;
-  ctx.textBaseline = "middle";
-
-  if (style.shadowColor && style.shadowBlur) {
-    ctx.shadowColor = style.shadowColor;
-    ctx.shadowBlur = style.shadowBlur;
-    ctx.shadowOffsetX = style.shadowOffsetX || 0;
-    ctx.shadowOffsetY = style.shadowOffsetY || 0;
-  }
-
-  const lines = visibleText.split("\n");
-  const lineHeight = style.fontSize * style.lineHeight;
-  const totalHeight = lines.length * lineHeight;
-  let startY = -totalHeight / 2 + lineHeight / 2;
-
-  if (style.verticalAlign === "top") {
-    startY = 0;
-  } else if (style.verticalAlign === "bottom") {
-    startY = -totalHeight;
-  }
-
-  if (characterStates && characterStates.length > 0) {
-    // Render text with per-character animations (rotation, scale, opacity, offset)
-    // Each character is transformed around its center before drawing
-    let charIdx = 0;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const y = startY + i * lineHeight;
-      let xOffset = 0;
-
-      const lineWidth = ctx.measureText(line).width;
-      const startX =
-        style.textAlign === "center"
-          ? -lineWidth / 2
-          : style.textAlign === "right"
-            ? -lineWidth
-            : 0;
-
-      for (const char of line) {
-        if (charIdx < characterStates.length) {
-          const charState = characterStates[charIdx];
-          const charWidth = ctx.measureText(char).width;
-
-          ctx.save();
-          ctx.globalAlpha = opacity * charState.opacity;
-          // Translate to character center, apply transforms, then draw at origin
-          ctx.translate(
-            startX + xOffset + charState.offsetX + charWidth / 2,
-            y + charState.offsetY,
-          );
-          ctx.rotate((charState.rotation * Math.PI) / 180);
-          ctx.scale(charState.scale, charState.scale);
-
-          if (style.strokeColor && style.strokeWidth) {
-            ctx.strokeStyle = style.strokeColor;
-            ctx.lineWidth = style.strokeWidth;
-            ctx.strokeText(char, 0, 0);
-          }
-          ctx.fillStyle = style.color;
-          ctx.fillText(char, 0, 0);
-          ctx.restore();
-
-          xOffset += charWidth;
-        }
-        charIdx++;
-      }
-      charIdx++;
-    }
-  } else {
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const y = startY + i * lineHeight;
-
-      if (style.backgroundColor) {
-        const metrics = ctx.measureText(line);
-        const bgWidth = metrics.width + 20;
-        const bgHeight = lineHeight;
-        ctx.fillStyle = style.backgroundColor;
-        ctx.fillRect(-bgWidth / 2, y - bgHeight / 2, bgWidth, bgHeight);
-      }
-
-      if (style.strokeColor && style.strokeWidth) {
-        ctx.strokeStyle = style.strokeColor;
-        ctx.lineWidth = style.strokeWidth;
-        ctx.strokeText(line, 0, y);
-      }
-
-      ctx.fillStyle = style.color;
-      ctx.fillText(line, 0, y);
-    }
-  }
-
-  ctx.restore();
+  // Use the same title renderer as export. Keeping one 2D text path is
+  // essential for shader fidelity: Paper fills, animated glyph shaders,
+  // masking, shadows, and per-character animation must produce the same
+  // pixels on the editor stage and in the encoded video.
+  const rendered = titleEngine.renderText(
+    textClip,
+    canvasWidth,
+    canvasHeight,
+    clipLocalTime,
+  );
+  ctx.drawImage(rendered.canvas, 0, 0, canvasWidth, canvasHeight);
 };
 
 export const getActiveTextClips = (
@@ -1515,8 +1398,13 @@ export const renderShapeClipToCanvas = (
       transformedClip.transform.rotate3d.y !== 0);
   const hasBlendMode =
     transformedClip.blendMode && transformedClip.blendMode !== "normal";
+  // Mesh-primitive shapes are inherently 3D, so always route them
+  // through the THREE pipeline, even without an explicit rotation.
+  const isShape3D =
+    transformedClip.type === "shape" &&
+    (transformedClip as ShapeClip).shapeType.startsWith("mesh-");
 
-  if (has3DTransforms || hasBlendMode) {
+  if (has3DTransforms || hasBlendMode || isShape3D) {
     if (!threeJSRenderer) {
       threeJSRenderer = new ThreeJSLayerRenderer(canvasWidth, canvasHeight);
     }
@@ -1530,7 +1418,7 @@ export const renderShapeClipToCanvas = (
 
     threeJSRenderer.clear();
 
-    let mesh: THREE.Mesh | null = null;
+    let mesh: THREE.Mesh | THREE.Group | null = null;
     if (transformedClip.type === "svg") {
       mesh = threeJSRenderer.renderSVGClip(
         transformedClip as SVGClip,
@@ -1791,6 +1679,7 @@ export const drawFrameWithTransform = (
   transform: ClipTransform | undefined,
   canvasWidth: number,
   canvasHeight: number,
+  filter?: string,
 ): void => {
   const t: ClipTransform = {
     ...DEFAULT_TRANSFORM,
@@ -1811,6 +1700,9 @@ export const drawFrameWithTransform = (
 
   ctx.save();
   ctx.globalAlpha = t.opacity ?? 1;
+  if (filter) {
+    ctx.filter = filter;
+  }
 
   const centerX = canvasWidth / 2;
   const centerY = canvasHeight / 2;
@@ -1829,20 +1721,17 @@ export const drawFrameWithTransform = (
     sourceHeight = "height" in frame ? frame.height : canvasHeight;
   }
 
-  // Calculate draw size to fit frame within canvas while preserving aspect ratio (contain)
-  const sourceAspect = sourceWidth / sourceHeight;
-  const canvasAspect = canvasWidth / canvasHeight;
-
-  let drawWidth: number;
-  let drawHeight: number;
-
-  if (sourceAspect > canvasAspect) {
-    drawWidth = canvasWidth;
-    drawHeight = canvasWidth / sourceAspect;
-  } else {
-    drawHeight = canvasHeight;
-    drawWidth = canvasHeight * sourceAspect;
-  }
+  const crop = t.crop;
+  const visibleSourceWidth = crop ? crop.width * sourceWidth : sourceWidth;
+  const visibleSourceHeight = crop ? crop.height * sourceHeight : sourceHeight;
+  const { width: drawWidth, height: drawHeight } =
+    resolveCanvasFitDimensions(
+      t.fitMode,
+      visibleSourceWidth,
+      visibleSourceHeight,
+      canvasWidth,
+      canvasHeight,
+    );
 
   const drawX = -drawWidth * t.anchor.x;
   const drawY = -drawHeight * t.anchor.y;
@@ -1855,37 +1744,20 @@ export const drawFrameWithTransform = (
     ctx.clip();
   }
 
-  if (t.crop) {
-    const sx = t.crop.x * sourceWidth;
-    const sy = t.crop.y * sourceHeight;
-    const sWidth = t.crop.width * sourceWidth;
-    const sHeight = t.crop.height * sourceHeight;
-
-    const croppedAspect = sWidth / sHeight;
-    let cropDrawWidth: number;
-    let cropDrawHeight: number;
-
-    if (croppedAspect > canvasAspect) {
-      cropDrawWidth = canvasWidth;
-      cropDrawHeight = canvasWidth / croppedAspect;
-    } else {
-      cropDrawHeight = canvasHeight;
-      cropDrawWidth = canvasHeight * croppedAspect;
-    }
-
-    const cropDrawX = -cropDrawWidth * t.anchor.x;
-    const cropDrawY = -cropDrawHeight * t.anchor.y;
+  if (crop) {
+    const sx = crop.x * sourceWidth;
+    const sy = crop.y * sourceHeight;
 
     ctx.drawImage(
       frame,
       sx,
       sy,
-      sWidth,
-      sHeight,
-      cropDrawX,
-      cropDrawY,
-      cropDrawWidth,
-      cropDrawHeight,
+      visibleSourceWidth,
+      visibleSourceHeight,
+      drawX,
+      drawY,
+      drawWidth,
+      drawHeight,
     );
   } else {
     ctx.drawImage(frame, drawX, drawY, drawWidth, drawHeight);
@@ -1950,7 +1822,10 @@ export const applyEffectsToFrame = async (
       } catch {}
     }
 
-    if (Object.keys(colorGrading).length > 0) {
+    if (
+      Object.keys(colorGrading).length > 0 &&
+      !isNeutralColorGrading(colorGrading)
+    ) {
       try {
         const colorGradingResult = await effectsBridge.processColorGrading(
           clipId,
@@ -1972,6 +1847,77 @@ export const applyEffectsToFrame = async (
   }
 };
 
+export const applyEffectsToFrameCanvas = async (
+  clipId: string,
+  frame: ImageBitmap,
+): Promise<OffscreenCanvas | null> => {
+  const bgEngine = getBackgroundRemovalEngine();
+  if (
+    bgEngine &&
+    bgEngine.isInitialized() &&
+    bgEngine.getSettings(clipId).enabled
+  ) {
+    return null;
+  }
+
+  const effectsBridge = getEffectsBridge();
+  if (!effectsBridge.isInitialized()) {
+    return null;
+  }
+
+  const colorGrading = effectsBridge.getColorGrading(clipId);
+  const gradingActive =
+    Object.keys(colorGrading).length > 0 &&
+    !isNeutralColorGrading(colorGrading);
+
+  const enabledEffects = effectsBridge
+    .getEffects(clipId)
+    .filter((e) => e.enabled);
+  const effectsActive = enabledEffects.length > 0;
+
+  if (!gradingActive && !effectsActive) {
+    return null;
+  }
+
+  if (gradingActive && !effectsBridge.gradingYieldsCanvas(clipId)) {
+    return null;
+  }
+
+  try {
+    if (gradingActive) {
+      let fxBitmap = frame;
+      if (effectsActive) {
+        const effectsResult = await effectsBridge.processEffects(
+          clipId,
+          frame,
+        );
+        if (
+          effectsResult.image &&
+          effectsResult.image.width > 0 &&
+          effectsResult.image.height > 0
+        ) {
+          fxBitmap = effectsResult.image;
+        }
+      }
+
+      try {
+        return await effectsBridge.processColorGradingToCanvas(
+          clipId,
+          fxBitmap,
+        );
+      } finally {
+        if (fxBitmap !== frame) {
+          fxBitmap.close();
+        }
+      }
+    }
+
+    return await effectsBridge.processEffectsToCanvas(clipId, frame);
+  } catch {
+    return null;
+  }
+};
+
 export interface TransitionRenderInfo {
   clipA: {
     id: string;
@@ -1986,7 +1932,8 @@ export interface TransitionRenderInfo {
     duration: number;
     mediaId: string;
     inPoint?: number;
-  };
+  } | null;
+  edge?: TransitionEdge;
   transitionId: string;
   progress: number;
 }
@@ -1996,14 +1943,9 @@ export const getTransitionAtTime = (
   tracks: Array<{
     id: string;
     type: string;
-    clips: Array<{
-      id: string;
-      startTime: number;
-      duration: number;
-      mediaId: string;
-      inPoint?: number;
-    }>;
+    clips: Clip[];
   }>,
+  isEligibleClip: (clip: Clip) => boolean = () => true,
 ): TransitionRenderInfo | null => {
   try {
     const transitionBridge = getTransitionBridge();
@@ -2011,18 +1953,22 @@ export const getTransitionAtTime = (
       return null;
     }
 
-    const videoTracks = tracks.filter(
-      (t) => t.type === "video" || t.type === "image",
-    );
-
-    for (const track of videoTracks) {
+    for (const track of tracks) {
       const transitions = transitionBridge.getTransitionsForTrack(track.id);
 
       for (const transition of transitions) {
         const clipA = track.clips.find((c) => c.id === transition.clipAId);
-        const clipB = track.clips.find((c) => c.id === transition.clipBId);
+        const clipB = transition.clipBId
+          ? track.clips.find((c) => c.id === transition.clipBId)
+          : undefined;
 
-        if (!clipA || !clipB) continue;
+        if (
+          !clipA ||
+          !isEligibleClip(clipA) ||
+          (transition.clipBId && (!clipB || !isEligibleClip(clipB)))
+        ) {
+          continue;
+        }
 
         if (
           transitionBridge.isTimeInTransition(
@@ -2044,13 +1990,16 @@ export const getTransitionAtTime = (
               mediaId: clipA.mediaId,
               inPoint: clipA.inPoint,
             },
-            clipB: {
-              id: clipB.id,
-              startTime: clipB.startTime,
-              duration: clipB.duration,
-              mediaId: clipB.mediaId,
-              inPoint: clipB.inPoint,
-            },
+            clipB: clipB
+              ? {
+                  id: clipB.id,
+                  startTime: clipB.startTime,
+                  duration: clipB.duration,
+                  mediaId: clipB.mediaId,
+                  inPoint: clipB.inPoint,
+                }
+              : null,
+            edge: transition.edge,
             transitionId: transition.id,
             progress,
           };
@@ -2096,6 +2045,41 @@ export const renderTransitionFrame = async (
       result.frame.height > 0
     ) {
       return result.frame;
+    }
+
+    return transitionInfo.progress < 0.5 ? outgoingFrame : incomingFrame;
+  } catch {
+    return transitionInfo.progress < 0.5 ? outgoingFrame : incomingFrame;
+  }
+};
+
+export const renderTransitionCanvas = async (
+  transitionInfo: TransitionRenderInfo,
+  outgoingFrame: globalThis.CanvasImageSource,
+  incomingFrame: globalThis.CanvasImageSource,
+): Promise<globalThis.CanvasImageSource> => {
+  try {
+    const transitionBridge = getTransitionBridge();
+    if (!transitionBridge.isInitialized()) {
+      return transitionInfo.progress < 0.5 ? outgoingFrame : incomingFrame;
+    }
+
+    const transition = transitionBridge.getTransition(
+      transitionInfo.transitionId,
+    );
+    if (!transition) {
+      return transitionInfo.progress < 0.5 ? outgoingFrame : incomingFrame;
+    }
+
+    const canvas = await transitionBridge.renderTransitionToCanvas(
+      outgoingFrame,
+      incomingFrame,
+      transition,
+      transitionInfo.progress,
+    );
+
+    if (canvas && canvas.width > 0 && canvas.height > 0) {
+      return canvas;
     }
 
     return transitionInfo.progress < 0.5 ? outgoingFrame : incomingFrame;

@@ -1,6 +1,19 @@
 import type { Timeline } from "./timeline";
 import type { TextClip } from "../text/types";
 import type { ShapeClip, SVGClip, StickerClip } from "../graphics/types";
+import type { AdjustmentLayer } from "../video/adjustment-layer-engine";
+import type { Mask } from "../video/mask-engine";
+import type { MultiCamGroup } from "../video/multicam-engine";
+import type {
+  CompoundClip,
+  CompoundClipInstance,
+} from "../timeline/nested-sequence-engine";
+import type {
+  MotionComposition,
+  MotionCompositionInstance,
+} from "../motion/types";
+import type { MotionShaderDef } from "../motion/shaders/types";
+import type { CreationProjectState } from "../creation";
 
 export interface ProjectSettings {
   readonly width: number;
@@ -22,6 +35,19 @@ export interface Project {
   readonly shapeClips?: ShapeClip[];
   readonly svgClips?: SVGClip[];
   readonly stickerClips?: StickerClip[];
+  readonly adjustmentLayers?: AdjustmentLayer[];
+  readonly masks?: Mask[];
+  readonly multicamGroups?: MultiCamGroup[];
+  readonly compoundClips?: CompoundClip[];
+  readonly nestedInstances?: CompoundClipInstance[];
+  readonly motionCompositions?: MotionComposition[];
+  readonly motionInstances?: MotionCompositionInstance[];
+  readonly generatedShaders?: readonly MotionShaderDef[];
+  readonly creation?: CreationProjectState;
+  /** Feature capabilities required to edit this project without data loss. */
+  readonly capabilities?: readonly string[];
+  /** Oldest project reader version that can safely open this project. */
+  readonly minimumReaderVersion?: string;
 }
 
 export interface MediaLibrary {
@@ -67,4 +93,7 @@ export interface MediaMetadata {
   readonly fileSize: number;
   /** Number of audio tracks in the file (may be > 1 for multi-track video/audio files) */
   readonly audioTrackCount?: number;
+  /** Optional source-stream flags preserved by modern importers. */
+  readonly hasVideo?: boolean;
+  readonly hasAudio?: boolean;
 }

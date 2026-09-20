@@ -4,6 +4,10 @@ export async function generateThumbnailFromBlob(
   blob: Blob,
   type: "video" | "audio" | "image",
 ): Promise<string | null> {
+  if (!(blob instanceof Blob)) {
+    return null;
+  }
+
   if (type === "audio") {
     return null;
   }
@@ -75,26 +79,56 @@ export async function generateThumbnailFromBlob(
   });
 }
 
+export function createMissingMediaItem(item: MediaItem): MediaItem {
+  return {
+    ...item,
+    fileHandle: null,
+    blob: null,
+    thumbnailUrl: item.thumbnailUrl?.startsWith("blob:")
+      ? null
+      : item.thumbnailUrl,
+    waveformData: null,
+    filmstripThumbnails: undefined,
+    isPlaceholder: true,
+  };
+}
+
 export async function restoreMediaItem(
   item: MediaItem,
   storedBlob: Blob | undefined,
 ): Promise<MediaItem> {
-  const blob = storedBlob || item.blob;
+  const blob =
+    storedBlob instanceof Blob
+      ? storedBlob
+      : item.blob instanceof Blob
+        ? item.blob
+        : null;
 
   if (!blob) {
-    return item;
+    return createMissingMediaItem(item);
   }
 
   let thumbnailUrl = item.thumbnailUrl;
 
   if (!thumbnailUrl || thumbnailUrl.startsWith("blob:")) {
-    thumbnailUrl = await generateThumbnailFromBlob(blob, item.type);
+    try {
+      thumbnailUrl = await generateThumbnailFromBlob(blob, item.type);
+    } catch (error) {
+      console.warn(
+        `[MediaRecovery] Failed to regenerate thumbnail for ${item.name}:`,
+        error,
+      );
+      thumbnailUrl = null;
+    }
   }
 
   return {
     ...item,
+    fileHandle: null,
     blob,
     thumbnailUrl,
+    waveformData: null,
     filmstripThumbnails: undefined,
+    isPlaceholder: false,
   };
 }

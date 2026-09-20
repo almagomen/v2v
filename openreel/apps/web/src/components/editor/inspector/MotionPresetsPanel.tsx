@@ -5,6 +5,11 @@ import React, {
   useEffect,
   useRef,
 } from "react";
+import { ToolcraftButton as Button } from "@openreel/ui";
+import { ToolcraftCard as Card } from "@openreel/ui";
+import { ToolcraftClickableCard as ClickableCard } from "@openreel/ui";
+import { ToolcraftSliderControl } from "@openreel/ui";
+import { ToolcraftText as Text } from "@openreel/ui";
 import {
   Play,
   ArrowRight,
@@ -12,7 +17,7 @@ import {
   Zap,
   RefreshCw,
   Check,
-} from "lucide-react";
+} from "@/icons/lucide-compat";
 import { useProjectStore } from "../../../stores/project-store";
 import { useUIStore } from "../../../stores/ui-store";
 import { useEngineStore } from "../../../stores/engine-store";
@@ -217,12 +222,14 @@ function buildPreviewCSSKeyframes(preset: MotionPreset): globalThis.Keyframe[] {
 
 interface PresetCardProps {
   preset: MotionPreset;
+  duration: number;
   isApplied: boolean;
   onApply: () => void;
 }
 
 const PresetCard: React.FC<PresetCardProps> = ({
   preset,
+  duration,
   isApplied,
   onApply,
 }) => {
@@ -243,7 +250,7 @@ const PresetCard: React.FC<PresetCardProps> = ({
     const keyframes = buildPreviewCSSKeyframes(preset);
 
     animationRef.current = element.animate(keyframes, {
-      duration: preset.duration * 1000,
+      duration: duration * 1000,
       iterations: Infinity,
       easing: "ease-in-out",
     });
@@ -251,17 +258,18 @@ const PresetCard: React.FC<PresetCardProps> = ({
     return () => {
       animationRef.current?.cancel();
     };
-  }, [isHovered, preset]);
+  }, [duration, isHovered, preset]);
 
   return (
-    <button
+    <ClickableCard
+      label={`Apply ${preset.name}`}
       onClick={onApply}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={`relative w-full rounded-lg border transition-all overflow-hidden ${
         isApplied
           ? "border-primary bg-primary/10"
-          : "border-border bg-background-tertiary hover:border-primary/50"
+          : "border-border bg-bg-2 hover:border-primary/50"
       }`}
     >
       <div className="relative h-20 bg-gradient-to-br from-background-secondary to-background-tertiary flex items-center justify-center overflow-hidden">
@@ -278,19 +286,21 @@ const PresetCard: React.FC<PresetCardProps> = ({
         )}
         {isHovered && !isApplied && (
           <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-            <span className="text-[10px] text-white font-medium px-2 py-1 bg-primary rounded">
+            <Text type="supporting" className="text-[10px] text-white font-medium px-2 py-1 bg-primary rounded">
               Apply
-            </span>
+            </Text>
           </div>
         )}
       </div>
       <div className="p-2 text-left">
-        <span className="text-[10px] font-medium text-text-primary block truncate">
+        <Text type="supporting" color="primary" className="block truncate text-[10px] font-medium">
           {preset.name}
-        </span>
-        <span className="text-[8px] text-text-muted">{preset.duration}s</span>
+        </Text>
+        <Text type="supporting" color="secondary" className="text-[8px]">
+          {duration}s
+        </Text>
       </div>
-    </button>
+    </ClickableCard>
   );
 };
 
@@ -324,11 +334,31 @@ export const MotionPresetsPanel: React.FC<MotionPresetsPanelProps> = ({
 
   const [selectedCategory, setSelectedCategory] =
     useState<PresetCategory>("entrance");
-  const customDurations: Record<string, number> = {};
+  const [customDurations, setCustomDurations] = useState<
+    Partial<Record<PresetCategory, number>>
+  >({});
+  const [lastAppliedPresetId, setLastAppliedPresetId] = useState<string | null>(
+    null,
+  );
+  const durationApplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const targetClipId = clipId || selectedClipIds[0];
   const presetLibrary = useMemo(() => getPresetLibrary(), []);
-  const presets = presetLibrary[selectedCategory] || [];
+  const presets = useMemo(
+    () => presetLibrary[selectedCategory] ?? [],
+    [presetLibrary, selectedCategory],
+  );
+
+  useEffect(
+    () => () => {
+      if (durationApplyTimerRef.current) {
+        clearTimeout(durationApplyTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const clip = useMemo((): { type: string; data: ClipLike } | null => {
     if (!targetClipId) return null;
@@ -338,27 +368,39 @@ export const MotionPresetsPanel: React.FC<MotionPresetsPanelProps> = ({
       .find((c) => c.id === targetClipId);
     if (regularClip) return { type: "regular", data: regularClip as ClipLike };
 
-    const textClip = getTextClip(targetClipId);
+    const textClip =
+      project.textClips?.find((candidate) => candidate.id === targetClipId) ??
+      getTextClip(targetClipId);
     if (textClip) return { type: "text", data: textClip as ClipLike };
 
-    const shapeClip = getShapeClip(targetClipId);
+    const shapeClip =
+      project.shapeClips?.find((candidate) => candidate.id === targetClipId) ??
+      getShapeClip(targetClipId);
     if (shapeClip) return { type: "shape", data: shapeClip as ClipLike };
 
-    const svgClip = getSVGClip(targetClipId);
+    const svgClip =
+      project.svgClips?.find((candidate) => candidate.id === targetClipId) ??
+      getSVGClip(targetClipId);
     if (svgClip) return { type: "svg", data: svgClip as ClipLike };
 
-    const stickerClip = getStickerClip(targetClipId);
+    const stickerClip =
+      project.stickerClips?.find(
+        (candidate) => candidate.id === targetClipId,
+      ) ?? getStickerClip(targetClipId);
     if (stickerClip) return { type: "sticker", data: stickerClip as ClipLike };
 
     return null;
   }, [
     targetClipId,
     project.timeline.tracks,
+    project.textClips,
+    project.shapeClips,
+    project.svgClips,
+    project.stickerClips,
     getTextClip,
     getShapeClip,
     getSVGClip,
     getStickerClip,
-    project.modifiedAt,
   ]);
 
   const detectAppliedPresets = useCallback(() => {
@@ -381,7 +423,7 @@ export const MotionPresetsPanel: React.FC<MotionPresetsPanelProps> = ({
   const appliedState = detectAppliedPresets();
 
   const handleApplyPreset = useCallback(
-    (preset: MotionPreset) => {
+    (preset: MotionPreset, durationOverride?: number) => {
       if (!clip || !targetClipId) return;
 
       const prefix =
@@ -403,7 +445,15 @@ export const MotionPresetsPanel: React.FC<MotionPresetsPanelProps> = ({
         anchor: { x: 0.5, y: 0.5 },
       };
 
-      const customDuration = customDurations[preset.id];
+      const customDuration = Math.min(
+        clip.data.duration,
+        Math.max(
+          0.05,
+          durationOverride ??
+            customDurations[preset.category] ??
+            preset.duration,
+        ),
+      );
       const canvas = {
         width: project.settings.width,
         height: project.settings.height,
@@ -459,9 +509,51 @@ export const MotionPresetsPanel: React.FC<MotionPresetsPanelProps> = ({
     ],
   );
 
+  const handlePresetClick = useCallback(
+    (preset: MotionPreset) => {
+      setLastAppliedPresetId(preset.id);
+      handleApplyPreset(preset);
+    },
+    [handleApplyPreset],
+  );
+
+  const handleDurationChange = useCallback(
+    (duration: number) => {
+      setCustomDurations((current) => ({
+        ...current,
+        [selectedCategory]: duration,
+      }));
+
+      const appliedPreset = presets.find(
+        (preset) => preset.id === lastAppliedPresetId,
+      );
+      if (!appliedPreset) return;
+
+      if (durationApplyTimerRef.current) {
+        clearTimeout(durationApplyTimerRef.current);
+      }
+      durationApplyTimerRef.current = setTimeout(() => {
+        durationApplyTimerRef.current = null;
+        handleApplyPreset(appliedPreset, duration);
+      }, 160);
+    },
+    [handleApplyPreset, lastAppliedPresetId, presets, selectedCategory],
+  );
+
   const handleRemovePresets = useCallback(
     (category: PresetCategory) => {
       if (!clip || !targetClipId) return;
+
+      if (durationApplyTimerRef.current) {
+        clearTimeout(durationApplyTimerRef.current);
+        durationApplyTimerRef.current = null;
+      }
+      setLastAppliedPresetId((current) =>
+        current &&
+        (presetLibrary[category] ?? []).some((preset) => preset.id === current)
+          ? null
+          : current,
+      );
 
       const prefix =
         category === "entrance"
@@ -509,16 +601,17 @@ export const MotionPresetsPanel: React.FC<MotionPresetsPanelProps> = ({
       updateClipKeyframes,
       updateTextClipKeyframes,
       getGraphicsEngine,
+      presetLibrary,
     ],
   );
 
   if (!targetClipId) {
     return (
       <div className="p-4 text-center">
-        <Zap size={24} className="mx-auto mb-2 text-text-muted" />
-        <p className="text-[10px] text-text-muted">
+        <Zap size={24} className="mx-auto mb-2 text-fg-3" />
+        <Text type="supporting" color="secondary" className="text-[10px]">
           Select a clip to apply motion presets
-        </p>
+        </Text>
       </div>
     );
   }
@@ -526,51 +619,66 @@ export const MotionPresetsPanel: React.FC<MotionPresetsPanelProps> = ({
   if (!clip) {
     return (
       <div className="p-4 text-center">
-        <Zap size={24} className="mx-auto mb-2 text-text-muted" />
-        <p className="text-[10px] text-text-muted">Clip not found</p>
+        <Zap size={24} className="mx-auto mb-2 text-fg-3" />
+        <Text type="supporting" color="secondary" className="text-[10px]">
+          Clip not found
+        </Text>
       </div>
     );
   }
+
+  const maxPresetDuration = Math.max(0.05, clip.data.duration);
+  const defaultCategoryDuration = Math.min(
+    maxPresetDuration,
+    presets[0]?.duration ?? 0.5,
+  );
+  const selectedDuration = Math.min(
+    maxPresetDuration,
+    customDurations[selectedCategory] ?? defaultCategoryDuration,
+  );
 
   return (
     <div className="space-y-4">
       {(appliedState.entrance ||
         appliedState.exit ||
         appliedState.emphasis) && (
-        <div className="space-y-1 p-2 bg-background-tertiary rounded-lg border border-border">
-          <span className="text-[10px] text-text-secondary font-medium">
+        <Card variant="muted" padding={2} className="space-y-1 border border-border">
+          <Text type="supporting" color="secondary" className="text-[10px] font-medium">
             Applied Animations
-          </span>
+          </Text>
           <div className="flex flex-wrap gap-1 mt-1">
             {appliedState.entrance && (
-              <button
+              <Button
+                label="Entry x"
+                icon={<ArrowRight size={10} />}
+                variant="ghost"
+                size="sm"
                 onClick={() => handleRemovePresets("entrance")}
                 className="flex items-center gap-1 px-2 py-1 bg-green-500/20 text-green-400 rounded text-[9px] hover:bg-green-500/30"
-              >
-                <ArrowRight size={10} />
-                Entry ×
-              </button>
+              />
             )}
             {appliedState.exit && (
-              <button
+              <Button
+                label="Exit x"
+                icon={<ArrowLeft size={10} />}
+                variant="ghost"
+                size="sm"
                 onClick={() => handleRemovePresets("exit")}
                 className="flex items-center gap-1 px-2 py-1 bg-red-500/20 text-red-400 rounded text-[9px] hover:bg-red-500/30"
-              >
-                <ArrowLeft size={10} />
-                Exit ×
-              </button>
+              />
             )}
             {appliedState.emphasis && (
-              <button
+              <Button
+                label="Emphasis x"
+                icon={<Zap size={10} />}
+                variant="ghost"
+                size="sm"
                 onClick={() => handleRemovePresets("emphasis")}
                 className="flex items-center gap-1 px-2 py-1 bg-yellow-500/20 text-yellow-400 rounded text-[9px] hover:bg-yellow-500/30"
-              >
-                <Zap size={10} />
-                Emphasis ×
-              </button>
+              />
             )}
           </div>
-        </div>
+        </Card>
       )}
 
       <div className="flex gap-1">
@@ -583,24 +691,44 @@ export const MotionPresetsPanel: React.FC<MotionPresetsPanelProps> = ({
             (category.id === "transition" && appliedState.emphasis);
 
           return (
-            <button
+            <Button
               key={category.id}
+              label={category.name}
+              icon={<Icon size={12} />}
+              variant={selectedCategory === category.id ? "primary" : "secondary"}
+              size="sm"
               onClick={() => setSelectedCategory(category.id)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] whitespace-nowrap transition-colors relative ${
                 selectedCategory === category.id
                   ? "bg-primary text-white font-medium"
-                  : "bg-background-tertiary text-text-secondary hover:text-text-primary"
+                  : "bg-bg-2 text-fg-2 hover:text-fg"
               }`}
             >
-              <Icon size={12} />
-              {category.name}
               {isApplied && (
-                <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full" />
+                <div className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full" />
               )}
-            </button>
+            </Button>
           );
         })}
       </div>
+
+      <Card variant="muted" padding={2} className="space-y-2 border border-border">
+        <ToolcraftSliderControl
+          ariaLabel="Motion preset duration"
+          label="Duration"
+          value={selectedDuration}
+          min={0.05}
+          max={maxPresetDuration}
+          step={0.05}
+          unit="s"
+          defaultValue={defaultCategoryDuration}
+          onChange={handleDurationChange}
+        />
+        <Text type="supporting" color="secondary" className="text-[9px]">
+          Sets how long {selectedCategory} presets run. The last applied preset
+          updates after you stop dragging.
+        </Text>
+      </Card>
 
       <div className="grid grid-cols-3 gap-2 max-h-72 overflow-y-auto">
         {presets.map((preset) => {
@@ -615,16 +743,19 @@ export const MotionPresetsPanel: React.FC<MotionPresetsPanelProps> = ({
             <PresetCard
               key={preset.id}
               preset={preset}
+              duration={
+                customDurations[preset.category] ?? preset.duration
+              }
               isApplied={!!appliedState[categoryKey]}
-              onApply={() => handleApplyPreset(preset)}
+              onApply={() => handlePresetClick(preset)}
             />
           );
         })}
       </div>
 
-      <p className="text-[9px] text-text-muted text-center">
+      <Text type="supporting" color="secondary" className="text-center text-[9px]">
         {presets.length} presets in {selectedCategory}
-      </p>
+      </Text>
     </div>
   );
 };

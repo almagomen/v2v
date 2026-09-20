@@ -1,13 +1,211 @@
 import type { Project, MediaItem } from "../types";
 import type { IStorageEngine, MediaRecord } from "./types";
 import type { ValidationResult, ProjectFileWithMetadata } from "./schema-types";
+import type {
+  MotionAudioClip,
+  MotionComposition,
+  MotionCompositionInstance,
+  MotionLayer,
+} from "../motion/types";
+import type {
+  MotionShaderCategory,
+  MotionShaderDef,
+  MotionShaderParamDef,
+} from "../motion/shaders/types";
+import { normalizeMotionCamera } from "../motion/motion-camera";
+import { normalizeMotionLights } from "../motion/motion-lights";
+import { normalizeMotionTracks } from "../motion/motion-tracking";
+import { normalizeCreationState } from "../creation";
+import {
+  UNIVERSAL_TRACKS_MIN_READER_VERSION,
+  projectUsesUniversalTracks,
+} from "../timeline/timeline-items";
+
+const MOTION_SHADER_CATEGORIES: ReadonlySet<MotionShaderCategory> = new Set([
+  "fill",
+  "effect",
+  "text",
+]);
+
+function isMotionShaderParamDef(value: unknown): value is MotionShaderParamDef {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const param = value as Record<string, unknown>;
+  return (
+    typeof param.name === "string" &&
+    typeof param.label === "string" &&
+    (param.type === "number" || param.type === "color") &&
+    typeof param.default === "number" &&
+    typeof param.min === "number" &&
+    typeof param.max === "number" &&
+    typeof param.step === "number"
+  );
+}
+
+function isMotionShaderDef(value: unknown): value is MotionShaderDef {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const def = value as Record<string, unknown>;
+  return (
+    typeof def.id === "string" &&
+    def.id.length > 0 &&
+    typeof def.name === "string" &&
+    typeof def.category === "string" &&
+    MOTION_SHADER_CATEGORIES.has(def.category as MotionShaderCategory) &&
+    typeof def.glsl === "string" &&
+    def.glsl.length > 0 &&
+    Array.isArray(def.params) &&
+    def.params.every(isMotionShaderParamDef)
+  );
+}
+
+export function normalizeGeneratedShaders(
+  value: unknown,
+): readonly MotionShaderDef[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isMotionShaderDef).map((def) => ({
+    id: def.id,
+    name: def.name,
+    category: def.category,
+    glsl: def.glsl,
+    params: def.params,
+    origin: "generated" as const,
+  }));
+}
 
 export interface ProjectFile {
   readonly version: string;
+  readonly minimumReaderVersion?: string;
+  readonly capabilities?: readonly string[];
   readonly project: Project;
 }
 
-export const SCHEMA_VERSION = "1.0.0";
+export const SCHEMA_VERSION = "1.2.0";
+
+function compareVersions(left: string, right: string): number {
+  const parse = (value: string): number[] =>
+    value
+      .split(".")
+      .slice(0, 3)
+      .map((part) => Number.parseInt(part, 10) || 0);
+  const leftParts = parse(left);
+  const rightParts = parse(right);
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function getProjectFileCompatibility(project: Project): Pick<
+  ProjectFile,
+  "minimumReaderVersion" | "capabilities"
+> {
+  const capabilities = project.capabilities ?? [];
+  return {
+    minimumReaderVersion: projectUsesUniversalTracks(project)
+      ? UNIVERSAL_TRACKS_MIN_READER_VERSION
+      : project.minimumReaderVersion,
+    capabilities: capabilities.length > 0 ? capabilities : undefined,
+  };
+}
+
+function assertReaderCompatibility(projectFile: ProjectFile): void {
+  const minimumReaderVersion = projectFile.minimumReaderVersion;
+  if (
+    minimumReaderVersion &&
+    compareVersions(minimumReaderVersion, SCHEMA_VERSION) > 0
+  ) {
+    throw new Error(
+      `This project requires OpenReel project reader ${minimumReaderVersion} or newer. Current reader: ${SCHEMA_VERSION}.`,
+    );
+  }
+}
+
+function normalizeMotionAudioClips(
+  composition: Pick<MotionComposition, "audioClips">,
+): MotionAudioClip[] {
+  if (!Array.isArray(composition.audioClips)) {
+    return [];
+  }
+  return composition.audioClips.filter(
+    (clip): clip is MotionAudioClip =>
+      !!clip && typeof clip === "object" && typeof clip.id === "string",
+  );
+}
+
+function normalizeMotionLayers(
+  composition: Pick<MotionComposition, "layers">,
+): MotionLayer[] {
+  if (!Array.isArray(composition.layers)) {
+    return [];
+  }
+  return composition.layers.filter(
+    (layer): layer is MotionLayer =>
+      !!layer && typeof layer === "object" && typeof layer.id === "string",
+  );
+}
+
+export function normalizeMotionComposition(
+  composition: MotionComposition,
+): MotionComposition {
+  return {
+    ...composition,
+    layers: normalizeMotionLayers(composition),
+    assets: Array.isArray(composition.assets) ? composition.assets : [],
+    variables: Array.isArray(composition.variables) ? composition.variables : [],
+    markers: Array.isArray(composition.markers) ? composition.markers : [],
+    audioClips: normalizeMotionAudioClips(composition),
+    guides: Array.isArray(composition.guides) ? composition.guides : [],
+    lights: normalizeMotionLights(composition),
+    camera: composition.camera
+      ? normalizeMotionCamera(composition)
+      : undefined,
+    tracks: normalizeMotionTracks(composition),
+  };
+}
+
+export function normalizeProjectMotionFields(project: Project): Project {
+  const motionInstances: MotionCompositionInstance[] = Array.isArray(
+    project.motionInstances,
+  )
+    ? project.motionInstances
+    : [];
+
+  return {
+    ...project,
+    motionCompositions: Array.isArray(project.motionCompositions)
+      ? project.motionCompositions.map(normalizeMotionComposition)
+      : [],
+    motionInstances,
+  };
+}
+
+export function normalizeProjectCreationFields(project: Project): Project {
+  return {
+    ...project,
+    creation: normalizeCreationState(project.creation),
+  };
+}
+
+export function normalizeProjectGeneratedShaderFields(
+  project: Project,
+): Project {
+  return {
+    ...project,
+    generatedShaders: normalizeGeneratedShaders(project.generatedShaders),
+  };
+}
+
+export function normalizeProjectStoredFields(project: Project): Project {
+  return normalizeProjectGeneratedShaderFields(
+    normalizeProjectCreationFields(normalizeProjectMotionFields(project)),
+  );
+}
 
 export class ProjectSerializer {
   private storage: IStorageEngine;
@@ -40,6 +238,7 @@ export class ProjectSerializer {
   exportToJson(project: Project): string {
     const projectFile: ProjectFile = {
       version: SCHEMA_VERSION,
+      ...getProjectFileCompatibility(project),
       project: this.stripMediaBlobs(project),
     };
     return JSON.stringify(projectFile, null, 2);
@@ -47,12 +246,13 @@ export class ProjectSerializer {
 
   importFromJson(json: string): Project {
     const projectFile = JSON.parse(json) as ProjectFile;
+    assertReaderCompatibility(projectFile);
 
     if (projectFile.version !== SCHEMA_VERSION) {
       return this.migrateProject(projectFile);
     }
 
-    const project = projectFile.project;
+    const project = this.normalizeStoredFields(projectFile.project);
 
     const processedItems: MediaItem[] = project.mediaLibrary.items.map(
       (item: MediaItem) => {
@@ -78,6 +278,7 @@ export class ProjectSerializer {
   exportToJsonWithMetadata(project: Project, description?: string): string {
     const projectFile: ProjectFileWithMetadata = {
       version: SCHEMA_VERSION,
+      ...getProjectFileCompatibility(project),
       project: this.stripMediaBlobs(project),
       metadata: {
         exportedAt: Date.now(),
@@ -105,6 +306,16 @@ export class ProjectSerializer {
         result.warnings.push(
           `Version mismatch: expected ${SCHEMA_VERSION}, got ${projectFile.version}`,
         );
+      }
+
+      if (
+        projectFile.minimumReaderVersion &&
+        compareVersions(projectFile.minimumReaderVersion, SCHEMA_VERSION) > 0
+      ) {
+        result.errors.push(
+          `Project requires reader ${projectFile.minimumReaderVersion} or newer`,
+        );
+        result.valid = false;
       }
 
       if (!projectFile.project) {
@@ -159,7 +370,8 @@ export class ProjectSerializer {
                 (clip.mediaId.startsWith("text-") ||
                   clip.mediaId.startsWith("shape-") ||
                   clip.mediaId.startsWith("svg-") ||
-                  clip.mediaId.startsWith("sticker-"));
+                  clip.mediaId.startsWith("sticker-") ||
+                  clip.mediaId.startsWith("motion-"));
               if (
                 clip.mediaId &&
                 !isVirtualClip &&
@@ -262,7 +474,11 @@ export class ProjectSerializer {
   }
 
   private migrateProject(projectFile: ProjectFile): Project {
-    return projectFile.project;
+    return this.normalizeStoredFields(projectFile.project);
+  }
+
+  private normalizeStoredFields(project: Project): Project {
+    return normalizeProjectStoredFields(project);
   }
 
   async deleteProject(id: string): Promise<void> {

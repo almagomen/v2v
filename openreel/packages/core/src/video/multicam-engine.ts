@@ -1,3 +1,13 @@
+import type {
+  MulticamEditDecisionList,
+  MulticamEditPolicy,
+} from "../multicam/automatic-edit";
+import type { Clip, Track } from "../types/timeline";
+import type { ProjectSettings } from "../types/project";
+import type { MulticamManifest } from "../multicam/manifest";
+import type { MulticamShotPlan } from "../multicam/shot-planner";
+import type { MulticamShotPolicy } from "../multicam/shot-planner";
+
 export interface CameraAngle {
   id: string;
   name: string;
@@ -6,6 +16,7 @@ export interface CameraAngle {
   offset: number;
   color: string;
   isActive: boolean;
+  driftSecondsPerSecond?: number;
 }
 
 export interface MultiCamGroup {
@@ -16,6 +27,23 @@ export interface MultiCamGroup {
   syncPoint: number;
   duration: number;
   createdAt: number;
+  switches?: AngleSwitch[];
+  outputTrackId?: string;
+  outputTrackIds?: string[];
+  automaticEdit?: MulticamAutomaticEditMetadata;
+  manifest?: MulticamManifest;
+  analysisArtifactId?: string;
+  shotPlan?: MulticamShotPlan;
+  editPolicy?: MulticamShotPolicy;
+  annotations?: MulticamSegmentAnnotation[];
+}
+
+export interface MulticamSegmentAnnotation {
+  id: string;
+  startMs: number;
+  endMs: number;
+  note: string;
+  createdAt: number;
 }
 
 export interface AngleSwitch {
@@ -23,6 +51,22 @@ export interface AngleSwitch {
   groupId: string;
   angleId: string;
   time: number;
+  reason?: string;
+  confidence?: number;
+  reviewStatus?: "pending" | "accepted";
+}
+
+export interface MulticamAutomaticEditMetadata {
+  generatedAt: number;
+  activityWindowMs: number;
+  policy: MulticamEditPolicy;
+}
+
+export interface MulticamSequenceClip {
+  angleId: string;
+  reason?: string;
+  confidence?: number;
+  clip: Clip;
 }
 
 export interface SyncResult {
@@ -42,9 +86,26 @@ const ANGLE_COLORS = [
   "#ec4899",
 ];
 
+function cloneGroup(group: MultiCamGroup): MultiCamGroup {
+  return {
+    ...group,
+    angles: group.angles.map((angle) => ({ ...angle })),
+    switches: (group.switches ?? []).map((switchItem) => ({ ...switchItem })),
+    automaticEdit: group.automaticEdit
+      ? {
+          ...group.automaticEdit,
+          policy: { ...group.automaticEdit.policy },
+        }
+      : undefined,
+    manifest: group.manifest ? structuredClone(group.manifest) : undefined,
+    shotPlan: group.shotPlan ? structuredClone(group.shotPlan) : undefined,
+    editPolicy: group.editPolicy ? structuredClone(group.editPolicy) : undefined,
+    annotations: group.annotations ? structuredClone(group.annotations) : undefined,
+  };
+}
+
 export class MultiCamEngine {
   private groups: Map<string, MultiCamGroup> = new Map();
-  private switches: Map<string, AngleSwitch[]> = new Map();
 
   constructor() {}
 
@@ -69,10 +130,10 @@ export class MultiCamEngine {
       syncPoint: 0,
       duration: 0,
       createdAt: Date.now(),
+      switches: [],
     };
 
     this.groups.set(id, group);
-    this.switches.set(id, []);
 
     return group;
   }
@@ -82,11 +143,18 @@ export class MultiCamEngine {
   }
 
   getAllGroups(): MultiCamGroup[] {
-    return Array.from(this.groups.values());
+    return Array.from(this.groups.values(), cloneGroup);
+  }
+
+  loadGroups(groups: MultiCamGroup[]): void {
+    this.groups.clear();
+    for (const group of groups) {
+      const normalized = cloneGroup(group);
+      this.groups.set(group.id, normalized);
+    }
   }
 
   deleteGroup(groupId: string): boolean {
-    this.switches.delete(groupId);
     return this.groups.delete(groupId);
   }
 
@@ -117,6 +185,9 @@ export class MultiCamEngine {
     if (index === -1) return false;
 
     group.angles.splice(index, 1);
+    group.switches = (group.switches ?? []).filter(
+      (switchItem) => switchItem.angleId !== angleId,
+    );
 
     if (group.activeAngleId === angleId && group.angles.length > 0) {
       group.activeAngleId = group.angles[0].id;
@@ -151,6 +222,7 @@ export class MultiCamEngine {
     groupId: string,
     angleId: string,
     time: number,
+    details: Pick<AngleSwitch, "reason" | "confidence"> = {},
   ): AngleSwitch | null {
     const group = this.groups.get(groupId);
     if (!group) return null;
@@ -163,37 +235,173 @@ export class MultiCamEngine {
       groupId,
       angleId,
       time,
+      ...details,
     };
 
-    const switches = this.switches.get(groupId) || [];
+    const switches = group.switches ?? [];
     switches.push(switchItem);
     switches.sort((a, b) => a.time - b.time);
-    this.switches.set(groupId, switches);
+    group.switches = switches;
 
     return switchItem;
   }
 
   removeSwitch(groupId: string, switchId: string): boolean {
-    const switches = this.switches.get(groupId);
+    const group = this.groups.get(groupId);
+    const switches = group?.switches;
     if (!switches) return false;
 
     const index = switches.findIndex((s) => s.id === switchId);
     if (index === -1) return false;
 
+    const removed = switches[index]!;
     switches.splice(index, 1);
+    const plan = group?.shotPlan;
+    if (plan) {
+      const shotIndex = plan.shots.findIndex(
+        (shot) => Math.abs(shot.startMs / 1_000 - removed.time) < 0.001,
+      );
+      if (shotIndex > 0) {
+        plan.shots[shotIndex - 1]!.endMs = plan.shots[shotIndex]!.endMs;
+        plan.shots.splice(shotIndex, 1);
+        const previous = plan.shots[shotIndex - 1];
+        const next = plan.shots[shotIndex];
+        if (
+          previous &&
+          next &&
+          JSON.stringify(previous.layout) === JSON.stringify(next.layout)
+        ) {
+          previous.endMs = next.endMs;
+          plan.shots.splice(shotIndex, 1);
+        }
+      }
+    }
     return true;
   }
 
   getSwitches(groupId: string): AngleSwitch[] {
-    return this.switches.get(groupId) || [];
+    return this.groups.get(groupId)?.switches ?? [];
+  }
+
+  replaceSwitches(
+    groupId: string,
+    switches: readonly Omit<AngleSwitch, "id" | "groupId">[],
+  ): AngleSwitch[] {
+    const group = this.groups.get(groupId);
+    if (!group) return [];
+    const angleIds = new Set(group.angles.map((angle) => angle.id));
+    group.switches = switches
+      .filter(
+        (switchItem) =>
+          angleIds.has(switchItem.angleId) &&
+          Number.isFinite(switchItem.time) &&
+          switchItem.time >= 0 &&
+          switchItem.time < group.duration,
+      )
+      .map((switchItem, index) => ({
+        ...switchItem,
+        id: `switch_${group.id}_${Math.round(switchItem.time * 1_000)}_${index}`,
+        groupId: group.id,
+      }))
+      .sort((a, b) => a.time - b.time);
+    return group.switches;
+  }
+
+  applyAutomaticEdit(
+    groupId: string,
+    edit: MulticamEditDecisionList,
+    policy: MulticamEditPolicy,
+    activityWindowMs: number,
+  ): AngleSwitch[] {
+    const group = this.groups.get(groupId);
+    if (!group) return [];
+    group.duration = edit.duration;
+    group.automaticEdit = {
+      generatedAt: Date.now(),
+      activityWindowMs,
+      policy: { ...policy },
+    };
+    const switches = this.replaceSwitches(
+      groupId,
+      edit.segments.map((segment) => ({
+        angleId: segment.angleId,
+        time: segment.startTime,
+        reason: segment.reason,
+        confidence: segment.confidence,
+        reviewStatus: segment.startTime === 0 ? "accepted" : "pending",
+      })),
+    );
+    if (switches[0]) {
+      this.setActiveAngle(groupId, switches[0].angleId);
+    }
+    return switches;
+  }
+
+  acceptSwitch(groupId: string, switchId: string): boolean {
+    const switchItem = this.groups
+      .get(groupId)
+      ?.switches?.find((entry) => entry.id === switchId);
+    if (!switchItem) return false;
+    switchItem.reviewStatus = "accepted";
+    return true;
+  }
+
+  nudgeSwitch(
+    groupId: string,
+    switchId: string,
+    deltaSeconds: number,
+    minimumShotSeconds = 0.1,
+  ): boolean {
+    const switches = this.groups.get(groupId)?.switches;
+    if (!switches) return false;
+    const index = switches.findIndex((entry) => entry.id === switchId);
+    if (index <= 0) return false;
+    const previous = switches[index - 1]!;
+    const current = switches[index]!;
+    const previousTime = current.time;
+    const next = switches[index + 1];
+    current.time = Math.min(
+      (next?.time ?? this.groups.get(groupId)?.duration ?? current.time) -
+        minimumShotSeconds,
+      Math.max(previous.time + minimumShotSeconds, current.time + deltaSeconds),
+    );
+    current.reviewStatus = "pending";
+    const plan = this.groups.get(groupId)?.shotPlan;
+    if (plan) {
+      const shotIndex = plan.shots.findIndex(
+        (shot) => Math.abs(shot.startMs / 1_000 - previousTime) < 0.001,
+      );
+      if (shotIndex > 0) {
+        plan.shots[shotIndex - 1]!.endMs = current.time * 1_000;
+        plan.shots[shotIndex]!.startMs = current.time * 1_000;
+      }
+    }
+    switches.sort((left, right) => left.time - right.time);
+    return true;
+  }
+
+  setOutputTrack(groupId: string, trackId: string | undefined): boolean {
+    const group = this.groups.get(groupId);
+    if (!group) return false;
+    group.outputTrackId = trackId;
+    group.outputTrackIds = trackId ? [trackId] : [];
+    return true;
+  }
+
+  setOutputTracks(groupId: string, trackIds: readonly string[]): boolean {
+    const group = this.groups.get(groupId);
+    if (!group) return false;
+    group.outputTrackIds = [...trackIds];
+    group.outputTrackId = trackIds[0];
+    return true;
   }
 
   getAngleAtTime(groupId: string, time: number): CameraAngle | null {
     const group = this.groups.get(groupId);
     if (!group) return null;
 
-    const switches = this.switches.get(groupId) || [];
-    let activeAngleId = group.angles[0]?.id;
+    const switches = group.switches ?? [];
+    let activeAngleId = group.activeAngleId || group.angles[0]?.id;
 
     for (const sw of switches) {
       if (sw.time <= time) {
@@ -328,13 +536,14 @@ export class MultiCamEngine {
     if (group) {
       group.angles = [];
       group.activeAngleId = "";
+      group.switches = [];
+      group.outputTrackId = undefined;
+      group.automaticEdit = undefined;
     }
-    this.switches.set(groupId, []);
   }
 
   clearAll(): void {
     this.groups.clear();
-    this.switches.clear();
   }
 
   exportGroupAsSequence(
@@ -343,7 +552,7 @@ export class MultiCamEngine {
     const group = this.groups.get(groupId);
     if (!group) return [];
 
-    const switches = this.switches.get(groupId) || [];
+    const switches = group.switches ?? [];
     const sequence: { clipId: string; startTime: number; endTime: number }[] =
       [];
 
@@ -361,7 +570,7 @@ export class MultiCamEngine {
       return sequence;
     }
 
-    let currentAngleId = group.angles[0]?.id;
+    let currentAngleId = group.activeAngleId || group.angles[0]?.id;
     let currentStartTime = 0;
 
     for (let i = 0; i < switches.length; i++) {
@@ -390,6 +599,222 @@ export class MultiCamEngine {
     }
 
     return sequence;
+  }
+
+  buildSequenceClips(
+    groupId: string,
+    outputTrackId: string,
+    sourceClips: ReadonlyMap<string, Clip>,
+  ): MulticamSequenceClip[] {
+    const group = this.groups.get(groupId);
+    if (!group) return [];
+
+    const switchByTime = new Map(
+      (group.switches ?? []).map((switchItem) => [switchItem.time, switchItem]),
+    );
+    return this.exportGroupAsSequence(groupId).flatMap((segment) => {
+      const angle = group.angles.find((item) => item.clipId === segment.clipId);
+      const source = sourceClips.get(segment.clipId);
+      if (!angle || !source) return [];
+
+      const playbackRate = Math.max(0.01, source.speed ?? 1);
+      const requestedInPoint =
+        source.inPoint +
+        segment.startTime * playbackRate +
+        angle.offset +
+        (angle.driftSecondsPerSecond ?? 0) * segment.startTime;
+      const inPoint = Math.max(source.inPoint, requestedInPoint);
+      const skippedTimeline = (inPoint - requestedInPoint) / playbackRate;
+      const timelineStart = segment.startTime + skippedTimeline;
+      const requestedDuration = segment.endTime - timelineStart;
+      const availableDuration = Math.max(
+        0,
+        (source.outPoint - inPoint) / playbackRate,
+      );
+      const duration = Math.min(requestedDuration, availableDuration);
+      if (duration <= 0) return [];
+
+      const switchItem = switchByTime.get(segment.startTime);
+      const multicamMetadata = {
+        groupId,
+        angleId: angle.id,
+        reason: switchItem?.reason,
+        confidence: switchItem?.confidence,
+      };
+      const clip: Clip = {
+        ...structuredClone(source),
+        id: `${source.id}-multicam-${Math.round(timelineStart * 1_000)}`,
+        trackId: outputTrackId,
+        startTime: group.syncPoint + timelineStart,
+        duration,
+        inPoint,
+        outPoint: inPoint + duration * playbackRate,
+        metadata: {
+          ...source.metadata,
+          multicam: multicamMetadata,
+        },
+      };
+      return [{
+        angleId: angle.id,
+        reason: switchItem?.reason,
+        confidence: switchItem?.confidence,
+        clip,
+      }];
+    });
+  }
+
+  buildShotPlanTracks(
+    groupId: string,
+    outputTrackId: string,
+    sourceClips: ReadonlyMap<string, Clip>,
+    settings: Pick<ProjectSettings, "width" | "height">,
+  ): Track[] {
+    const group = this.groups.get(groupId);
+    const plan = group?.shotPlan;
+    const manifest = group?.manifest;
+    if (!group || !plan || !manifest) return [];
+    const panelCount = plan.shots.reduce(
+      (maximum, shot) => Math.max(maximum, shot.layout.panels.length),
+      1,
+    );
+    return Array.from({ length: panelCount }, (_, panelIndex) => {
+      const trackId = panelIndex === 0
+        ? outputTrackId
+        : `${outputTrackId}-panel-${panelIndex + 1}`;
+      const clips = plan.shots.flatMap((shot, shotIndex) => {
+        const panel = shot.layout.panels[panelIndex];
+        if (!panel) return [];
+        const camera = manifest.cameras.find((entry) => entry.id === panel.cameraId);
+        const angle = group.angles.find(
+          (entry) => entry.id === panel.cameraId || entry.clipId === camera?.clipId,
+        );
+        const source = angle ? sourceClips.get(angle.clipId) : undefined;
+        if (!angle || !source) return [];
+        const segmentStart = shot.startMs / 1_000;
+        const segmentEnd = shot.endMs / 1_000;
+        const playbackRate = Math.max(0.01, source.speed ?? 1);
+        const requestedInPoint =
+          source.inPoint +
+          segmentStart * playbackRate +
+          angle.offset +
+          (angle.driftSecondsPerSecond ?? 0) * segmentStart;
+        const inPoint = Math.max(source.inPoint, requestedInPoint);
+        const skippedTimeline = (inPoint - requestedInPoint) / playbackRate;
+        const timelineStart = segmentStart + skippedTimeline;
+        const availableDuration = Math.max(
+          0,
+          (source.outPoint - inPoint) / playbackRate,
+        );
+        const duration = Math.min(segmentEnd - timelineStart, availableDuration);
+        if (duration <= 0) return [];
+        const targetPosition = {
+          x:
+            source.transform.position.x +
+            (panel.rect.x + panel.rect.width / 2 - 0.5) * settings.width,
+          y:
+            source.transform.position.y +
+            (panel.rect.y + panel.rect.height / 2 - 0.5) * settings.height,
+        };
+        const targetScale = {
+          x: source.transform.scale.x * panel.rect.width,
+          y: source.transform.scale.y * panel.rect.height,
+        };
+        const previousPanel = plan.shots[shotIndex - 1]?.layout.panels.find(
+          (entry) => entry.cameraId === panel.cameraId,
+        );
+        const morphDuration = Math.min(
+          duration,
+          shot.transitionIn.type === "layout-morph"
+            ? shot.transitionIn.durationMs / 1_000
+            : 0,
+        );
+        const morphKeyframes = previousPanel && morphDuration > 0
+          ? [
+              {
+                id: `${groupId}-${shot.startMs}-${panelIndex}-position-start`,
+                time: 0,
+                property: "transform.position",
+                value: {
+                  x: source.transform.position.x +
+                    (previousPanel.rect.x + previousPanel.rect.width / 2 - 0.5) * settings.width,
+                  y: source.transform.position.y +
+                    (previousPanel.rect.y + previousPanel.rect.height / 2 - 0.5) * settings.height,
+                },
+                easing: "ease-in-out" as const,
+              },
+              {
+                id: `${groupId}-${shot.startMs}-${panelIndex}-position-end`,
+                time: morphDuration,
+                property: "transform.position",
+                value: targetPosition,
+                easing: "ease-in-out" as const,
+              },
+              {
+                id: `${groupId}-${shot.startMs}-${panelIndex}-scale-start`,
+                time: 0,
+                property: "transform.scale",
+                value: {
+                  x: source.transform.scale.x * previousPanel.rect.width,
+                  y: source.transform.scale.y * previousPanel.rect.height,
+                },
+                easing: "ease-in-out" as const,
+              },
+              {
+                id: `${groupId}-${shot.startMs}-${panelIndex}-scale-end`,
+                time: morphDuration,
+                property: "transform.scale",
+                value: targetScale,
+                easing: "ease-in-out" as const,
+              },
+            ]
+          : [];
+        const clip: Clip = {
+          ...structuredClone(source),
+          id: `${source.id}-multicam-${shot.startMs}-panel-${panelIndex + 1}`,
+          trackId,
+          startTime: group.syncPoint + timelineStart,
+          duration,
+          inPoint,
+          outPoint: inPoint + duration * playbackRate,
+          volume: panelIndex === 0 ? source.volume : 0,
+          transform: {
+            ...structuredClone(source.transform),
+            position: targetPosition,
+            scale: targetScale,
+            fitMode: "cover",
+            crop: panel.crop,
+          },
+          keyframes: [...structuredClone(source.keyframes), ...morphKeyframes],
+          metadata: {
+            ...source.metadata,
+            multicam: {
+              groupId,
+              angleId: angle.id,
+              panelIndex,
+              layout: shot.layout.template,
+              rect: panel.rect,
+              reason: shot.reason,
+              confidence: shot.confidence,
+            },
+          },
+        };
+        return [clip];
+      });
+      return {
+        id: trackId,
+        type: "video",
+        name: panelIndex === 0
+          ? `${group.name} Auto Edit`
+          : `${group.name} Panel ${panelIndex + 1}`,
+        clips,
+        transitions: [],
+        locked: false,
+        hidden: false,
+        muted: false,
+        solo: false,
+        groupId: `multicam-layout-${group.id}`,
+      };
+    });
   }
 }
 

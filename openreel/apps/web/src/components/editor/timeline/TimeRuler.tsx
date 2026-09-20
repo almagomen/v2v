@@ -203,29 +203,23 @@ export const TimeRuler: React.FC<TimeRulerProps> = ({
   return (
     <div
       ref={rulerRef}
-      className={`h-8 border-b border-border flex items-end relative bg-background-secondary select-none ${
+      className={`h-[34px] border-b border-border relative bg-bg-1 select-none ${
         isDragging ? "cursor-grabbing" : "cursor-pointer"
       }`}
       onMouseDown={handleMouseDown}
       style={{ cursor: isDragging ? "grabbing" : "pointer" }}
     >
-      {ticks.map((tick) => (
-        <div
-          key={`tick-${tick.time}`}
-          className={`absolute border-l pointer-events-none ${
-            tick.isMajor
-              ? "border-border h-4"
-              : "border-border/50 h-2"
-          }`}
-          style={{ left: `${tick.time * safePixelsPerSecond}px` }}
-        >
-          {tick.showLabel && tick.time >= 0 && (
-            <span className="text-[9px] font-mono text-text-muted pl-1 whitespace-nowrap">
-              {formatTimecode(Math.max(0, tick.time)).slice(3)}
-            </span>
-          )}
-        </div>
-      ))}
+      {ticks.map((tick) =>
+        tick.showLabel && tick.time >= 0 ? (
+          <span
+            key={`tick-${tick.time}`}
+            className="absolute top-[9px] text-[11px] font-medium text-fg-muted whitespace-nowrap pointer-events-none"
+            style={{ left: `${tick.time * safePixelsPerSecond + 6}px` }}
+          >
+            {formatTimecode(Math.max(0, tick.time)).slice(3, 8)}
+          </span>
+        ) : null,
+      )}
 
       {visibleBeatMarkers.map((marker) => (
         <div

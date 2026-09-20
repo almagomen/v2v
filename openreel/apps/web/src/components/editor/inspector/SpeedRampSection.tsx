@@ -14,8 +14,12 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
-} from "lucide-react";
-import { Slider } from "@openreel/ui";
+} from "@/icons/lucide-compat";
+import { ToolcraftButton as Button } from "@openreel/ui";
+import { ToolcraftCard as Card } from "@openreel/ui";
+import { ToolcraftIconButton as IconButton } from "@openreel/ui";
+import { ToolcraftText as Text } from "@openreel/ui";
+import { PropertySlider } from "./shell/PropertySlider";
 import { useProjectStore } from "../../../stores/project-store";
 import { useTimelineStore } from "../../../stores/timeline-store";
 import {
@@ -60,10 +64,27 @@ const SpeedCurveCanvas: React.FC<{
   baseSpeed: number;
   onAddKeyframe: (time: number, speed: number) => void;
   onRemoveKeyframe: (id: string) => void;
-}> = ({ keyframes, duration, baseSpeed, onAddKeyframe, onRemoveKeyframe }) => {
+  onMoveKeyframe: (id: string, time: number, speed: number) => void;
+}> = ({
+  keyframes,
+  duration,
+  baseSpeed,
+  onAddKeyframe,
+  onRemoveKeyframe,
+  onMoveKeyframe,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [hoveredKeyframe] = useState<string | null>(null);
-  const [draggingKeyframe] = useState<string | null>(null);
+  const [hoveredKeyframe, setHoveredKeyframe] = useState<string | null>(null);
+  const [draggingKeyframe, setDraggingKeyframe] = useState<string | null>(null);
+  // Track whether a pointer-down resulted in an actual drag (vs a click
+  // intended to add/remove). We only treat it as a drag once the pointer
+  // moves more than a few pixels.
+  const dragStateRef = useRef<{
+    keyframeId: string | null;
+    didDrag: boolean;
+    downX: number;
+    downY: number;
+  }>({ keyframeId: null, didDrag: false, downX: 0, downY: 0 });
 
   const sortedKeyframes = useMemo(() => {
     return [...keyframes].sort((a, b) => a.time - b.time);
@@ -179,51 +200,157 @@ const SpeedCurveCanvas: React.FC<{
     ctx.fillText(`${SPEED_MIN}x`, 2, height - padding + 4);
   }, [sortedKeyframes, duration, baseSpeed, hoveredKeyframe, draggingKeyframe]);
 
-  const handleCanvasClick = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+  // ── Coordinate helpers (shared by mouse handlers and renderer) ──
+  const CANVAS_PADDING = 20;
+  const HIT_RADIUS = 10;
 
+  const canvasToWorld = useCallback(
+    (canvas: HTMLCanvasElement, e: { clientX: number; clientY: number }) => {
       const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const padding = 20;
-      const graphWidth = canvas.width - padding * 2;
-      const graphHeight = canvas.height - padding * 2;
-
-      const time = ((x - padding) / graphWidth) * duration;
-      const normalizedY = (y - padding) / graphHeight;
+      // The canvas has a fixed internal resolution but is rendered at
+      // CSS-determined size; scale mouse coords back into the
+      // canvas-space we drew in.
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const cx = (e.clientX - rect.left) * scaleX;
+      const cy = (e.clientY - rect.top) * scaleY;
+      const graphWidth = canvas.width - CANVAS_PADDING * 2;
+      const graphHeight = canvas.height - CANVAS_PADDING * 2;
+      const time = ((cx - CANVAS_PADDING) / graphWidth) * duration;
+      const normalizedY = (cy - CANVAS_PADDING) / graphHeight;
       const speed = Math.exp(
         Math.log(SPEED_MAX) -
           normalizedY * (Math.log(SPEED_MAX) - Math.log(SPEED_MIN)),
       );
+      return {
+        canvasX: cx,
+        canvasY: cy,
+        time,
+        speed: Math.max(SPEED_MIN, Math.min(SPEED_MAX, speed)),
+      };
+    },
+    [duration],
+  );
 
-      if (
-        time >= 0 &&
-        time <= duration &&
-        speed >= SPEED_MIN &&
-        speed <= SPEED_MAX
-      ) {
-        const clickedKf = sortedKeyframes.find((kf) => {
-          const kfX = padding + (kf.time / duration) * graphWidth;
-          const kfY =
-            padding +
-            graphHeight *
-              (1 -
-                (Math.log(kf.speed) - Math.log(SPEED_MIN)) /
-                  (Math.log(SPEED_MAX) - Math.log(SPEED_MIN)));
-          return Math.abs(x - kfX) < 10 && Math.abs(y - kfY) < 10;
-        });
+  const findKeyframeAt = useCallback(
+    (canvas: HTMLCanvasElement, canvasX: number, canvasY: number) => {
+      const graphWidth = canvas.width - CANVAS_PADDING * 2;
+      const graphHeight = canvas.height - CANVAS_PADDING * 2;
+      return sortedKeyframes.find((kf) => {
+        const kfX = CANVAS_PADDING + (kf.time / duration) * graphWidth;
+        const kfY =
+          CANVAS_PADDING +
+          graphHeight *
+            (1 -
+              (Math.log(kf.speed) - Math.log(SPEED_MIN)) /
+                (Math.log(SPEED_MAX) - Math.log(SPEED_MIN)));
+        return Math.abs(canvasX - kfX) < HIT_RADIUS && Math.abs(canvasY - kfY) < HIT_RADIUS;
+      });
+    },
+    [sortedKeyframes, duration],
+  );
 
-        if (clickedKf) {
-          onRemoveKeyframe(clickedKf.id);
-        } else {
-          onAddKeyframe(time, Math.max(SPEED_MIN, Math.min(SPEED_MAX, speed)));
-        }
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const { canvasX, canvasY } = canvasToWorld(canvas, e);
+      const kf = findKeyframeAt(canvas, canvasX, canvasY);
+      dragStateRef.current = {
+        keyframeId: kf?.id ?? null,
+        didDrag: false,
+        downX: e.clientX,
+        downY: e.clientY,
+      };
+      if (kf) {
+        setDraggingKeyframe(kf.id);
       }
     },
-    [duration, sortedKeyframes, onAddKeyframe, onRemoveKeyframe],
+    [canvasToWorld, findKeyframeAt],
   );
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const { canvasX, canvasY, time, speed } = canvasToWorld(canvas, e);
+
+      // Update hover for cursor feedback (regardless of drag state).
+      if (!dragStateRef.current.keyframeId) {
+        const hit = findKeyframeAt(canvas, canvasX, canvasY);
+        setHoveredKeyframe(hit?.id ?? null);
+      }
+
+      // If we're actively dragging a keyframe, move it.
+      if (dragStateRef.current.keyframeId) {
+        const dx = Math.abs(e.clientX - dragStateRef.current.downX);
+        const dy = Math.abs(e.clientY - dragStateRef.current.downY);
+        if (dx > 3 || dy > 3) dragStateRef.current.didDrag = true;
+        const clampedTime = Math.max(0, Math.min(duration, time));
+        onMoveKeyframe(dragStateRef.current.keyframeId, clampedTime, speed);
+      }
+    },
+    [canvasToWorld, findKeyframeAt, duration, onMoveKeyframe],
+  );
+
+  const handleMouseUp = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const state = dragStateRef.current;
+      const { canvasX, canvasY, time, speed } = canvasToWorld(canvas, e);
+
+      if (state.keyframeId) {
+        // Released on a keyframe. If user clicked without dragging
+        // we interpret it as "remove that keyframe". A drag commits
+        // the new position (already applied via mousemove).
+        if (!state.didDrag) {
+          onRemoveKeyframe(state.keyframeId);
+        }
+      } else {
+        // Released over empty space — add a new keyframe at the
+        // pointer position, but only on click (no drag scrub).
+        const dx = Math.abs(e.clientX - state.downX);
+        const dy = Math.abs(e.clientY - state.downY);
+        if (
+          dx < 4 &&
+          dy < 4 &&
+          time >= 0 &&
+          time <= duration &&
+          canvasX >= CANVAS_PADDING &&
+          canvasX <= canvas.width - CANVAS_PADDING &&
+          canvasY >= CANVAS_PADDING &&
+          canvasY <= canvas.height - CANVAS_PADDING
+        ) {
+          onAddKeyframe(time, speed);
+        }
+      }
+
+      dragStateRef.current = {
+        keyframeId: null,
+        didDrag: false,
+        downX: 0,
+        downY: 0,
+      };
+      setDraggingKeyframe(null);
+    },
+    [canvasToWorld, duration, onAddKeyframe, onRemoveKeyframe],
+  );
+
+  const handleMouseLeave = useCallback(() => {
+    // If the user drags off the canvas, treat as a commit at the last
+    // known position (mousemove already updated it).
+    if (dragStateRef.current.keyframeId) {
+      dragStateRef.current = {
+        keyframeId: null,
+        didDrag: false,
+        downX: 0,
+        downY: 0,
+      };
+      setDraggingKeyframe(null);
+    }
+    setHoveredKeyframe(null);
+  }, []);
 
   return (
     <div className="relative">
@@ -231,11 +358,20 @@ const SpeedCurveCanvas: React.FC<{
         ref={canvasRef}
         width={280}
         height={120}
-        onClick={handleCanvasClick}
-        className="w-full rounded-lg border border-border cursor-crosshair"
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+        className={`w-full rounded-lg border border-border ${
+          draggingKeyframe
+            ? "cursor-grabbing"
+            : hoveredKeyframe
+              ? "cursor-grab"
+              : "cursor-crosshair"
+        }`}
       />
-      <div className="absolute bottom-1 right-1 text-[8px] text-text-muted">
-        Click to add/remove keyframes
+      <div className="absolute bottom-1 right-1 text-[8px] text-fg-3 pointer-events-none">
+        Click to add • Drag to move • Click a point to remove
       </div>
     </div>
   );
@@ -265,9 +401,20 @@ export const SpeedRampSection: React.FC<SpeedRampSectionProps> = ({ clip }) => {
   const handleSpeedChange = useCallback(
     (speed: number) => {
       speedEngine.setClipSpeed(clip.id, speed, clip.duration);
-      useProjectStore.setState((state) => ({
-        project: { ...state.project, modifiedAt: Date.now() },
-      }));
+      {
+        const rampData = speedEngine.getClipSpeedData(clip.id);
+        void useProjectStore.getState().executeAction({
+          type: "speed/setRampData",
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          params: {
+            clipId: clip.id,
+            keyframes: rampData?.keyframes,
+            freezeFrames: rampData?.freezeFrames,
+            pitchCorrection: rampData?.pitchCorrection,
+          },
+        });
+      }
     },
     [clip.id, clip.duration, speedEngine],
   );
@@ -289,9 +436,20 @@ export const SpeedRampSection: React.FC<SpeedRampSectionProps> = ({ clip }) => {
   const handleAddKeyframe = useCallback(
     (time: number, speed: number) => {
       speedEngine.addSpeedKeyframe(clip.id, time, speed, "ease-in-out");
-      useProjectStore.setState((state) => ({
-        project: { ...state.project, modifiedAt: Date.now() },
-      }));
+      {
+        const rampData = speedEngine.getClipSpeedData(clip.id);
+        void useProjectStore.getState().executeAction({
+          type: "speed/setRampData",
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          params: {
+            clipId: clip.id,
+            keyframes: rampData?.keyframes,
+            freezeFrames: rampData?.freezeFrames,
+            pitchCorrection: rampData?.pitchCorrection,
+          },
+        });
+      }
     },
     [clip.id, speedEngine],
   );
@@ -299,9 +457,41 @@ export const SpeedRampSection: React.FC<SpeedRampSectionProps> = ({ clip }) => {
   const handleRemoveKeyframe = useCallback(
     (keyframeId: string) => {
       speedEngine.removeSpeedKeyframe(clip.id, keyframeId);
-      useProjectStore.setState((state) => ({
-        project: { ...state.project, modifiedAt: Date.now() },
-      }));
+      {
+        const rampData = speedEngine.getClipSpeedData(clip.id);
+        void useProjectStore.getState().executeAction({
+          type: "speed/setRampData",
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          params: {
+            clipId: clip.id,
+            keyframes: rampData?.keyframes,
+            freezeFrames: rampData?.freezeFrames,
+            pitchCorrection: rampData?.pitchCorrection,
+          },
+        });
+      }
+    },
+    [clip.id, speedEngine],
+  );
+
+  const handleMoveKeyframe = useCallback(
+    (keyframeId: string, time: number, speed: number) => {
+      speedEngine.updateSpeedKeyframe(clip.id, keyframeId, { time, speed });
+      {
+        const rampData = speedEngine.getClipSpeedData(clip.id);
+        void useProjectStore.getState().executeAction({
+          type: "speed/setRampData",
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          params: {
+            clipId: clip.id,
+            keyframes: rampData?.keyframes,
+            freezeFrames: rampData?.freezeFrames,
+            pitchCorrection: rampData?.pitchCorrection,
+          },
+        });
+      }
     },
     [clip.id, speedEngine],
   );
@@ -313,18 +503,40 @@ export const SpeedRampSection: React.FC<SpeedRampSectionProps> = ({ clip }) => {
 
     if (relativeTime >= 0 && relativeTime <= clip.duration) {
       speedEngine.createFreezeFrame(clip.id, relativeTime, relativeTime, 2);
-      useProjectStore.setState((state) => ({
-        project: { ...state.project, modifiedAt: Date.now() },
-      }));
+      {
+        const rampData = speedEngine.getClipSpeedData(clip.id);
+        void useProjectStore.getState().executeAction({
+          type: "speed/setRampData",
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          params: {
+            clipId: clip.id,
+            keyframes: rampData?.keyframes,
+            freezeFrames: rampData?.freezeFrames,
+            pitchCorrection: rampData?.pitchCorrection,
+          },
+        });
+      }
     }
   }, [clip.id, clip.startTime, clip.duration, speedEngine, playheadPosition]);
 
   const handleRemoveFreezeFrame = useCallback(
     (freezeId: string) => {
       speedEngine.removeFreezeFrame(clip.id, freezeId);
-      useProjectStore.setState((state) => ({
-        project: { ...state.project, modifiedAt: Date.now() },
-      }));
+      {
+        const rampData = speedEngine.getClipSpeedData(clip.id);
+        void useProjectStore.getState().executeAction({
+          type: "speed/setRampData",
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          params: {
+            clipId: clip.id,
+            keyframes: rampData?.keyframes,
+            freezeFrames: rampData?.freezeFrames,
+            pitchCorrection: rampData?.pitchCorrection,
+          },
+        });
+      }
     },
     [clip.id, speedEngine],
   );
@@ -342,9 +554,20 @@ export const SpeedRampSection: React.FC<SpeedRampSectionProps> = ({ clip }) => {
       }
 
       setShowCurve(true);
-      useProjectStore.setState((state) => ({
-        project: { ...state.project, modifiedAt: Date.now() },
-      }));
+      {
+        const rampData = speedEngine.getClipSpeedData(clip.id);
+        void useProjectStore.getState().executeAction({
+          type: "speed/setRampData",
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          params: {
+            clipId: clip.id,
+            keyframes: rampData?.keyframes,
+            freezeFrames: rampData?.freezeFrames,
+            pitchCorrection: rampData?.pitchCorrection,
+          },
+        });
+      }
     },
     [clip.id, clip.duration, keyframes, speedEngine],
   );
@@ -371,105 +594,92 @@ export const SpeedRampSection: React.FC<SpeedRampSectionProps> = ({ clip }) => {
 
   return (
     <div className="space-y-3">
-      <div className="p-2 bg-background-tertiary rounded-lg border border-border">
-        <p className="text-[10px] text-text-muted">
+      <Card variant="muted" padding={2} className="border border-border">
+        <Text type="supporting" color="secondary" className="text-[10px]">
           Effective duration: {formatDuration(effectiveDuration)}
-        </p>
-      </div>
+        </Text>
+      </Card>
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-medium text-text-secondary">
-            Playback Speed
-          </span>
-          <span className="text-[10px] font-mono text-primary">
-            {currentSpeed.toFixed(2)}x
-          </span>
-        </div>
-        <Slider
+        <PropertySlider
+          label="Playback Speed"
           min={Math.log(SPEED_MIN)}
           max={Math.log(SPEED_MAX)}
           step={0.01}
-          value={[Math.log(currentSpeed)]}
-          onValueChange={(value) => handleSpeedChange(Math.exp(value[0]))}
+          value={Math.log(currentSpeed)}
+          onChange={(value: number) => handleSpeedChange(Math.exp(value))}
+          formatValue={() => `${currentSpeed.toFixed(2)}x`}
         />
-        <div className="flex justify-between text-[8px] text-text-muted">
-          <span>0.1x</span>
-          <span>1x</span>
-          <span>20x</span>
+        <div className="flex justify-between">
+          <Text type="supporting" color="secondary" className="text-[8px]">0.1x</Text>
+          <Text type="supporting" color="secondary" className="text-[8px]">1x</Text>
+          <Text type="supporting" color="secondary" className="text-[8px]">20x</Text>
         </div>
       </div>
 
       <div className="grid grid-cols-4 gap-1">
         {SPEED_PRESETS.map((preset) => (
-          <button
+          <Button
             key={preset.id}
+            label={preset.name}
+            variant={Math.abs(currentSpeed - preset.speed) < 0.01 ? "primary" : "secondary"}
+            size="sm"
             onClick={() => handleSpeedChange(preset.speed)}
-            className={`py-1.5 px-2 text-[9px] rounded-lg border transition-colors ${
-              Math.abs(currentSpeed - preset.speed) < 0.01
-                ? "bg-primary/20 border-primary text-primary"
-                : "bg-background-tertiary border-border text-text-secondary hover:border-primary/50"
-            }`}
-          >
-            {preset.name}
-          </button>
+            className="text-[9px]"
+          />
         ))}
       </div>
 
       <div className="flex gap-2">
-        <button
+        <Button
+          label="Reverse"
+          icon={<RotateCcw size={12} aria-hidden />}
+          variant={isReverse ? "primary" : "secondary"}
+          size="sm"
           onClick={handleReverseToggle}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] rounded-lg border transition-colors ${
-            isReverse
-              ? "bg-primary/20 border-primary text-primary"
-              : "bg-background-tertiary border-border text-text-secondary hover:border-primary/50"
-          }`}
-        >
-          <RotateCcw size={12} />
-          Reverse
-        </button>
-        <button
+          className="flex-1"
+        />
+        <Button
+          label="Pitch Correct"
+          variant={pitchCorrection ? "primary" : "secondary"}
+          size="sm"
           onClick={handlePitchCorrectionToggle}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] rounded-lg border transition-colors ${
-            pitchCorrection
-              ? "bg-primary/20 border-primary text-primary"
-              : "bg-background-tertiary border-border text-text-secondary hover:border-primary/50"
-          }`}
-        >
-          Pitch Correct
-        </button>
+          className="flex-1"
+        />
       </div>
 
       <div className="space-y-1.5">
-        <span className="text-[10px] font-medium text-text-secondary">
+        <Text type="supporting" color="secondary" weight="bold" className="text-[10px]">
           Speed Curve Presets
-        </span>
+        </Text>
         <div className="grid grid-cols-2 gap-1">
           {SPEED_CURVE_PRESETS.map((preset) => (
-            <button
+            <Button
               key={preset.id}
+              label={preset.name}
+              variant="secondary"
+              size="sm"
               onClick={() => handleApplyCurvePreset(preset.id)}
-              className="py-1.5 px-2 text-[9px] rounded-lg border bg-background-tertiary border-border text-text-secondary hover:border-primary/50 hover:text-primary transition-colors text-left"
-              title={preset.description}
-            >
-              {preset.name}
-            </button>
+              className="justify-start text-[9px]"
+            />
           ))}
         </div>
       </div>
 
-      <button
+      <Button
+        label={`Speed Ramping${keyframes.length > 0 ? ` (${keyframes.length} keyframes)` : ""}`}
+        icon={
+          showCurve ? (
+            <ChevronDown size={12} aria-hidden />
+          ) : (
+            <ChevronRight size={12} aria-hidden />
+          )
+        }
+        variant="ghost"
+        size="sm"
         onClick={() => setShowCurve(!showCurve)}
-        className="w-full flex items-center gap-2 py-2 text-[10px] text-text-secondary hover:text-text-primary transition-colors"
-      >
-        {showCurve ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <span className="font-medium">Speed Ramping</span>
-        {keyframes.length > 0 && (
-          <span className="ml-auto text-[9px] text-primary">
-            {keyframes.length} keyframes
-          </span>
-        )}
-      </button>
+        className="w-full justify-start"
+      />
 
       {showCurve && (
         <div className="space-y-2">
@@ -479,93 +689,108 @@ export const SpeedRampSection: React.FC<SpeedRampSectionProps> = ({ clip }) => {
             baseSpeed={currentSpeed}
             onAddKeyframe={handleAddKeyframe}
             onRemoveKeyframe={handleRemoveKeyframe}
+            onMoveKeyframe={handleMoveKeyframe}
           />
 
           {keyframes.length > 0 && (
             <div className="space-y-1 max-h-24 overflow-y-auto">
               {keyframes.map((kf, index) => (
-                <div
+                <Card
                   key={kf.id}
-                  className="flex items-center gap-2 p-1.5 bg-background-tertiary rounded text-[9px]"
+                  variant="muted"
+                  padding={2}
+                  className="flex items-center gap-2"
                 >
-                  <span className="text-text-muted">#{index + 1}</span>
-                  <span className="text-text-secondary">
+                  <Text type="supporting" color="secondary" className="text-[9px]">
+                    #{index + 1}
+                  </Text>
+                  <Text type="supporting" color="secondary" className="text-[9px]">
                     {kf.time.toFixed(2)}s
-                  </span>
-                  <span className="text-primary font-mono">
+                  </Text>
+                  <Text type="supporting" color="primary" className="text-[9px] font-mono">
                     {kf.speed.toFixed(2)}x
-                  </span>
-                  <button
+                  </Text>
+                  <IconButton
+                    label="Remove speed keyframe"
+                    icon={<Trash2 size={10} aria-hidden />}
+                    variant="ghost"
+                    size="sm"
                     onClick={() => handleRemoveKeyframe(kf.id)}
-                    className="ml-auto p-0.5 text-text-muted hover:text-red-400"
-                  >
-                    <Trash2 size={10} />
-                  </button>
-                </div>
+                    className="ml-auto text-fg-3 hover:text-red-400"
+                  />
+                </Card>
               ))}
             </div>
           )}
         </div>
       )}
 
-      <button
+      <Button
+        label={`Freeze Frames${freezeFrames.length > 0 ? ` (${freezeFrames.length} freeze)` : ""}`}
+        icon={
+          isExpanded ? (
+            <ChevronDown size={12} aria-hidden />
+          ) : (
+            <ChevronRight size={12} aria-hidden />
+          )
+        }
+        variant="ghost"
+        size="sm"
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2 py-2 text-[10px] text-text-secondary hover:text-text-primary transition-colors"
-      >
-        {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <span className="font-medium">Freeze Frames</span>
-        {freezeFrames.length > 0 && (
-          <span className="ml-auto text-[9px] text-primary">
-            {freezeFrames.length} freeze
-          </span>
-        )}
-      </button>
+        className="w-full justify-start"
+      />
 
       {isExpanded && (
         <div className="space-y-2">
-          <button
+          <Button
+            label="Add Freeze Frame at Playhead"
+            icon={<Pause size={12} aria-hidden />}
+            variant="primary"
+            size="sm"
             onClick={handleCreateFreezeFrame}
-            className="w-full flex items-center justify-center gap-1.5 py-2 text-[10px] bg-primary/20 border border-primary/30 text-primary rounded-lg hover:bg-primary/20 transition-colors"
-          >
-            <Pause size={12} />
-            Add Freeze Frame at Playhead
-          </button>
+            className="w-full"
+          />
 
           {freezeFrames.length > 0 && (
             <div className="space-y-1 max-h-24 overflow-y-auto">
               {freezeFrames.map((ff) => (
-                <div
+                <Card
                   key={ff.id}
-                  className="flex items-center gap-2 p-1.5 bg-background-tertiary rounded text-[9px]"
+                  variant="muted"
+                  padding={2}
+                  className="flex items-center gap-2"
                 >
-                  <Pause size={10} className="text-primary" />
-                  <span className="text-text-secondary">
+                  <Pause size={10} className="text-primary" aria-hidden />
+                  <Text type="supporting" color="secondary" className="text-[9px]">
                     {ff.startTime.toFixed(2)}s
-                  </span>
-                  <span className="text-text-muted">for</span>
-                  <span className="text-primary font-mono">
+                  </Text>
+                  <Text type="supporting" color="secondary" className="text-[9px]">for</Text>
+                  <Text type="supporting" color="primary" className="text-[9px] font-mono">
                     {ff.duration.toFixed(1)}s
-                  </span>
-                  <button
+                  </Text>
+                  <IconButton
+                    label="Remove freeze frame"
+                    icon={<Trash2 size={10} aria-hidden />}
+                    variant="ghost"
+                    size="sm"
                     onClick={() => handleRemoveFreezeFrame(ff.id)}
-                    className="ml-auto p-0.5 text-text-muted hover:text-red-400"
-                  >
-                    <Trash2 size={10} />
-                  </button>
-                </div>
+                    className="ml-auto text-fg-3 hover:text-red-400"
+                  />
+                </Card>
               ))}
             </div>
           )}
         </div>
       )}
 
-      <button
+      <Button
+        label="Reset Speed & Effects"
+        icon={<RotateCcw size={12} aria-hidden />}
+        variant="secondary"
+        size="sm"
         onClick={handleReset}
-        className="w-full flex items-center justify-center gap-1.5 py-2 text-[10px] bg-background-tertiary border border-border text-text-secondary rounded-lg hover:border-red-500/50 hover:text-red-400 transition-colors"
-      >
-        <RotateCcw size={12} />
-        Reset Speed & Effects
-      </button>
+        className="w-full text-red-400"
+      />
     </div>
   );
 };

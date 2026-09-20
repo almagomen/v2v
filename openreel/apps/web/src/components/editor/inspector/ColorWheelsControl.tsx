@@ -1,5 +1,8 @@
 import React, { useCallback, useRef, useMemo } from "react";
-import { RotateCcw } from "lucide-react";
+import { ToolcraftButton as Button } from "@openreel/ui";
+import { ToolcraftText as Text } from "@openreel/ui";
+import { RotateCcw } from "@/icons/lucide-compat";
+import { PropertySlider } from "./shell/PropertySlider";
 import type { ColorWheelValues } from "@openreel/core";
 
 export const DEFAULT_COLOR_WHEEL_VALUES: ColorWheelValues = {
@@ -33,43 +36,21 @@ const LGGSlider: React.FC<{
   defaultValue: number;
   step?: number;
 }> = ({ label, value, onChange, min, max, defaultValue, step = 0.01 }) => {
-  const percentage = ((value - min) / (max - min)) * 100;
-
   const handleDoubleClick = useCallback(() => {
     onChange(defaultValue);
   }, [onChange, defaultValue]);
 
   return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] text-text-secondary">{label}</span>
-        <span
-          className="text-[10px] font-mono text-text-primary cursor-pointer hover:text-accent"
-          onDoubleClick={handleDoubleClick}
-          title="Double-click to reset"
-        >
-          {value.toFixed(2)}
-        </span>
-      </div>
-      <div className="h-1.5 bg-background-tertiary rounded-full relative overflow-hidden">
-        <input
-          type="range"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          onChange={(e) => onChange(parseFloat(e.target.value))}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-        />
-        <div
-          className="absolute top-0 left-0 h-full bg-text-secondary rounded-full transition-all"
-          style={{ width: `${percentage}%` }}
-        />
-        <div
-          className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-white rounded-full shadow-sm pointer-events-none transition-all"
-          style={{ left: `calc(${percentage}% - 5px)` }}
-        />
-      </div>
+    <div onDoubleClick={handleDoubleClick}>
+      <PropertySlider
+        label={label}
+        value={value}
+        onChange={onChange}
+        min={min}
+        max={max}
+        step={step}
+        formatValue={(nextValue) => nextValue.toFixed(2)}
+      />
     </div>
   );
 };
@@ -98,8 +79,8 @@ const ColorWheel: React.FC<ColorWheelProps> = ({
     const angle = Math.atan2(y, x);
 
     return {
-      x: Math.cos(angle) * saturation * 28,
-      y: Math.sin(angle) * saturation * 28,
+      x: Math.cos(angle) * saturation * 44,
+      y: Math.sin(angle) * saturation * 44,
       saturation: Math.min(saturation, 1),
     };
   }, [color.r, color.b]);
@@ -158,13 +139,13 @@ const ColorWheel: React.FC<ColorWheelProps> = ({
   }, [onReset]);
 
   return (
-    <div className="flex flex-col items-center gap-1.5">
-      <span className="text-[9px] text-text-muted uppercase tracking-wider font-medium">
+    <div className="flex flex-col items-center gap-2">
+      <Text type="supporting" color="secondary" className="text-[10px] uppercase tracking-wider font-medium">
         {label}
-      </span>
+      </Text>
       <div
         ref={wheelRef}
-        className="w-16 h-16 rounded-full relative cursor-crosshair shadow-inner"
+        className="w-24 h-24 rounded-full relative cursor-crosshair shadow-inner"
         style={{
           background: `conic-gradient(
  from 90deg,
@@ -191,10 +172,10 @@ const ColorWheel: React.FC<ColorWheelProps> = ({
         />
         {/* Indicator dot */}
         <div
-          className="absolute w-3 h-3 border-2 border-white rounded-full shadow-md pointer-events-none z-10"
+          className="absolute w-4 h-4 border-2 border-white rounded-full shadow-md pointer-events-none z-10"
           style={{
-            left: `calc(50% + ${getPositionFromColor.x}px - 6px)`,
-            top: `calc(50% + ${getPositionFromColor.y}px - 6px)`,
+            left: `calc(50% + ${getPositionFromColor.x}px - 8px)`,
+            top: `calc(50% + ${getPositionFromColor.y}px - 8px)`,
             backgroundColor:
               getPositionFromColor.saturation > 0.1
                 ? `rgb(${128 + color.r * 127}, ${128 + color.g * 127}, ${
@@ -282,13 +263,14 @@ export const ColorWheelsControl: React.FC<ColorWheelsControlProps> = ({
       {/* Reset All Button */}
       {onReset && (
         <div className="flex justify-end">
-          <button
+          <Button
+            label="Reset"
+            icon={<RotateCcw size={10} />}
+            variant="ghost"
+            size="sm"
             onClick={onReset}
-            className="flex items-center gap-1 px-2 py-1 text-[10px] text-text-muted hover:text-text-primary transition-colors"
-          >
-            <RotateCcw size={10} />
-            Reset
-          </button>
+            className="flex items-center gap-1 px-2 py-1 text-[10px] text-fg-3 hover:text-fg transition-colors"
+          />
         </div>
       )}
 

@@ -1,7 +1,15 @@
-import { describe, it, expect } from "vitest";
-import { getAnimatedTransform } from "./canvas-renderers";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  drawFrameWithTransform,
+  getAnimatedTransform,
+  renderTextClipToCanvas,
+} from "./canvas-renderers";
 import { DEFAULT_TRANSFORM, type ClipTransform } from "./types";
-import type { Keyframe } from "@openreel/core";
+import { titleEngine, type Keyframe, type TextClip } from "@openreel/core";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("getAnimatedTransform", () => {
   const baseTransform: ClipTransform = {
@@ -86,6 +94,105 @@ describe("Transform Coordinate System", () => {
       const transform = { ...DEFAULT_TRANSFORM, position: { x: -100, y: 0 } };
       expect(transform.position.x).toBe(-100);
     });
+  });
+});
+
+describe("drawFrameWithTransform crop fitting", () => {
+  const createContext = () =>
+    ({
+      save: vi.fn(),
+      restore: vi.fn(),
+      translate: vi.fn(),
+      rotate: vi.fn(),
+      scale: vi.fn(),
+      drawImage: vi.fn(),
+      beginPath: vi.fn(),
+      roundRect: vi.fn(),
+      clip: vi.fn(),
+      globalAlpha: 1,
+      filter: "none",
+    }) as unknown as CanvasRenderingContext2D;
+
+  const croppedTransform: ClipTransform = {
+    ...DEFAULT_TRANSFORM,
+    crop: { x: 0.25, y: 0, width: 0.5, height: 1 },
+  };
+
+  it("honors cover using the cropped source aspect ratio", () => {
+    const context = createContext();
+    const frame = document.createElement("canvas");
+    frame.width = 1920;
+    frame.height = 1080;
+
+    drawFrameWithTransform(
+      context,
+      frame,
+      { ...croppedTransform, fitMode: "cover" },
+      1080,
+      1920,
+    );
+
+    const args = vi.mocked(context.drawImage).mock.calls[0];
+    expect(args.slice(0, 5)).toEqual([frame, 480, 0, 960, 1080]);
+    expect(args[5]).toBeCloseTo(-853.333, 3);
+    expect(args[6]).toBe(-960);
+    expect(args[7]).toBeCloseTo(1706.667, 3);
+    expect(args[8]).toBe(1920);
+  });
+
+  it("honors stretch after cropping", () => {
+    const context = createContext();
+    const frame = document.createElement("canvas");
+    frame.width = 1920;
+    frame.height = 1080;
+
+    drawFrameWithTransform(
+      context,
+      frame,
+      { ...croppedTransform, fitMode: "stretch" },
+      1080,
+      1920,
+    );
+
+    expect(vi.mocked(context.drawImage)).toHaveBeenCalledWith(
+      frame,
+      480,
+      0,
+      960,
+      1080,
+      -540,
+      -960,
+      1080,
+      1920,
+    );
+  });
+
+  it("keeps lower layers visible around a scaled contained video frame", () => {
+    const context = createContext();
+    const videoFrame = document.createElement("canvas");
+    videoFrame.width = 640;
+    videoFrame.height = 480;
+
+    drawFrameWithTransform(
+      context,
+      videoFrame,
+      {
+        ...DEFAULT_TRANSFORM,
+        scale: { x: 0.6, y: 0.6 },
+        fitMode: "contain",
+      },
+      1920,
+      1080,
+    );
+
+    expect(vi.mocked(context.scale)).toHaveBeenCalledWith(0.6, 0.6);
+    expect(vi.mocked(context.drawImage)).toHaveBeenCalledWith(
+      videoFrame,
+      -720,
+      -540,
+      1440,
+      1080,
+    );
   });
 });
 
@@ -182,5 +289,68 @@ describe("Playback Transform Consistency", () => {
     expect(correctClipLocalTime).toBe(1);
     expect(incorrectClipLocalTime).toBe(2);
     expect(correctClipLocalTime).not.toBe(incorrectClipLocalTime);
+  });
+});
+
+describe("text preview/export renderer parity", () => {
+  it("routes Paper-shader text through the shared title renderer", () => {
+    const renderedCanvas = document.createElement("canvas");
+    const renderText = vi.spyOn(titleEngine, "renderText").mockReturnValue({
+      canvas: renderedCanvas,
+      width: 1920,
+      height: 1080,
+      textMetrics: { width: 100, height: 40, lines: [] },
+    });
+    const drawImage = vi.fn();
+    const clip: TextClip = {
+      id: "paper-text",
+      trackId: "text-track",
+      startTime: 2,
+      duration: 5,
+      text: "Paper title",
+      style: {
+        fontFamily: "Inter",
+        fontSize: 72,
+        fontWeight: 700,
+        fontStyle: "normal",
+        color: "#ffffff",
+        textAlign: "center",
+        verticalAlign: "middle",
+        lineHeight: 1.2,
+        letterSpacing: 0,
+        shader: {
+          shaderId: "paper-mesh-gradient",
+          params: {
+            color1: "#e0eaff",
+            color2: "#241d9a",
+          },
+        },
+      },
+      transform: {
+        position: { x: 0.5, y: 0.5 },
+        scale: { x: 1, y: 1 },
+        rotation: 0,
+        anchor: { x: 0.5, y: 0.5 },
+        opacity: 1,
+      },
+      keyframes: [],
+    };
+
+    renderTextClipToCanvas(
+      { drawImage } as unknown as CanvasRenderingContext2D,
+      clip,
+      1920,
+      1080,
+      3.25,
+    );
+
+    expect(renderText).toHaveBeenCalledWith(clip, 1920, 1080, 1.25);
+    expect(drawImage).toHaveBeenCalledWith(
+      renderedCanvas,
+      0,
+      0,
+      1920,
+      1080,
+    );
   });
 });
