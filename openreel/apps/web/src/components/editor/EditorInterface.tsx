@@ -16,10 +16,6 @@ import { useProjectStore } from "../../stores/project-store";
 import { useUIStore } from "../../stores/ui-store";
 import { useEngineStore } from "../../stores/engine-store";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
-import { ListChecks, X } from "lucide-react";
-import { useV2VStore } from "../../stores/v2v-store";
-import { folderNameFromTitle } from "../../utils/v2v-utils";
-import { V2VSegmentBulkEditor } from "./v2v/V2VSegmentBulkEditor";
 import {
   initializePlaybackBridge,
   disposePlaybackBridge,
@@ -231,40 +227,6 @@ export const EditorInterface: React.FC = () => {
   } = useUIStore();
   const { project, updateClipKeyframes } = useProjectStore();
   const tracks = project.timeline.tracks;
-
-  const {
-    bulkEditorOpen,
-    setBulkEditorOpen,
-    selectedVideoIndex,
-    jobId,
-    videos,
-    getFolderRef,
-    translateLang,
-  } = useV2VStore();
-
-  const effectiveDropdownValue = React.useMemo(() => {
-    for (let i = 0; i < videos.length; i++) {
-      const v = videos[i] as any;
-      const projectTitle = folderNameFromTitle(v.output_name || `video_${v.index}`);
-      if (project.name === projectTitle) return i;
-    }
-    return -1;
-  }, [videos, project.name]);
-
-  const bulkEditorContext = React.useMemo(() => {
-    const videoIdx =
-      effectiveDropdownValue >= 0 ? effectiveDropdownValue : (selectedVideoIndex >= 0 ? selectedVideoIndex : 0);
-    if (!jobId || videoIdx < 0 || !videos[videoIdx]) return null;
-    const v = videos[videoIdx] as { index: number; output_name?: string; url?: string };
-    const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
-    if (!getFolderRef(folder)) return null;
-    return {
-      jobId,
-      videoIndex: v.index,
-      folder,
-      targetLang: translateLang === "None" ? null : translateLang,
-    };
-  }, [jobId, selectedVideoIndex, effectiveDropdownValue, videos, getFolderRef, translateLang]);
 
   const [selectedKeyframeIds, setSelectedKeyframeIds] = React.useState<string[]>([]);
   const [copiedKeyframes, setCopiedKeyframes] = React.useState<
@@ -643,41 +605,6 @@ export const EditorInterface: React.FC = () => {
         isOpen={showShortcutsOverlay}
         onClose={() => setShowShortcutsOverlay(false)}
       />
-
-      {bulkEditorOpen && bulkEditorContext && (
-        <div 
-          className="fixed inset-4 z-50 max-w-4xl mx-auto bg-bg-1 border border-border shadow-2xl rounded-xl flex flex-col overflow-hidden"
-        >
-          {/* Header */}
-          <div className="px-6 pt-5 pb-3 space-y-1 shrink-0 text-left border-b border-border relative">
-            <h3 className="flex items-center gap-2 text-base font-semibold text-fg">
-              <ListChecks size={18} className="text-accent" />
-              Editar segmentos V2V
-            </h3>
-            <p className="text-xs text-fg-muted">
-              Texto STT original frente al TTS, retraducción con Gemini y aplicar regeneración al timeline.
-            </p>
-            <button
-              type="button"
-              onClick={() => setBulkEditorOpen(false)}
-              className="absolute right-4 top-4 p-1.5 rounded-lg hover:bg-bg-2 text-fg-muted hover:text-fg transition-colors"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          {/* Content */}
-          <div className="px-6 py-4 overflow-y-auto min-h-0 flex-1">
-            <V2VSegmentBulkEditor
-              jobId={bulkEditorContext.jobId}
-              videoIndex={bulkEditorContext.videoIndex}
-              folder={bulkEditorContext.folder}
-              targetLang={bulkEditorContext.targetLang}
-              hideTitle
-              inDialog
-            />
-          </div>
-        </div>
-      )}
 
       <SpotlightTour />
       <MoGraphTour />

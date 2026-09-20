@@ -9,7 +9,9 @@ import { useProjectStore } from "../../stores/project-store";
 import { useUIStore } from "../../stores/ui-store";
 import { useV2VStore } from "../../stores/v2v-store";
 import { V2VPanel } from "./V2VPanel";
-import { Youtube } from "lucide-react";
+import { Youtube, ListChecks } from "lucide-react";
+import { folderNameFromTitle } from "../../utils/v2v-utils";
+import { V2VSegmentBulkEditor } from "./v2v/V2VSegmentBulkEditor";
 import { useRouter } from "../../hooks/use-router";
 import {
   getExportEngine,
@@ -67,7 +69,41 @@ export const Toolbar: React.FC = () => {
     openModal,
     closeModal,
   } = useUIStore();
-  const { isV2VOpen, setIsV2VOpen } = useV2VStore();
+  const {
+    isV2VOpen,
+    setIsV2VOpen,
+    bulkEditorOpen,
+    setBulkEditorOpen,
+    selectedVideoIndex,
+    jobId,
+    videos,
+    getFolderRef,
+    translateLang,
+  } = useV2VStore();
+
+  const effectiveDropdownValue = React.useMemo(() => {
+    for (let i = 0; i < videos.length; i++) {
+      const v = videos[i] as any;
+      const projectTitle = folderNameFromTitle(v.output_name || `video_${v.index}`);
+      if (project.name === projectTitle) return i;
+    }
+    return -1;
+  }, [videos, project.name]);
+
+  const bulkEditorContext = React.useMemo(() => {
+    const videoIdx =
+      effectiveDropdownValue >= 0 ? effectiveDropdownValue : (selectedVideoIndex >= 0 ? selectedVideoIndex : 0);
+    if (!jobId || videoIdx < 0 || !videos[videoIdx]) return null;
+    const v = videos[videoIdx] as { index: number; output_name?: string; url?: string };
+    const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
+    if (!getFolderRef(folder)) return null;
+    return {
+      jobId,
+      videoIndex: v.index,
+      folder,
+      targetLang: translateLang === "None" ? null : translateLang,
+    };
+  }, [jobId, selectedVideoIndex, effectiveDropdownValue, videos, getFolderRef, translateLang]);
   const { navigate } = useRouter();
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
@@ -679,6 +715,44 @@ export const Toolbar: React.FC = () => {
             </div>
           </div>
         </>
+      )}
+
+      {bulkEditorOpen && bulkEditorContext && (
+        <div 
+          className="fixed top-14 left-1/2 -translate-x-1/2 w-[calc(100vw-2rem)] max-w-4xl max-h-[58vh] bg-bg-1 border border-border shadow-2xl rounded-xl z-50 flex flex-col overflow-hidden pointer-events-auto"
+        >
+          {/* Header */}
+          <div className="px-5 py-3 space-y-0.5 shrink-0 text-left border-b border-border relative select-none">
+            <div className="flex items-center justify-between">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+                <ListChecks size={16} className="text-accent" />
+                Editar segmentos V2V
+              </h3>
+              <button
+                type="button"
+                onClick={() => setBulkEditorOpen(false)}
+                className="p-1 rounded-lg hover:bg-bg-2 text-fg-muted hover:text-fg transition-colors"
+                title="Cerrar editor de segmentos"
+              >
+                <X size={15} />
+              </button>
+            </div>
+            <p className="text-[11px] text-fg-muted">
+              Texto STT original frente al TTS, retraducción con Gemini y aplicar regeneración. El timeline permanece accesible debajo sin cerrarse.
+            </p>
+          </div>
+          {/* Content */}
+          <div className="px-5 py-3.5 overflow-y-auto min-h-0 flex-1">
+            <V2VSegmentBulkEditor
+              jobId={bulkEditorContext.jobId}
+              videoIndex={bulkEditorContext.videoIndex}
+              folder={bulkEditorContext.folder}
+              targetLang={bulkEditorContext.targetLang}
+              hideTitle
+              inDialog
+            />
+          </div>
+        </div>
       )}
     </header>
   );
