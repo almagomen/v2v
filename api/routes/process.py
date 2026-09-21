@@ -184,7 +184,6 @@ def post_tokens(req: TokenSettingsRequest):
 
     fish_api_val = (req.fish_api_key or "").strip()
     if fish_api_val:
-        os.environ["FISH_AUDIO_API_KEY"] = fish_api_val
         os.environ["FISH_API_KEY"] = fish_api_val
 
     google_api_val = ""
@@ -205,9 +204,9 @@ def post_tokens(req: TokenSettingsRequest):
                 lines = f.readlines()
             
             for i, line in enumerate(lines):
-                if line.strip().startswith("FISH_AUDIO_API_KEY="):
+                if line.strip().startswith("FISH_API_KEY="):
                     if fish_api_val:
-                        lines[i] = f"FISH_AUDIO_API_KEY={fish_api_val}\n"
+                        lines[i] = f"FISH_API_KEY={fish_api_val}\n"
                     fish_found = True
                 elif line.strip().startswith("GOOGLE_API_KEY="):
                     if google_api_val:
@@ -215,7 +214,7 @@ def post_tokens(req: TokenSettingsRequest):
                     google_found = True
 
         if not fish_found and fish_api_val:
-            lines.append(f"FISH_AUDIO_API_KEY={fish_api_val}\n")
+            lines.append(f"FISH_API_KEY={fish_api_val}\n")
         if not google_found and google_api_val:
             lines.append(f"GOOGLE_API_KEY={google_api_val}\n")
 

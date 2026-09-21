@@ -1,6 +1,6 @@
 """
 TTS vía API Fish Audio (modelo s2.1-pro-free).
-Usa FISH_AUDIO_API_KEY desde config (env o Colab Secrets).
+Usa FISH_API_KEY desde config (env o Colab Secrets).
 """
 import io
 import time
@@ -41,7 +41,7 @@ def fish_tts(
     """
     api_key = get_fish_api_key()
     if not api_key:
-        print("Error: FISH_AUDIO_API_KEY no configurada. Configura en Colab Secrets o .env")
+        print("Error: FISH_API_KEY no configurada. Configura en Colab Secrets o .env")
         return None, None
 
     headers = {

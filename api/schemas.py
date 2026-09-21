@@ -174,7 +174,7 @@ class RetranslateSegmentsResponse(BaseModel):
 
 
 class TokenSettingsRequest(BaseModel):
-    fish_api_key: Optional[str] = Field(None, description="Nuevo valor para FISH_AUDIO_API_KEY")
+    fish_api_key: Optional[str] = Field(None, description="Nuevo valor para FISH_API_KEY")
     google_api_key: Optional[str] = Field(None, description="Nuevo valor para GOOGLE_API_KEY")
 
 

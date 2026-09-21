@@ -66,26 +66,22 @@ def get_google_api_key() -> str | None:
 
 
 def get_fish_api_key() -> str | None:
-    # Priorizar variable de entorno (para cambios dinámicos desde la UI o .env)
-    env_key = os.getenv("FISH_API_KEY") or os.getenv("FISH_AUDIO_API_KEY")
+    # 1. Variable de entorno (env o cargada previamente)
+    env_key = os.getenv("FISH_API_KEY")
     if env_key:
         return env_key
 
-    # Intentar obtener de Colab Secrets (evaluando cada nombre en su propio bloque try/except)
+    # 2. Colab Secrets (userdata)
     try:
         from google.colab import userdata
-        for secret_name in ("FISH_API_KEY", "FISH_AUDIO_API_KEY"):
-            try:
-                val = userdata.get(secret_name)
-                if val:
-                    os.environ["FISH_API_KEY"] = val
-                    return val
-            except Exception:
-                continue
+        val = userdata.get("FISH_API_KEY")
+        if val:
+            os.environ["FISH_API_KEY"] = val
+            return val
     except Exception:
         pass
 
-    return os.getenv("FISH_API_KEY") or os.getenv("FISH_AUDIO_API_KEY")
+    return None
 
 
 def get_drive_mount() -> bool: return _google_drive and is_colab()

@@ -33,10 +33,10 @@ Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas
 
 ## Comportamiento V2V relevante
 
-### Configuración dinámica de FISH_AUDIO_API_KEY (Fish Audio) y GOOGLE_API_KEY (Gemini)
+### Configuración dinámica de FISH_API_KEY (Fish Audio) y GOOGLE_API_KEY (Gemini)
 
 - El panel **Video2Video** incluye un botón **Tokens** que despliega un formulario interactivo.
-- Permite modificar `FISH_AUDIO_API_KEY` (Fish Audio modelo `s2.1-pro-free`) y `GOOGLE_API_KEY` (Gemini) en caliente.
+- Permite modificar `FISH_API_KEY` (Fish Audio modelo `s2.1-pro-free`) y `GOOGLE_API_KEY` (Gemini) en caliente.
 - `GET /api/settings/tokens` y `POST /api/settings/tokens` actualizan las variables en `os.environ` y las persisten en el archivo `.env` raíz si existe.
 - Las funciones de generación de audio (`fish_tts` / `model_tts` en `src/tts.py`) y las llamadas a Gemini de traducción y generación de títulos (`src/translation.py`) consultan estas credenciales dinámicamente en cada petición en lugar de inicializarlas de manera estática global al importar el módulo.
 

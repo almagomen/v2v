@@ -337,14 +337,14 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 Configurar Tokens de Acceso (Fish Audio / Gemini)
               </h3>
               <p className="text-[10px] text-text-muted mt-0.5 leading-normal">
-                Configura tu FISH_AUDIO_API_KEY (modelo s2.1-pro-free) y tu GOOGLE_API_KEY para traducciones y doblaje en caliente.
+                Configura tu FISH_API_KEY (modelo s2.1-pro-free) y tu GOOGLE_API_KEY para traducciones y doblaje en caliente.
               </p>
             </div>
 
             <div className="space-y-2 relative">
               <div>
                 <label className="text-[9px] text-text-muted block mb-1 font-medium">
-                  FISH_AUDIO_API_KEY (Fish Audio)
+                  FISH_API_KEY (Fish Audio)
                 </label>
                 <div className="relative flex items-center">
                   <input

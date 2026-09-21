@@ -13,10 +13,10 @@ Pipeline de **traducción y doblaje** de videos de YouTube: descarga → transcr
 | Variable             | Uso                              |
 |----------------------|----------------------------------|
 | `GOOGLE_API_KEY`     | Gemini (traducción, títulos)      |
-| `FISH_AUDIO_API_KEY` | Fish Audio TTS (s2.1-pro-free)   |
+| `FISH_API_KEY` | Fish Audio TTS (s2.1-pro-free)   |
 | `DRIVE_MOUNT`        | Opcional: `true` para montar Drive en Colab |
 
-En Colab: panel izquierdo → **Secrets** y añade `GOOGLE_API_KEY` y `FISH_AUDIO_API_KEY`.
+En Colab: panel izquierdo → **Secrets** y añade `GOOGLE_API_KEY` y `FISH_API_KEY`.
 
 ## Uso en Google Colab
 
@@ -24,7 +24,7 @@ En Colab: panel izquierdo → **Secrets** y añade `GOOGLE_API_KEY` y `FISH_AUDI
 
 1. Abre [colab_launch.ipynb](colab_launch.ipynb) (o el enlace de arriba tras sustituir `TU_USUARIO` por tu usuario de GitHub).
 2. **Runtime → Change runtime type → T4 GPU**.
-3. Añade en **Secrets**: `GOOGLE_API_KEY`, `FISH_AUDIO_API_KEY`.
+3. Añade en **Secrets**: `GOOGLE_API_KEY`, `FISH_API_KEY`.
 4. Ejecuta las celdas para instalar dependencias y lanzar el backend (`uvicorn`).
 5. Abre la URL pública (ngrok/Colab proxy) del puerto 8000 y entra al editor OpenReel.
 
@@ -47,7 +47,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Copia `.env.example` a `.env` y rellena `GOOGLE_API_KEY` y `FISH_AUDIO_API_KEY`.
+Copia `.env.example` a `.env` y rellena `GOOGLE_API_KEY` y `FISH_API_KEY`.
 
 ```bash
 uvicorn api.main:app --reload --port 8000
