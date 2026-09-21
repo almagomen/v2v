@@ -6120,65 +6120,10 @@ export const Preview: React.FC = () => {
   ]);
 
   const [previewInvalidateCounter, setPreviewInvalidateCounter] = useState(0);
-  const mediaBlobMapRef = useRef<Map<string, Blob>>(new Map());
-
-  // Observar cambios en los blobs de la librería de medios para invalidar de inmediato la caché de audio de Preview
   useEffect(() => {
-    let changed = false;
-    for (const item of project.mediaLibrary.items) {
-      if (item.blob) {
-        const prev = mediaBlobMapRef.current.get(item.id);
-        if (prev && prev !== item.blob) {
-          changed = true;
-          for (const key of [...audioBufferCacheRef.current.keys()]) {
-            if (key.startsWith(`${item.id}:`)) audioBufferCacheRef.current.delete(key);
-          }
-          for (const key of [...noAudioBufferRef.current.keys()]) {
-            if (key.startsWith(`${item.id}:`)) noAudioBufferRef.current.delete(key);
-          }
-          for (const key of [...processedAudioBufferCacheRef.current.keys()]) {
-            if (key.startsWith(`${item.id}:`)) processedAudioBufferCacheRef.current.delete(key);
-          }
-        }
-        mediaBlobMapRef.current.set(item.id, item.blob);
-      }
-    }
-    if (changed) {
+    const handler = () => {
+      processedAudioBufferCacheRef.current.clear();
       if (audioGraphRef.current) {
-        audioGraphRef.current.stopAllClips();
-        audioGraphRef.current.seekTo(getMasterClock().currentTime);
-      }
-      setPreviewInvalidateCounter((c) => c + 1);
-    }
-  }, [project.mediaLibrary.items]);
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const customEvent = e as CustomEvent<{ mediaId?: string }>;
-      const targetMediaId = customEvent.detail?.mediaId;
-      if (targetMediaId) {
-        for (const key of [...audioBufferCacheRef.current.keys()]) {
-          if (key.startsWith(`${targetMediaId}:`)) {
-            audioBufferCacheRef.current.delete(key);
-          }
-        }
-        for (const key of [...noAudioBufferRef.current.keys()]) {
-          if (key.startsWith(`${targetMediaId}:`)) {
-            noAudioBufferRef.current.delete(key);
-          }
-        }
-        for (const key of [...processedAudioBufferCacheRef.current.keys()]) {
-          if (key.startsWith(`${targetMediaId}:`)) {
-            processedAudioBufferCacheRef.current.delete(key);
-          }
-        }
-      } else {
-        audioBufferCacheRef.current.clear();
-        noAudioBufferRef.current.clear();
-        processedAudioBufferCacheRef.current.clear();
-      }
-      if (audioGraphRef.current) {
-        audioGraphRef.current.stopAllClips();
         audioGraphRef.current.seekTo(getMasterClock().currentTime);
       }
       setPreviewInvalidateCounter((c) => c + 1);

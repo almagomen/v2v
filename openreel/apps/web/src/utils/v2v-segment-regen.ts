@@ -1,10 +1,9 @@
 import { v2vApi } from "../lib/v2v-api";
 import { useProjectStore } from "../stores/project-store";
 import { useV2VStore } from "../stores/v2v-store";
-import { invalidateAudioCache } from "../stores/audio-cache-store";
 import { generateSegmentId } from "./v2v-segment-ids";
 import { toSafeToken, parseV2VSegmentFromName, findSegmentMediaInLibrary } from "./v2v-utils";
-import { moveClipToTrack, renameMediaInLibrary } from "./detached-project-actions";
+import { moveClipToTrack } from "./detached-project-actions";
 
 export async function getAudioDuration(blob: Blob): Promise<number> {
   const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -131,7 +130,7 @@ export async function applyRegeneratedSegmentToTimeline(
     };
   }
 
-  const { replaceMediaAsset, forceSave, loadProject, getClip, trimClip, getMediaItem } =
+  const { importMedia, forceSave, loadProject, getClip, getMediaItem } =
     useProjectStore.getState();
 
   const { updateSegmentText, updateSegmentSpeaker, updateSegmentSpeed } = useV2VStore.getState();
@@ -139,55 +138,87 @@ export async function applyRegeneratedSegmentToTimeline(
   updateSegmentSpeaker(folder, segmentId, speaker);
   updateSegmentSpeed(folder, segmentId, effectiveSpeed);
 
-  const replaceResult = await replaceMediaAsset(mediaId, file);
-  if (!replaceResult.success) {
+  // Importar el nuevo audio como nuevo MediaItem para asegurar que OpenReel
+  // genere un nuevo mediaId con waveform y decodificación fresca sin colisionar
+  // con la caché inmutable de AudioBuffer interna del reproductor.
+  const oldMediaId = mediaId;
+  const importResult = await importMedia(file);
+  if (!importResult.success || !importResult.actionId) {
     const msg =
-      typeof replaceResult.error === "string"
-        ? replaceResult.error
-        : replaceResult.error?.message || "Error al reemplazar audio";
+      typeof importResult.error === "string"
+        ? importResult.error
+        : importResult.error?.message || "Error al importar el audio regenerado";
     return { success: false, message: msg };
   }
 
-  invalidateAudioCache(mediaId);
-  try {
-    const { useEngineStore } = await import("../stores/engine-store");
-    useEngineStore.getState().playbackController?.invalidateAudioBuffer(mediaId);
-  } catch (err) {
-    console.warn("[V2V] No se pudo invalidar audioBuffer:", err);
-  }
-
+  const newMediaId = importResult.actionId;
   const newDuration = await getAudioDuration(regenBlob);
-  let clipId = params.clipId ?? findClipIdForSegment(mediaId, trackStart);
+  let clipId = params.clipId ?? findClipIdForSegment(oldMediaId, trackStart);
 
+  let currentProject = useProjectStore.getState().project;
+
+  // Actualizar el clip en el timeline para apuntar al nuevo mediaId y duración
   if (clipId) {
-    const currentClip = getClip(clipId);
-    if (currentClip) {
-      const newOutPoint = currentClip.inPoint + newDuration;
-      await trimClip(clipId, currentClip.inPoint, newOutPoint);
-    }
+    currentProject = {
+      ...currentProject,
+      timeline: {
+        ...currentProject.timeline,
+        tracks: currentProject.timeline.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.map((clip) => {
+            if (clip.id === clipId) {
+              const inPoint = clip.inPoint ?? 0;
+              return {
+                ...clip,
+                mediaId: newMediaId,
+                inPoint,
+                outPoint: inPoint + newDuration,
+                duration: newDuration,
+              };
+            }
+            return clip;
+          }),
+        })),
+      },
+      modifiedAt: Date.now(),
+    };
   }
 
   const speakerChanged =
     previousSpeakerToken !== speaker && previousSpeakerToken !== toSafeToken(speaker);
 
   if (speakerChanged && clipId) {
-    const mediaItem = getMediaItem(mediaId);
-    if (mediaItem) {
-      const { project: renamedProject } = useProjectStore.getState();
-      const projectAfterRename = renameMediaInLibrary(renamedProject, mediaId, newMediaName);
-      const moveResult = await moveClipToTrack(
-        projectAfterRename,
-        clipId,
-        speakerLabel,
-        trackStart,
-      );
-      if (moveResult.success) {
-        loadProject(moveResult.project);
-      } else {
-        loadProject(projectAfterRename);
-      }
+    const moveResult = await moveClipToTrack(
+      currentProject,
+      clipId,
+      speakerLabel,
+      trackStart,
+    );
+    if (moveResult.success) {
+      currentProject = moveResult.project;
     }
   }
+
+  // Eliminar el mediaItem viejo de la librería para evitar duplicados
+  if (oldMediaId && oldMediaId !== newMediaId) {
+    currentProject = {
+      ...currentProject,
+      mediaLibrary: {
+        ...currentProject.mediaLibrary,
+        items: currentProject.mediaLibrary.items.filter((item) => item.id !== oldMediaId),
+      },
+      modifiedAt: Date.now(),
+    };
+    try {
+      const { deleteMediaBlob } = await import("../services/media-storage");
+      await deleteMediaBlob(oldMediaId);
+    } catch {
+      // Ignorar si el blob anterior ya no existía
+    }
+  }
+
+  // Cargar el proyecto actualizado en el store de OpenReel
+  loadProject(currentProject);
 
   try {
     const parts = newMediaName.replace(/\\/g, "/").split("/");
@@ -208,7 +239,7 @@ export async function applyRegeneratedSegmentToTimeline(
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(
-      new CustomEvent("openreel:preview-invalidate", { detail: { mediaId } }),
+      new CustomEvent("openreel:preview-invalidate", { detail: { mediaId: newMediaId } }),
     );
   }
 

@@ -4,7 +4,6 @@ import type { Action, MediaItem } from "@openreel/core";
 import type { ProjectState } from "../project-store";
 import { getMediaBridge, initializeMediaBridge } from "../../bridges/media-bridge";
 import { saveMediaBlob, deleteMediaBlob } from "../../services/media-storage";
-import { invalidateAudioCache } from "../audio-cache-store";
 
 type Get = StoreApi<ProjectState>["getState"];
 type Set = StoreApi<ProjectState>["setState"];
@@ -363,20 +362,7 @@ export function createMediaSlice(set: Set, get: Get): MediaSlice {
           },
         });
 
-        // Persistir el nuevo blob en IndexedDB para que sobreviva recargas y reasignaciones
-        try {
-          await saveMediaBlob(
-            project.id,
-            mediaId,
-            file,
-            updatedItem.metadata,
-          );
-        } catch (err) {
-          console.error("[ProjectStore] Failed to persist replaced media blob:", err);
-        }
-
-        // Invalidar de inmediato la caché de audio en Preview y en PlaybackController
-        invalidateAudioCache(mediaId);
+        // Invalidar de inmediato la caché de audio en PlaybackController si es audio o video
         try {
           const { useEngineStore } = await import("../engine-store");
           useEngineStore.getState().playbackController?.invalidateAudioBuffer(mediaId);
