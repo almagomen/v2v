@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from api.job_store import get_job
 from src.config import QUEUE_DIR, TEMP_DIR
-from src.assets import load_assets, update_assets
+from src.assets import load_assets, update_assets, register_segment
 from src.download import to_safe_name
 from src.edit_utils import get_video_bitrate
 
@@ -336,6 +336,17 @@ async def upload_media(
     dest = target_dir / safe_filename
     content = await file.read()
     dest.write_bytes(content)
+
+    # Si es un segmento de audio (tts_*, gen_*, vocals_*), sincronizarlo también en Seqs_trg
+    import re
+    tts_match = re.search(r"(?:tts_|gen_|vocals_).*?_(\d+)\.wav$", safe_filename, re.I)
+    if tts_match:
+        seg_idx = int(tts_match.group(1))
+        seqs_dir = folder / "Seqs_trg"
+        seqs_dir.mkdir(parents=True, exist_ok=True)
+        dest_seqs = seqs_dir / safe_filename
+        dest_seqs.write_bytes(content)
+        register_segment(folder, seg_idx, dest_seqs)
 
     # Registrar el archivo en el manifiesto para que el renderizador lo encuentre
     update_assets(folder, **{safe_filename: str(dest)})

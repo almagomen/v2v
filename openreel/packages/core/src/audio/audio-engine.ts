@@ -956,11 +956,38 @@ export class AudioEngine {
 
   clearCache(): void {
     this.mediaBuffers.clear();
+    this.noAudioMedia.clear();
 
     for (const decoder of this.segmentedAudioDecoders.values()) {
       decoder.dispose();
     }
     this.segmentedAudioDecoders.clear();
+  }
+
+  /**
+   * Invalida buffers y decodificadores de audio cacheados para un medio específico.
+   */
+  invalidateMedia(mediaId?: string): void {
+    if (!mediaId) {
+      this.clearCache();
+      return;
+    }
+    for (const key of [...this.mediaBuffers.keys()]) {
+      if (key.startsWith(`${mediaId}:`)) {
+        this.mediaBuffers.delete(key);
+      }
+    }
+    for (const key of [...this.noAudioMedia.keys()]) {
+      if (key.startsWith(`${mediaId}:`)) {
+        this.noAudioMedia.delete(key);
+      }
+    }
+    for (const [key, decoder] of [...this.segmentedAudioDecoders.entries()]) {
+      if (key.startsWith(`${mediaId}:`)) {
+        decoder.dispose();
+        this.segmentedAudioDecoders.delete(key);
+      }
+    }
   }
 
   async resume(): Promise<void> {

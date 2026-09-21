@@ -63,6 +63,9 @@ def serve_file(job_id: str, video_index: int, filename: str):
         raise HTTPException(status_code=403, detail="Acceso denegado")
 
     if not file_path.exists() or not file_path.is_file():
+        seqs_file = (base_dir / "Seqs_trg" / filename).resolve()
+        if seqs_file.exists() and seqs_file.is_file():
+            return FileResponse(seqs_file, filename=filename)
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
     return FileResponse(file_path, filename=filename)
 
