@@ -12,7 +12,14 @@ except ImportError:
     torch = None
 
 # Detección Colab
-def is_colab() -> bool: return "google.colab" in sys.modules
+def is_colab() -> bool:
+    if "google.colab" in sys.modules:
+        return True
+    try:
+        import google.colab
+        return True
+    except Exception:
+        return False
 
 
 # Rutas
@@ -40,34 +47,45 @@ DEVICE = "cuda" if (torch is not None and torch.cuda.is_available()) else "cpu"
 
 # API keys: Colab userdata o env
 def get_google_api_key() -> str | None:
-    env_key = os.getenv("GOOGLE_API_KEY")
+    env_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     if env_key:
         return env_key
-    if is_colab():
-        try:
-            from google.colab import userdata
-            return userdata.get("GOOGLE_API_KEY") or None
-        except Exception:
-            pass
+    try:
+        from google.colab import userdata
+        for key_name in ("GOOGLE_API_KEY", "GEMINI_API_KEY"):
+            try:
+                val = userdata.get(key_name)
+                if val:
+                    os.environ["GOOGLE_API_KEY"] = val
+                    return val
+            except Exception:
+                continue
+    except Exception:
+        pass
     return None
 
 
 def get_fish_api_key() -> str | None:
     # Priorizar variable de entorno (para cambios dinámicos desde la UI o .env)
-    env_key = os.getenv("FISH_AUDIO_API_KEY") or os.getenv("FISH_API_KEY")
+    env_key = os.getenv("FISH_API_KEY") or os.getenv("FISH_AUDIO_API_KEY")
     if env_key:
         return env_key
-    if is_colab():
-        try:
-            from google.colab import userdata
-            return (
-                userdata.get("FISH_AUDIO_API_KEY")
-                or userdata.get("FISH_API_KEY")
-                or None
-            )
-        except Exception:
-            return os.getenv("FISH_AUDIO_API_KEY") or os.getenv("FISH_API_KEY")
-    return os.getenv("FISH_AUDIO_API_KEY") or os.getenv("FISH_API_KEY")
+
+    # Intentar obtener de Colab Secrets (evaluando cada nombre en su propio bloque try/except)
+    try:
+        from google.colab import userdata
+        for secret_name in ("FISH_API_KEY", "FISH_AUDIO_API_KEY"):
+            try:
+                val = userdata.get(secret_name)
+                if val:
+                    os.environ["FISH_API_KEY"] = val
+                    return val
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return os.getenv("FISH_API_KEY") or os.getenv("FISH_AUDIO_API_KEY")
 
 
 def get_drive_mount() -> bool: return _google_drive and is_colab()
