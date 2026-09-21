@@ -1,91 +1,148 @@
-# Fork V2V sobre OpenReel
+# Fork V2V sobre OpenReel — Guía Maestra de Integración y Mantenimiento
 
-Este directorio integra **Video2Video** (API FastAPI en el repo padre), carpetas de medios, clonación de voz en el panel V2V y persistencia `v2vFolderRefs` en el guardado del proyecto.
+Este documento detalla exhaustivamente la integración de **Video2Video** (backend FastAPI en el repo padre) sobre el frontend de **OpenReel**. 
+Está diseñado para que futuros desarrolladores o asistentes de IA (LLMs) entiendan con total precisión la arquitectura de la integración, los archivos involucrados y **cómo actualizar OpenReel desde el upstream oficial sin romper el código ni introducir conflictos de Git**.
 
-## Archivos propios del fork (bajo riesgo en sync)
+---
 
-| Área | Ruta |
-|------|------|
-| Cliente API | `apps/web/src/lib/v2v-api.ts` |
-| Estado V2V | `apps/web/src/stores/v2v-store.ts` |
-| Utilidades / IDs | `apps/web/src/utils/v2v-utils.ts` (`segmentLogicalName`, `findSegmentMediaInLibrary`, `parseV2VSegmentFromName`), `apps/web/src/utils/v2v-segment-ids.ts`, `apps/web/src/utils/detached-project-actions.ts` (acciones de clon/mutación del timeline con IDs de pista únicos mediante `uuidv4`) |
-| Import masivo | `apps/web/src/utils/import-media-into-project.ts` |
-| UI principal | `apps/web/src/components/editor/V2VPanel.tsx` (con prioridad de `effectiveDropdownValue` en `bulkEditorContext` para abrir según el timeline), `ColabExportTab.tsx` |
-| Clonar voz segmento | `apps/web/src/components/editor/v2v/CloneVoiceSegmentSection.tsx` |
-| Editor masivo segmentos | `apps/web/src/components/editor/v2v/V2VSegmentBulkEditor.tsx`, `apps/web/src/utils/v2v-segment-regen.ts` |
-| Caché audio preview | `apps/web/src/stores/audio-cache-store.ts` (dispara `openreel:preview-invalidate`) |
-| Env / dev | `apps/web/.env.example` (`VITE_V2V_API_URL`), `apps/web/vite.config.ts` (`allowedHosts`, proxy `/api` → FastAPI) |
-| Carpetas / timeline V2V en Assets | `apps/web/src/v2v/assets-integration/` |
+## 1. Inventario Total de Archivos de la Integración
 
-## Archivos compartidos con upstream (revisar en cada merge)
+### A. Archivos Propios de V2V (Añadidos por nosotros — Riesgo Nulo en Upstream)
+Estos archivos son exclusivos de V2V. Si se actualiza OpenReel desde upstream, estos archivos se conservan intactos.
 
-- `apps/web/src/components/editor/Toolbar.tsx` — icono YouTube, drawer `V2VPanel`, guardado manual. *(Nota: Se removió el Dialog flotante del Bulk Editor de aquí para reducir huella y minimizar conflictos futuros con upstream).*
-- `apps/web/src/components/editor/EditorInterface.tsx` — contenedor principal que aloja el panel absoluto/flotante del editor masivo de V2V justo debajo de la barra superior y sobre el timeline, sincronizando `timelineHeight`. Se prioriza `effectiveDropdownValue` (proyecto activo del timeline) sobre `selectedVideoIndex` en `bulkEditorContext` para asegurar que abre el video del proyecto activo.
-- `packages/ui/src/components/dialog.tsx` — se añadió la propiedad genérica `hideOverlay` para soportar diálogos transparentes no obstructivos.
-- `apps/web/src/components/editor/AssetsPanel.tsx` — enganches en pestaña Media (`useV2VMediaFolders`, import/drop V2V).
-- `apps/web/src/stores/project-store.ts` — `v2vFolderRefs` en `forceSave`; `replaceMediaAsset` persiste blob + invalida preview; inyección de `trackId` único (`uuidv4`) en la acción `addTrack` para evitar duplicados en actualizaciones rápidas.
-- `packages/core/src/actions/action-executor.ts` — inyección de fracción aleatoria en el ID por defecto para `track/add` (`track-${Date.now()}-${random}`) como red de seguridad defensiva si no se provee un ID explícito.
-- `apps/web/src/components/editor/GenerateAudioSegmentSection.tsx` — TTS por carpeta y API v2v.
-- Repo padre: `api/routes/render.py` — resolución de medios TTS por índice en `v2v_assets.json` (prioridad sobre copias obsoletas).
-- Repo padre: `api/routes/segments.py` — editor masivo (`GET segments-editor`, `POST retranslate-segments`); `src/translation.py` modos `shorter` / `similar_length`.
+| Archivo | Propósito |
+|---|---|
+| `apps/web/src/components/editor/v2v/V2VToolbarEntry.tsx` | **Punto de montaje UI único**: aloja el botón de Video2Video en el Toolbar, el drawer lateral con `V2VPanel` y el modal flotante no bloqueante del Bulk Editor sin contaminar `Toolbar.tsx` ni `EditorInterface.tsx`. |
+| `apps/web/src/components/editor/V2VPanel.tsx` | Panel principal de Video2Video: control de inferencia, selección de modelos, botón de tokens (`FISH_API_KEY`, `GOOGLE_API_KEY`), export a Colab y acceso al editor de segmentos. |
+| `apps/web/src/components/editor/v2v/V2VSegmentBulkEditor.tsx` | Diálogo flotante y no bloqueante para edición masiva de segmentos (STT vs TTS, retraducción con Gemini, ajuste de parámetros Fish Audio por slot: temp, top_p, rep_penalty, volumen, chips S2 y regeneración individual). |
+| `apps/web/src/components/editor/v2v/CloneVoiceSegmentSection.tsx` | Sección para clonación y síntesis de voz de un clip seleccionado en el timeline. |
+| `apps/web/src/components/editor/ColabExportTab.tsx` | Pestaña de exportación y render final acelerado por GPU en Colab. |
+| `apps/web/src/lib/v2v-api.ts` | Cliente HTTP Typed con endpoints de FastAPI (`/api/job/...`, `/api/settings/tokens`, etc.). |
+| `apps/web/src/stores/v2v-store.ts` | Zustand store para el estado reactivo del job, segmentos, transcripciones y carpetas de video. |
+| `apps/web/src/utils/v2v-segment-regen.ts` | **Motor de regeneración de audio**: sustituye audios en timeline de forma desacoplada usando la API pública `importMedia` (ver sección 2). |
+| `apps/web/src/utils/v2v-segment-ids.ts` | Generador y parser de IDs deterministas de segmentos. |
+| `apps/web/src/utils/v2v-utils.ts` | Normalización de nombres de medios (`segmentLogicalName`), parseo de tokens y emparejamiento en librería. |
+| `apps/web/src/utils/detached-project-actions.ts` | Manipulación funcional del objeto `Project` de OpenReel (mover clips entre pistas con `uuidv4` seguro). |
+| `apps/web/src/utils/import-media-into-project.ts` | Utilidad de importación de assets al timeline tras finalizar inferencia. |
+| `apps/web/src/v2v/assets-integration/` | Helpers de integración de carpetas y assets de jobs V2V en la librería de medios. |
 
-**Ya no tocar en upstream:** `InspectorPanel.tsx` no incluye Clone Voice (vive solo en `V2VPanel`).
+---
 
-## Comportamiento V2V relevante
+### B. Archivos Compartidos del Core de OpenReel (Puntos de Montaje Mínimos)
+Archivos originales de OpenReel que han recibido parches mínimos de integración. Al hacer merge con upstream, estos son los únicos archivos a verificar:
 
-### Configuración dinámica de FISH_API_KEY (Fish Audio) y GOOGLE_API_KEY (Gemini)
+1. **`apps/web/src/components/editor/Toolbar.tsx`**:
+   - **Modificación**: Se sustituyó el botón manual anterior por el componente encapsulado `<V2VToolbarEntry />` en la sección derecha del header.
+   - **Regla**: Mantener solo el import de `V2VToolbarEntry` y su inclusión en el JSX.
 
-- El panel **Video2Video** incluye un botón **Tokens** que despliega un formulario interactivo.
-- Permite modificar `FISH_API_KEY` (Fish Audio modelo `s2.1-pro-free`) y `GOOGLE_API_KEY` (Gemini) en caliente.
-- `GET /api/settings/tokens` y `POST /api/settings/tokens` actualizan las variables en `os.environ` y las persisten en el archivo `.env` raíz si existe.
-- Las funciones de generación de audio (`fish_tts` / `model_tts` en `src/tts.py`) y las llamadas a Gemini de traducción y generación de títulos (`src/translation.py`) consultan estas credenciales dinámicamente en cada petición en lugar de inicializarlas de manera estática global al importar el módulo.
+2. **`apps/web/src/stores/project-store.ts`**:
+   - **Modificación**: Inclusión de `v2vFolderRefs` en `forceSave` para persistir el mapa entre el proyecto de OpenReel y la carpeta de trabajo en Colab; inyección defensiva de `uuidv4` en `addTrack`.
 
-### Dev / Colab
+3. **`apps/web/src/components/editor/Timeline.tsx`**:
+   - **Modificación**: `z-120` en el toolbar del timeline para evitar que capas flotantes o tooltips queden ocultos tras la barra de herramientas.
 
-- Vite (`:5173`) hace proxy de `/api/*` a FastAPI (`V2V_API_PROXY_TARGET`, por defecto `http://127.0.0.1:8000`).
-- `allowedHosts: true` evita bloqueo del host variable de Colab/Codatalab.
+4. **`apps/web/src/components/editor/AssetsPanel.tsx`**:
+   - **Modificación**: Hook `useV2VMediaFolders` e importación contextual de carpetas de videos procesados en la pestaña Media.
 
-### Import automático al timeline (tras inferencia)
+5. **`apps/web/src/components/editor/GenerateAudioSegmentSection.tsx`**:
+   - **Modificación**: Soporte de voces y TTS direccionado al endpoint V2V.
 
-1. Al terminar el job (`status === done`), `v2v-store` descarga video, instrumental y segmentos TTS.
-2. Los WAV TTS usan el **`filename` real** del API (`GET /audio-segments`), vía `segmentLogicalName()` — no se reconstruye solo desde `speaker`.
-3. Se montan pistas por speaker con `addClip` en `seg.start`; si falla la descarga de todos los TTS, el import queda en `error` (no `done` con timeline incompleto).
-4. El proyecto se guarda en **autosave**. Si el proyecto activo ya se llama igual que la carpeta V2V, se aplica `loadProject` al editor; si no, toast para abrir/recuperar ese proyecto.
-5. Al elegir el video en el dropdown V2V, se recupera el **autosave más reciente** de ese nombre (también si ya era el proyecto activo).
+6. **`packages/ui/src/components/dialog.tsx`**:
+   - **Modificación**: Soporte para la propiedad `hideOverlay` para permitir diálogos flotantes no bloqueantes mientras se interactúa con el timeline.
 
-### Clonar voz de un segmento
+7. **`apps/web/vite.config.ts` y `.env.example`**:
+   - **Modificación**: Configuración de proxy `/api` hacia `127.0.0.1:8000` (`V2V_API_PROXY_TARGET`) y `allowedHosts: true` para admitir dominios dinámicos de Google Colab / Localtunnel.
 
-1. Seleccionar clip de audio TTS en el timeline → panel **Video2Video** → sección **Clonar voz del segmento**.
-2. Tras regenerar: `replaceMediaAsset` actualiza blob/waveform, invalida caché de preview (`openreel:preview-invalidate`), sube WAV a Colab (`uploadMediaForRender`) y `syncFolderAssets`.
-3. Export FFmpeg en Colab resuelve segmentos por índice en `segments` del manifiesto, no por copias antiguas en otras claves.
+---
 
-### Editor masivo de segmentos
+### C. Archivos del Core de OpenReel que NUNCA DEBEN TOCARSE (100% Limpios)
+> [!IMPORTANT]
+> **REGLA DE ORO**: NO MODIFICAR los siguientes archivos bajo ninguna circunstancia para resolver problemas de audio o timeline:
+> - `apps/web/src/components/editor/Preview.tsx` (100% limpio)
+> - `apps/web/src/stores/audio-cache-store.ts` (100% limpio)
+> - `packages/core/src/audio/audio-engine.ts` (100% limpio)
+> - `apps/web/src/stores/project/media-slice.ts` (100% limpio)
+> - `apps/web/src/components/editor/EditorInterface.tsx` (100% limpio)
 
-1. Con job activo y video importado (`v2vFolderRefs`), panel **Video2Video** → **Editar segmentos** (entre “Video procesado” y “Clonar voz”).
-2. `GET /api/job/{job_id}/segments-editor/{video_index}` lee `result.pkl`: columna **Original (STT)** vs **TTS**; fusiona textos editados del store.
-3. **Proponer traducción** → `POST /api/retranslate-segments` con modo **Más corto** o **Longitud similar** (solo filas seleccionadas).
-4. **Aplicar** llama `regenerate-segment` por fila modificada y `applyRegeneratedSegmentToTimeline` (misma lógica que Clone Voice). **Encajar slot** usa `target_duration` (modo velocidad `s`).
-5. Filtro “Solo problemáticos”: ratio texto TTS/original > 1.15 o speed > 1.05.
+---
 
-## Cómo actualizar desde `Augani/openreel-video`
+## 2. Estrategia de Audio y Caché del Timeline (Desacoplamiento Total)
+
+### El Problema de OpenReel con la Caché de Audio
+OpenReel maneja la reproducción de audio en `Preview.tsx` y `PlaybackController` indexando los `AudioBuffer` decodificados en memoria usando el `mediaId` (`${mediaId}:0`). 
+Si se regenera un segmento y se sobreescribe el blob manteniendo el mismo `mediaId`, **OpenReel nunca vuelve a decodificar el archivo** porque la clave ya existe en su caché inmutable en RAM. Por eso sonaba el audio original y no el regenerado.
+
+### La Solución Desacoplada (Implementada en `v2v-segment-regen.ts`)
+En lugar de parchear las clases internas de OpenReel, la función `applyRegeneratedSegmentToTimeline`:
+1. Llama a la API pública de OpenReel: `await importMedia(file)`.
+2. `importMedia` genera un **nuevo `mediaId` único**, calcula la forma de onda (*waveform*), extrae la duración real y persiste el nuevo blob en IndexedDB de forma 100% estándar.
+3. Actualiza el clip en el timeline reemplazando `clip.mediaId = newMediaId` y ajustando la duración:
+   ```typescript
+   currentProject = {
+     ...currentProject,
+     timeline: {
+       ...currentProject.timeline,
+       tracks: currentProject.timeline.tracks.map((track) => ({
+         ...track,
+         clips: track.clips.map((clip) =>
+           clip.id === clipId
+             ? { ...clip, mediaId: newMediaId, inPoint: clip.inPoint ?? 0, outPoint: (clip.inPoint ?? 0) + newDuration, duration: newDuration }
+             : clip,
+         ),
+       })),
+     },
+     modifiedAt: Date.now(),
+   };
+   ```
+4. Elimina el `oldMediaId` de `project.mediaLibrary.items` y borra el blob viejo con `deleteMediaBlob(oldMediaId)`.
+5. Ejecuta `loadProject(currentProject)` y `forceSave()`.
+
+**Resultado**:
+- OpenReel detecta un `mediaId` nuevo, no lo encuentra en su caché en RAM y lo decodifica de inmediato: **el Timeline se actualiza al instante**.
+- Si el usuario arrastra el medio desde la pestaña Media, arrastra el nuevo audio.
+- **Se mantiene el código del core de OpenReel completamente virgen**, garantizando compatibilidad absoluta con futuras versiones.
+
+---
+
+## 3. Sincronización en Backend (`api/routes/render.py` y `api/routes/files.py`)
+
+Al regenerar un segmento desde la UI:
+1. Se sube el archivo a `/api/render/upload-media`.
+2. En `render.py`, si el nombre coincide con un segmento (`tts_*_NNN.wav`), se escribe tanto en la raíz como en el subdirectorio `Seqs_trg/` y se invoca `register_segment(folder, seg_idx, dest_seqs)` para actualizar el manifiesto de render final.
+3. En `files.py`, `serve_file` cuenta con fallback a `Seqs_trg/{filename}` en caso de que se solicite un archivo no presente en la raíz.
+
+---
+
+## 4. Protocolo de Actualización desde Upstream (`Augani/openreel-video`)
+
+Cuando se desee incorporar los últimos cambios del repositorio oficial de OpenReel:
 
 ```bash
+# 1. Asegurar remote upstream
+git remote add openreel-upstream https://github.com/Augani/openreel-video.git 2>/dev/null || true
 git fetch openreel-upstream main
-git merge openreel-upstream/main --allow-unrelated-histories -m "Merge OpenReel upstream main" -X subtree=openreel
+
+# 2. Hacer merge de upstream en la rama monorepo-subtree
+git merge openreel-upstream/main --allow-unrelated-histories -m "chore(openreel): merge upstream updates" -X subtree=openreel
 ```
 
-Si aparecen muchos conflictos `AA` (add/add):
-
-1. `git checkout --theirs openreel` y `git add openreel` para tomar la base upstream.
-2. Restaurar desde la rama anterior los archivos **solo V2V** de la tabla de arriba.
-3. Reaplicar parches en Toolbar, `project-store.ts`, `.env.example`, `vite.config.ts`.
-4. **AssetsPanel**: conservar upstream e insertar bloque V2V en `case "media"`.
-5. **No reintroducir** Clone Voice en `InspectorPanel`.
-6. `pnpm install && pnpm run build` dentro de `openreel/`.
-
-## Comprobación rápida
-
-- Build: `cd openreel && pnpm run build`
-- Panel Video2Video: procesar URL → al completar, timeline con Video + INSTRUMENTAL + pistas TTS por speaker.
-- Clonar voz en clip TTS → preview y export Colab con audio nuevo.
-- `v2vFolderRefs` tras guardar y recuperar autosave.
+### Si ocurren conflictos:
+1. **Archivos propios de V2V (`openreel/apps/web/src/components/editor/v2v/*`, etc.)**:
+   - Tomar nuestra versión (`--ours`). Upstream no tiene estos archivos.
+2. **Archivos limpios del core (`Preview.tsx`, `audio-engine.ts`, `media-slice.ts`, `EditorInterface.tsx`)**:
+   - Tomar la versión de upstream (`--theirs`), ya que no deben tener modificaciones nuestras.
+3. **`Toolbar.tsx`**:
+   - Aceptar los cambios de upstream y simplemente asegurar que `<V2VToolbarEntry />` esté montado en la barra superior:
+     ```tsx
+     import { V2VToolbarEntry } from "./v2v/V2VToolbarEntry";
+     // ...
+     <V2VToolbarEntry />
+     ```
+4. **`project-store.ts`**:
+   - Conservar la lectura y escritura de `v2vFolderRefs` en `forceSave`.
+5. **Validar la compilación**:
+   ```bash
+   cd openreel/apps/web
+   pnpm install
+   pnpm run build
+   ```
