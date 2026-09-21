@@ -31,6 +31,8 @@ def fish_tts(
     top_p: float = 0.7,
     sample_rate: Optional[int] = 44100,
     speed: float = 1.0,
+    volume: float = 0.0,
+    repetition_penalty: float = 1.2,
     model: str = DEFAULT_MODEL,
     **kwargs,
 ) -> Tuple[Any, Optional[int]]:
@@ -53,8 +55,9 @@ def fish_tts(
     payload: dict[str, Any] = {
         "text": text,
         "format": format,
-        "temperature": temperature,
-        "top_p": top_p,
+        "temperature": float(temperature),
+        "top_p": float(top_p),
+        "repetition_penalty": float(repetition_penalty),
         "normalize": True,
     }
 
@@ -68,8 +71,13 @@ def fish_tts(
         if not Path(v_str).exists():
             payload["reference_id"] = v_str
 
+    prosody: dict[str, Any] = {"normalize_loudness": True}
     if speed and speed != 1.0:
-        payload["prosody"] = {"speed": speed}
+        prosody["speed"] = float(speed)
+    if volume and volume != 0.0:
+        prosody["volume"] = float(volume)
+    if len(prosody) > 1 or prosody.get("speed") or prosody.get("volume"):
+        payload["prosody"] = prosody
 
     try:
         response = requests.post(FISH_TTS_URL, headers=headers, json=payload, timeout=60)

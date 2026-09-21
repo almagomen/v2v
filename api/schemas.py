@@ -88,6 +88,10 @@ class RegenerateSegmentRequest(BaseModel):
     target_duration: Optional[float] = Field(
         None, description="Duración objetivo en segundos para modo 's'"
     )
+    temperature: float = Field(0.7, ge=0.1, le=1.0, description="Fish Audio expresividad")
+    top_p: float = Field(0.7, ge=0.1, le=1.0, description="Fish Audio diversidad sampling")
+    repetition_penalty: float = Field(1.2, ge=1.0, le=2.0, description="Fish Audio control de repetición")
+    volume: float = Field(0.0, ge=-10.0, le=10.0, description="Fish Audio ajuste volumen en dB")
 
 
 class RegenerateVideoRequest(BaseModel):

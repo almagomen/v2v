@@ -1,5 +1,17 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, AlertTriangle, Loader2, ListChecks } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  ListChecks,
+  RefreshCw,
+  RotateCcw,
+  SlidersHorizontal,
+  Sparkles,
+  Volume2,
+} from "lucide-react";
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
 import { v2vApi, type SegmentEditorRow } from "../../../lib/v2v-api";
@@ -16,7 +28,7 @@ import {
 import { toSafeToken } from "../../../utils/v2v-utils";
 import { autoSaveManager } from "../../../services/auto-save";
 
-type BulkSegmentRow = {
+export type BulkSegmentRow = {
   seg: number;
   start: number;
   end: number;
@@ -39,6 +51,11 @@ type BulkSegmentRow = {
   filename?: string | null;
   /** true si el MediaItem es placeholder (TTS falló al generar) */
   missingAudio: boolean;
+  /** Parámetros Fish Audio por slot */
+  temperature: number;
+  topP: number;
+  repetitionPenalty: number;
+  volume: number;
 };
 
 function speakerLabelFor(speakers: { value: string; label: string }[], token: string): string {
@@ -56,6 +73,10 @@ function rowIsDirty(row: BulkSegmentRow): boolean {
   if (row.draftText.trim() !== row.loadedText.trim()) return true;
   if (row.speedMode === "x" && Math.abs(row.speed - row.loadedSpeed) > 0.001) return true;
   if (row.speedInput.trim() !== row.loadedSpeedInput.trim()) return true;
+  if (Math.abs((row.temperature ?? 0.7) - 0.7) > 0.01) return true;
+  if (Math.abs((row.topP ?? 0.7) - 0.7) > 0.01) return true;
+  if (Math.abs((row.repetitionPenalty ?? 1.2) - 1.2) > 0.01) return true;
+  if (Math.abs((row.volume ?? 0.0) - 0.0) > 0.01) return true;
   return false;
 }
 
@@ -92,6 +113,12 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
   const [applyProgress, setApplyProgress] = useState<{ current: number; total: number } | null>(
     null,
   );
+  const [selectedTargetLang, setSelectedTargetLang] = useState<string>(() => {
+    if (targetLang && targetLang !== "None") return targetLang;
+    if (translateLang && translateLang !== "None") return translateLang;
+    return "es";
+  });
+  const [regeneratingSeg, setRegeneratingSeg] = useState<number | null>(null);
 
   useEffect(() => {
     if (speakers.length === 0) fetchSpeakers();
@@ -166,6 +193,10 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         clipId,
         filename: apiRow.filename,
         missingAudio,
+        temperature: 0.7,
+        topP: 0.7,
+        repetitionPenalty: 1.2,
+        volume: 0.0,
       };
       // Si el audio falta, forzamos dirty=true para que "Aplicar todos" lo incluya automáticamente
       const forceDirty = missingAudio && ttsText.trim().length > 0;
@@ -235,11 +266,12 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
 
     setRetranslateBusy(true);
     try {
+      const effectiveTargetLang = selectedTargetLang || normalizeTranslateLang || "es";
       const { segments } = await v2vApi.retranslateSegments(
         jobId,
         videoIndex,
         targets.map((r) => r.seg),
-        normalizeTranslateLang,
+        effectiveTargetLang,
       );
       const bySeg = new Map(segments.map((s) => [s.seg, s.text]));
       setRows((prev) =>
@@ -250,11 +282,93 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           return { ...next, dirty: rowIsDirty(next) };
         }),
       );
-      toast.success("Traducción propuesta", `${segments.length} segmento(s) actualizados.`);
+      toast.success("Traducción propuesta", `${segments.length} segmento(s) actualizados a (${effectiveTargetLang}).`);
     } catch (e) {
       toast.error("Retraducción fallida", e instanceof Error ? e.message : String(e));
     } finally {
       setRetranslateBusy(false);
+    }
+  };
+
+  const handleRegenerateSingle = async (row: BulkSegmentRow) => {
+    setRegeneratingSeg(row.seg);
+    try {
+      let effectiveSpeed =
+        parseFloat(row.speedInput) ||
+        (row.speedMode === "x" ? row.speed || 1 : row.slotDuration);
+      let targetDuration: number | undefined;
+      if (row.speedMode === "s" && effectiveSpeed > 0) {
+        targetDuration = effectiveSpeed;
+        effectiveSpeed = 1;
+      }
+      const speedForStore = row.speedMode === "x" ? effectiveSpeed : row.loadedSpeed;
+
+      const regenBlob = await v2vApi.regenerateSegment(
+        jobId,
+        videoIndex,
+        row.seg,
+        row.draftText,
+        row.start,
+        row.end,
+        selectedTargetLang || normalizeTranslateLang || "es",
+        row.speaker,
+        effectiveSpeed,
+        targetDuration,
+        {
+          temperature: row.temperature,
+          top_p: row.topP,
+          repetition_penalty: row.repetitionPenalty,
+          volume: row.volume,
+        },
+      );
+
+      const result = await applyRegeneratedSegmentToTimeline({
+        folder,
+        jobId,
+        videoIndex,
+        segIdx: row.seg,
+        regenBlob,
+        text: row.draftText,
+        speaker: row.speaker,
+        speakerLabel: row.speakerLabel,
+        previousSpeakerToken: row.previousSpeakerToken,
+        start: row.start,
+        end: row.end,
+        effectiveSpeed: speedForStore,
+        mediaId: row.mediaId,
+        clipId: row.clipId,
+        trackStart: row.start,
+      });
+
+      if (!result.success) {
+        throw new Error(result.message || "No se pudo actualizar el timeline");
+      }
+
+      const newSpeedInput =
+        row.speedMode === "s" ? row.speedInput : speedForStore.toFixed(3);
+      setRows((prev) =>
+        prev.map((r) =>
+          r.seg === row.seg
+            ? {
+                ...r,
+                loadedText: row.draftText,
+                loadedSpeed: speedForStore,
+                loadedSpeedInput: newSpeedInput,
+                speed: speedForStore,
+                speedInput: newSpeedInput,
+                mediaId: result.mediaId ?? r.mediaId,
+                clipId: result.clipId ?? r.clipId,
+                dirty: false,
+                missingAudio: false,
+              }
+            : r,
+        ),
+      );
+      toast.success("Segmento regenerado", `#${row.seg} actualizado y sincronizado en el timeline.`);
+    } catch (e) {
+      toast.error("Error al regenerar", e instanceof Error ? e.message : String(e));
+    } finally {
+      setRegeneratingSeg(null);
     }
   };
 
@@ -357,10 +471,16 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           row.draftText,
           row.start,
           row.end,
-          normalizeTranslateLang,
+          selectedTargetLang || normalizeTranslateLang || "es",
           row.speaker,
           effectiveSpeed,
           targetDuration,
+          {
+            temperature: row.temperature,
+            top_p: row.topP,
+            repetition_penalty: row.repetitionPenalty,
+            volume: row.volume,
+          },
         );
 
         const result = await applyRegeneratedSegmentToTimeline({
@@ -513,16 +633,35 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
 
 
 
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          className="text-[10px] h-7"
-          disabled={retranslateBusy || applyBusy}
-          onClick={() => void handleProposeTranslation()}
-        >
-          {retranslateBusy ? <Loader2 size={12} className="animate-spin" /> : "Proponer traducción"}
-        </Button>
+        <div className="flex items-center gap-1 bg-background border border-border rounded-md px-1">
+          <span className="text-[9px] text-text-muted font-medium px-1">Traducir a:</span>
+          <Select value={selectedTargetLang} onValueChange={setSelectedTargetLang}>
+            <SelectTrigger className="h-7 text-[10px] w-28 border-0 bg-transparent shadow-none px-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="es">Español (es)</SelectItem>
+              <SelectItem value="en">English (en)</SelectItem>
+              <SelectItem value="pt">Português (pt)</SelectItem>
+              <SelectItem value="fr">Français (fr)</SelectItem>
+              <SelectItem value="de">Deutsch (de)</SelectItem>
+              <SelectItem value="it">Italiano (it)</SelectItem>
+              <SelectItem value="ja">日本語 (ja)</SelectItem>
+              <SelectItem value="zh">中文 (zh)</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="text-[10px] h-7 px-2"
+            disabled={retranslateBusy || applyBusy}
+            onClick={() => void handleProposeTranslation()}
+            title={`Retraducir seleccionados a ${selectedTargetLang}`}
+          >
+            {retranslateBusy ? <Loader2 size={12} className="animate-spin" /> : "Proponer traducción"}
+          </Button>
+        </div>
 
         <Button type="button" size="sm" className="text-[10px] h-7" disabled={applyBusy} onClick={handleApplySelected}>
           Aplicar seleccionados
@@ -560,6 +699,8 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
               jobId={jobId}
               videoIndex={videoIndex}
               onApplyRow={() => void handleApplySpeedOnly(row)}
+              onRegenerateSingle={() => void handleRegenerateSingle(row)}
+              isRegenerating={regeneratingSeg === row.seg}
             />
           ))
         )}
@@ -599,25 +740,85 @@ function ApplyProgressBlock({
   );
 }
 
+const QUICK_EMOTIONS = [
+  { tag: "[happy]", label: "Feliz", emoji: "😊" },
+  { tag: "[excited]", label: "Emocionado", emoji: "🤩" },
+  { tag: "[whispering]", label: "Susurro", emoji: "🤫" },
+  { tag: "[emphasis]", label: "Énfasis", emoji: "🗣️" },
+  { tag: "[laughing]", label: "Risa", emoji: "😂" },
+  { tag: "[sad]", label: "Triste", emoji: "😢" },
+  { tag: "[angry]", label: "Enojado", emoji: "😡" },
+  { tag: "[calm]", label: "Calmado", emoji: "😌" },
+  { tag: "[surprised]", label: "Sorprendido", emoji: "😮" },
+  { tag: "[sighing]", label: "Suspiro", emoji: "🥱" },
+  { tag: "[break]", label: "Pausa", emoji: "⏸️" },
+];
+
+const ALL_EMOTIONS_CATEGORIES = [
+  {
+    category: "Emociones Básicas",
+    items: [
+      "[happy]", "[sad]", "[angry]", "[excited]", "[calm]", "[nervous]",
+      "[confident]", "[surprised]", "[satisfied]", "[delighted]", "[scared]",
+      "[worried]", "[upset]", "[frustrated]", "[depressed]", "[empathetic]",
+      "[embarrassed]", "[disgusted]", "[moved]", "[proud]", "[relaxed]",
+      "[grateful]", "[curious]", "[sarcastic]"
+    ],
+  },
+  {
+    category: "Tonos y Entrega",
+    items: [
+      "[in a hurry tone]", "[shouting]", "[screaming]", "[whispering]",
+      "[soft tone]", "[emphasis]"
+    ],
+  },
+  {
+    category: "Efectos de Audio",
+    items: [
+      "[laughing]", "[chuckling]", "[sobbing]", "[crying loudly]",
+      "[sighing]", "[groaning]", "[panting]", "[gasping]", "[yawning]",
+      "[snoring]", "[clear throat]"
+    ],
+  },
+  {
+    category: "Pausas y Ambiente",
+    items: [
+      "[break]", "[long-break]", "[audience laughing]",
+      "[background laughter]", "[crowd laughing]"
+    ],
+  },
+];
+
 function SegmentRow({
   row,
   updateRow,
   jobId,
   videoIndex,
   onApplyRow,
+  onRegenerateSingle,
+  isRegenerating,
 }: {
   row: BulkSegmentRow;
   updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
   jobId: string;
   videoIndex: number;
   onApplyRow: () => void;
+  onRegenerateSingle: () => void;
+  isRegenerating: boolean;
 }) {
+  const [showSettings, setShowSettings] = useState(false);
   const ratio = row.draftText.length / Math.max(row.originalText.length, 1);
   const problematic = isRowProblematic(row);
 
+  const hasCustomFishAudio =
+    Math.abs(row.temperature - 0.7) > 0.01 ||
+    Math.abs(row.topP - 0.7) > 0.01 ||
+    Math.abs(row.repetitionPenalty - 1.2) > 0.01 ||
+    Math.abs(row.volume - 0.0) > 0.01;
+
   return (
     <div
-      className={`rounded-lg border p-2 space-y-2 ${
+      className={`rounded-lg border p-2.5 space-y-2.5 transition-colors ${
         row.missingAudio
           ? "border-red-500/40 bg-red-500/5"
           : problematic
@@ -632,12 +833,12 @@ function SegmentRow({
           onChange={(e) => updateRow(row.seg, { selected: e.target.checked })}
           className="rounded border-border"
         />
-        <span className="text-[10px] font-mono text-text-primary">#{row.seg}</span>
+        <span className="text-[10px] font-mono font-semibold text-text-primary">#{row.seg}</span>
         <span className="text-[10px] text-text-muted">
           {row.start.toFixed(2)}–{row.end.toFixed(2)}s · slot {row.slotDuration.toFixed(2)}s
         </span>
         <span
-          className={`text-[9px] px-1.5 py-0.5 rounded ${
+          className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
             ratio > 1.15 ? "bg-amber-500/20 text-amber-400" : "bg-background-tertiary text-text-muted"
           }`}
         >
@@ -658,6 +859,10 @@ function SegmentRow({
                 speedInput: row.loadedSpeedInput,
                 speedMode: "x",
                 speed: row.loadedSpeed,
+                temperature: 0.7,
+                topP: 0.7,
+                repetitionPenalty: 1.2,
+                volume: 0.0,
               })
             }
             className="text-[9px] text-primary hover:underline cursor-pointer"
@@ -666,12 +871,38 @@ function SegmentRow({
             modificado
           </button>
         )}
+
+        <div className="flex-1" />
+
+        {/* Botón para desplegar ajustes de Fish Audio */}
+        <button
+          type="button"
+          onClick={() => setShowSettings(!showSettings)}
+          className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+            showSettings || hasCustomFishAudio
+              ? "border-primary/40 bg-primary/10 text-primary font-medium"
+              : "border-border/60 bg-background-tertiary text-text-muted hover:text-text-primary"
+          }`}
+          title="Ajustes de expresividad y voz Fish Audio"
+        >
+          <SlidersHorizontal size={11} />
+          <span>Voz Fish</span>
+          {hasCustomFishAudio && (
+            <span className="w-1.5 h-1.5 rounded-full bg-primary" title="Parámetros personalizados" />
+          )}
+          {showSettings ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
         <SegmentOriginalText row={row} />
         <SegmentDraftText row={row} updateRow={updateRow} />
       </div>
+
+      {/* Panel colapsable de ajustes de Fish Audio */}
+      {showSettings && (
+        <SegmentFishAudioSettings row={row} updateRow={updateRow} />
+      )}
 
       <SegmentSpeedControls 
         row={row} 
@@ -679,6 +910,8 @@ function SegmentRow({
         jobId={jobId}
         videoIndex={videoIndex}
         onApplyRow={onApplyRow}
+        onRegenerateSingle={onRegenerateSingle}
+        isRegenerating={isRegenerating}
       />
     </div>
   );
@@ -686,9 +919,9 @@ function SegmentRow({
 
 function SegmentOriginalText({ row }: { row: BulkSegmentRow }) {
   return (
-    <div>
-      <p className="text-[9px] text-text-muted mb-0.5">Original (STT)</p>
-      <p className="text-[10px] text-text-muted leading-snug">{row.originalText || "—"}</p>
+    <div className="bg-background-tertiary/30 rounded p-1.5 border border-border/40">
+      <p className="text-[9px] font-medium text-text-muted mb-0.5">Original (STT)</p>
+      <p className="text-[10px] text-text-muted leading-snug break-words">{row.originalText || "—"}</p>
     </div>
   );
 }
@@ -700,14 +933,211 @@ function SegmentDraftText({
   row: BulkSegmentRow;
   updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [showAllEmotions, setShowAllEmotions] = useState(false);
+
+  const insertTag = (tag: string) => {
+    const el = textareaRef.current;
+    if (!el) {
+      updateRow(row.seg, { draftText: `${tag} ${row.draftText}`.trim() });
+      return;
+    }
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const text = row.draftText;
+    const inserted = text.substring(0, start) + `${tag} ` + text.substring(end);
+    updateRow(row.seg, { draftText: inserted });
+    setTimeout(() => {
+      el.focus();
+      const pos = start + tag.length + 1;
+      el.setSelectionRange(pos, pos);
+    }, 0);
+  };
+
   return (
-    <div>
-      <p className="text-[9px] text-text-muted mb-0.5">TTS / editar</p>
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <p className="text-[9px] font-medium text-text-muted">TTS / Texto traducido</p>
+        <button
+          type="button"
+          onClick={() => setShowAllEmotions(!showAllEmotions)}
+          className="text-[9px] text-primary hover:underline flex items-center gap-0.5 cursor-pointer"
+        >
+          <Sparkles size={10} />
+          {showAllEmotions ? "Menos emociones" : "+ Todas las emociones"}
+        </button>
+      </div>
+
+      {/* Barra de Emociones Rápidas con 1 Clic */}
+      <div className="flex flex-wrap items-center gap-1 py-0.5">
+        {QUICK_EMOTIONS.map((e) => (
+          <button
+            key={e.tag}
+            type="button"
+            onClick={() => insertTag(e.tag)}
+            className="text-[9px] px-1.5 py-0.5 rounded bg-background-tertiary hover:bg-primary/20 hover:text-primary border border-border/50 transition-colors flex items-center gap-1 cursor-pointer"
+            title={`Insertar emoción ${e.tag} en el texto`}
+          >
+            <span>{e.emoji}</span>
+            <span>{e.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Catálogo completo desplegable de emociones Fish Audio S2 */}
+      {showAllEmotions && (
+        <div className="p-2 border border-border rounded bg-background-tertiary/70 space-y-2 text-[9px] max-h-40 overflow-y-auto">
+          {ALL_EMOTIONS_CATEGORIES.map((cat) => (
+            <div key={cat.category} className="space-y-1">
+              <span className="font-semibold text-text-primary block">{cat.category}:</span>
+              <div className="flex flex-wrap gap-1">
+                {cat.items.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => insertTag(item)}
+                    className="px-1.5 py-0.5 rounded bg-background border border-border hover:border-primary hover:text-primary transition-colors cursor-pointer font-mono"
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <textarea
-        className="w-full min-h-[48px] text-[10px] px-2 py-1 rounded border border-border bg-background-tertiary resize-y"
+        ref={textareaRef}
+        className="w-full min-h-[52px] text-[10px] px-2 py-1.5 rounded border border-border bg-background-tertiary resize-y focus:outline-none focus:border-primary leading-relaxed"
         value={row.draftText}
+        placeholder="Texto a sintetizar. Puedes usar emociones como [happy], [whispering], etc."
         onChange={(e) => updateRow(row.seg, { draftText: e.target.value })}
       />
+    </div>
+  );
+}
+
+function SegmentFishAudioSettings({
+  row,
+  updateRow,
+}: {
+  row: BulkSegmentRow;
+  updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
+}) {
+  const resetDefaults = () => {
+    updateRow(row.seg, {
+      temperature: 0.7,
+      topP: 0.7,
+      repetitionPenalty: 1.2,
+      volume: 0.0,
+    });
+  };
+
+  return (
+    <div className="p-2.5 rounded-md border border-primary/20 bg-primary/5 space-y-2 text-[10px]">
+      <div className="flex items-center justify-between pb-1 border-b border-primary/10">
+        <span className="font-semibold text-primary flex items-center gap-1">
+          <SlidersHorizontal size={12} />
+          Parámetros Fish Audio (s2.1-pro-free)
+        </span>
+        <button
+          type="button"
+          onClick={resetDefaults}
+          className="text-[9px] text-text-muted hover:text-text-primary flex items-center gap-1 cursor-pointer"
+          title="Restablecer parámetros por defecto"
+        >
+          <RotateCcw size={10} />
+          Valores por defecto
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
+        {/* Expresividad (Temperature) */}
+        <div>
+          <div className="flex justify-between text-[9px] text-text-muted mb-0.5">
+            <span>Expresividad (Temperature)</span>
+            <span className="font-mono text-text-primary">{row.temperature.toFixed(2)}</span>
+          </div>
+          <input
+            type="range"
+            min="0.1"
+            max="1.0"
+            step="0.05"
+            value={row.temperature}
+            onChange={(e) => updateRow(row.seg, { temperature: parseFloat(e.target.value) })}
+            className="w-full accent-primary h-1 bg-background-tertiary rounded cursor-pointer"
+          />
+          <div className="flex justify-between text-[8px] text-text-muted">
+            <span>Consistente (0.1)</span>
+            <span>Expresivo (1.0)</span>
+          </div>
+        </div>
+
+        {/* Diversidad (Top-P) */}
+        <div>
+          <div className="flex justify-between text-[9px] text-text-muted mb-0.5">
+            <span>Diversidad (Top-P)</span>
+            <span className="font-mono text-text-primary">{row.topP.toFixed(2)}</span>
+          </div>
+          <input
+            type="range"
+            min="0.1"
+            max="1.0"
+            step="0.05"
+            value={row.topP}
+            onChange={(e) => updateRow(row.seg, { topP: parseFloat(e.target.value) })}
+            className="w-full accent-primary h-1 bg-background-tertiary rounded cursor-pointer"
+          />
+          <div className="flex justify-between text-[8px] text-text-muted">
+            <span>Enfocado (0.1)</span>
+            <span>Variado (1.0)</span>
+          </div>
+        </div>
+
+        {/* Evitar Repeticiones */}
+        <div>
+          <div className="flex justify-between text-[9px] text-text-muted mb-0.5">
+            <span>Anti-Repetición</span>
+            <span className="font-mono text-text-primary">{row.repetitionPenalty.toFixed(2)}</span>
+          </div>
+          <input
+            type="range"
+            min="1.0"
+            max="2.0"
+            step="0.05"
+            value={row.repetitionPenalty}
+            onChange={(e) => updateRow(row.seg, { repetitionPenalty: parseFloat(e.target.value) })}
+            className="w-full accent-primary h-1 bg-background-tertiary rounded cursor-pointer"
+          />
+          <div className="flex justify-between text-[8px] text-text-muted">
+            <span>Normal (1.0)</span>
+            <span>Máximo freno (2.0)</span>
+          </div>
+        </div>
+
+        {/* Volumen */}
+        <div>
+          <div className="flex justify-between text-[9px] text-text-muted mb-0.5">
+            <span>Volumen relativo</span>
+            <span className="font-mono text-text-primary">{row.volume >= 0 ? `+${row.volume} dB` : `${row.volume} dB`}</span>
+          </div>
+          <input
+            type="range"
+            min="-10"
+            max="10"
+            step="1"
+            value={row.volume}
+            onChange={(e) => updateRow(row.seg, { volume: parseFloat(e.target.value) })}
+            className="w-full accent-primary h-1 bg-background-tertiary rounded cursor-pointer"
+          />
+          <div className="flex justify-between text-[8px] text-text-muted">
+            <span>-10 dB</span>
+            <span>0 dB</span>
+            <span>+10 dB</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -718,12 +1148,16 @@ function SegmentSpeedControls({
   jobId,
   videoIndex,
   onApplyRow,
+  onRegenerateSingle,
+  isRegenerating,
 }: {
   row: BulkSegmentRow;
   updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
   jobId: string;
   videoIndex: number;
   onApplyRow: () => void;
+  onRegenerateSingle: () => void;
+  isRegenerating: boolean;
 }) {
   const [playing, setPlaying] = useState(false);
 
@@ -751,7 +1185,8 @@ function SegmentSpeedControls({
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/40">
+      <span className="text-[9px] text-text-muted font-medium">Ajuste de velocidad:</span>
       <Select
         value={row.speedMode}
         onValueChange={(v) => {
@@ -772,7 +1207,7 @@ function SegmentSpeedControls({
       </Select>
       <input
         type="text"
-        className="w-20 h-7 text-[10px] px-2 rounded border border-border bg-background-tertiary"
+        className="w-18 h-7 text-[10px] px-2 rounded border border-border bg-background-tertiary font-mono"
         placeholder={row.speedMode === "x" ? "1.0" : row.slotDuration.toFixed(2)}
         value={row.speedInput}
         onChange={(e) => updateRow(row.seg, { speedInput: e.target.value })}
@@ -782,22 +1217,50 @@ function SegmentSpeedControls({
         size="sm"
         variant="secondary"
         className="text-[9px] h-7 px-2"
-        disabled={!row.dirty}
+        disabled={!row.dirty || isRegenerating}
         onClick={onApplyRow}
+        title="Aplica la velocidad sin volver a llamar a la API de voz"
       >
-        Aplicar
+        Solo velocidad
       </Button>
-      <div className="flex-1" />
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        className="text-[9px] h-7 px-2"
-        disabled={playing}
-        onClick={() => void handlePlayAudio()}
-      >
-        {playing ? "Reproduciendo..." : "Reproducir audio"}
-      </Button>
+
+      <div className="flex-1 min-w-[8px]" />
+
+      {/* Botones de acción individual: Reproducir y Regenerar */}
+      <div className="flex items-center gap-1.5 ml-auto">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="text-[9px] h-7 px-2.5"
+          disabled={playing || isRegenerating}
+          onClick={() => void handlePlayAudio()}
+        >
+          {playing ? "Reproduciendo..." : "Reproducir"}
+        </Button>
+
+        <Button
+          type="button"
+          size="sm"
+          className="text-[9px] h-7 px-2.5 bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-1 shadow-sm font-medium"
+          disabled={isRegenerating}
+          onClick={onRegenerateSingle}
+          title="Regenerar segmento con Fish Audio y sincronizarlo inmediatamente al timeline"
+        >
+          {isRegenerating ? (
+            <>
+              <Loader2 size={11} className="animate-spin" />
+              <span>Regenerando...</span>
+            </>
+          ) : (
+            <>
+              <RefreshCw size={11} />
+              <span>Regenerar</span>
+            </>
+          )}
+        </Button>
+      </div>
     </div>
   );
 }
+

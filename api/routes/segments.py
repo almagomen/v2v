@@ -151,10 +151,8 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
     if not target_lang and job:
         target_lang = job.get("translate_lang")
     if not target_lang or target_lang in ("None", ""):
-        raise HTTPException(
-            status_code=400,
-            detail="No se pudo inferir el idioma objetivo. Indica target_lang.",
-        )
+        # Fallback inteligente: español si el origen no es español, de lo contrario inglés
+        target_lang = "es" if source_lang != "es" else "en"
 
     indices = sorted(set(req.seg_indices))
     sentences: list[str] = []

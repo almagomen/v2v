@@ -63,6 +63,10 @@ async def regenerate_segment(req: RegenerateSegmentRequest):
         req.speaker,
         req.speed,
         req.target_duration,
+        temperature=req.temperature,
+        top_p=req.top_p,
+        repetition_penalty=req.repetition_penalty,
+        volume=req.volume,
     )
 
 
@@ -76,6 +80,10 @@ def _do_regenerate_segment(
     speaker: str,
     speed: float = 1.0,
     target_duration: float | None = None,
+    temperature: float = 0.7,
+    top_p: float = 0.7,
+    repetition_penalty: float = 1.2,
+    volume: float = 0.0,
 ):
     from src.pipeline import split_audio_sequences
     from src.audio_utils import clone_voice_segments
@@ -135,6 +143,10 @@ def _do_regenerate_segment(
         only_indices=[seg_idx],
         speed=speed,
         target_duration=target_duration,
+        temperature=temperature,
+        top_p=top_p,
+        repetition_penalty=repetition_penalty,
+        volume=volume,
     )
 
     if not paths_es:

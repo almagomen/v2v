@@ -149,6 +149,12 @@ export async function applyRegeneratedSegmentToTimeline(
   }
 
   invalidateAudioCache(mediaId);
+  try {
+    const { useEngineStore } = await import("../stores/engine-store");
+    useEngineStore.getState().playbackController?.invalidateAudioBuffer(mediaId);
+  } catch (err) {
+    console.warn("[V2V] No se pudo invalidar audioBuffer:", err);
+  }
 
   const newDuration = await getAudioDuration(regenBlob);
   let clipId = params.clipId ?? findClipIdForSegment(mediaId, trackStart);
@@ -201,7 +207,9 @@ export async function applyRegeneratedSegmentToTimeline(
   await forceSave();
 
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("openreel:preview-invalidate"));
+    window.dispatchEvent(
+      new CustomEvent("openreel:preview-invalidate", { detail: { mediaId } }),
+    );
   }
 
   return {

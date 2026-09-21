@@ -158,7 +158,37 @@ export class PlaybackController {
     this.project = project;
     this.state = "stopped";
     this.masterClock.setDuration(project.timeline.duration);
+
+    // Detectar si el Blob de algún mediaItem ha cambiado para invalidar el buffer inmediatamente
+    for (const item of project.mediaLibrary.items) {
+      if (item.blob) {
+        const prevBlob = this.mediaBlobRefs.get(item.id);
+        if (prevBlob && prevBlob !== item.blob) {
+          this.audioBufferCache.delete(item.id);
+          this.audioDecodePromises.delete(item.id);
+        }
+        this.mediaBlobRefs.set(item.id, item.blob);
+      }
+    }
+
     this.pruneAudioBuffers(project);
+  }
+
+  /**
+   * Invalida la caché de AudioBuffer para un medio específico o todos los medios.
+   * Garantiza que el Timeline reproduzca el audio recién generado o reemplazado.
+   */
+  invalidateAudioBuffer(mediaId?: string): void {
+    if (mediaId) {
+      this.audioBufferCache.delete(mediaId);
+      this.audioDecodePromises.delete(mediaId);
+      this.mediaBlobRefs.delete(mediaId);
+    } else {
+      this.audioBufferCache.clear();
+      this.audioDecodePromises.clear();
+      this.mediaBlobRefs.clear();
+    }
+    this.stopAudioPlayback();
   }
 
   setDisplayCanvas(canvas: HTMLCanvasElement | OffscreenCanvas): void {
@@ -636,6 +666,7 @@ export class PlaybackController {
   private audioBufferCache: Map<string, AudioBuffer> = new Map();
   private audioDecodePromises: Map<string, Promise<AudioBuffer | null>> =
     new Map();
+  private mediaBlobRefs: Map<string, Blob> = new Map();
 
   private async preloadAudioBuffers(): Promise<void> {
     if (!this.project) return;
