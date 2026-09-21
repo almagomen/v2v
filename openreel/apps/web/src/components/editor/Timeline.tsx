@@ -83,13 +83,13 @@ const TRACK_LAYER_FILTERS: readonly {
   id: TrackLayerFilter;
   label: string;
 }[] = [
-  { id: "all", label: "All" },
-  { id: "video", label: "Video" },
-  { id: "image", label: "Image" },
-  { id: "audio", label: "Audio" },
-  { id: "text", label: "Text" },
-  { id: "graphics", label: "Graphics" },
-];
+    { id: "all", label: "All" },
+    { id: "video", label: "Video" },
+    { id: "image", label: "Image" },
+    { id: "audio", label: "Audio" },
+    { id: "text", label: "Text" },
+    { id: "graphics", label: "Graphics" },
+  ];
 
 const ADD_TRACK_ROW_HEIGHT = 36;
 const TIMELINE_SCROLLBAR_SIZE = 10;
@@ -748,16 +748,16 @@ export const Timeline: React.FC = () => {
       const sourceClip = store.getClip(clipId);
       const isOverlay = Boolean(
         store.getTextClip(clipId) ||
-          store.getShapeClip(clipId) ||
-          store.getSVGClip(clipId) ||
-          store.getStickerClip(clipId),
+        store.getShapeClip(clipId) ||
+        store.getSVGClip(clipId) ||
+        store.getStickerClip(clipId),
       );
       const result = targetTrackId
         ? await store.moveTimelineItem(clipId, newStartTime, targetTrackId)
         : isOverlay
           ? store.updateOverlayClipTiming(clipId, {
-              startTime: newStartTime,
-            })
+            startTime: newStartTime,
+          })
             ? { success: true as const }
             : { success: false as const }
           : await store.moveClip(clipId, newStartTime);
@@ -811,9 +811,9 @@ export const Timeline: React.FC = () => {
       const newDuration =
         edge === "left"
           ? Math.max(
-              0.1,
-              graphicClip.startTime + graphicClip.duration - newTime,
-            )
+            0.1,
+            graphicClip.startTime + graphicClip.duration - newTime,
+          )
           : Math.max(0.1, newTime - graphicClip.startTime);
 
       store.updateOverlayClipTiming(clipId, {
@@ -838,12 +838,12 @@ export const Timeline: React.FC = () => {
       const updates =
         edge === "left"
           ? {
-              startTime: newTime,
-              duration: newDuration,
-            }
+            startTime: newTime,
+            duration: newDuration,
+          }
           : {
-              duration: newDuration,
-            };
+            duration: newDuration,
+          };
 
       const adjustedKeyframes = clip.keyframes.map((kf) => {
         if (kf.id.startsWith("kf-exit-")) {
@@ -945,9 +945,8 @@ export const Timeline: React.FC = () => {
       onClick={onClick}
       disabled={disabled}
       data-tip-bottom={title}
-      className={`relative grid place-items-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-        active ? "text-accent" : "text-fg-muted hover:text-fg-2"
-      }`}
+      className={`relative grid place-items-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${active ? "text-accent" : "text-fg-muted hover:text-fg-2"
+        }`}
     >
       {children}
       {extra}
@@ -960,7 +959,7 @@ export const Timeline: React.FC = () => {
       className="h-full bg-tl-bg flex flex-col min-h-0 relative overflow-hidden"
     >
       {/* ── Timeline toolbar (mock: 48px line-icon tools + emerald zoom slider) ── */}
-      <div className="flex items-center h-12 px-4 gap-4 bg-bg-1 border-b border-border shrink-0 relative z-50">
+      <div className="flex items-center h-12 px-4 gap-4 bg-bg-1 border-b border-border shrink-0 relative z-120">
         <TLTool onClick={undo} disabled={!canUndo()} title="Undo (⌘Z)">
           <Undo2 size={16} aria-hidden />
         </TLTool>
@@ -1110,11 +1109,10 @@ export const Timeline: React.FC = () => {
                         type="button"
                         aria-pressed={trackLayerFilter === filter.id}
                         onClick={() => setTrackLayerFilter(filter.id)}
-                        className={`h-6 shrink-0 rounded-md border px-2 text-[9px] font-semibold transition-colors ${
-                          trackLayerFilter === filter.id
+                        className={`h-6 shrink-0 rounded-md border px-2 text-[9px] font-semibold transition-colors ${trackLayerFilter === filter.id
                             ? "border-accent bg-accent-soft text-accent"
                             : "border-border bg-bg-2 text-fg-3 hover:border-accent/50 hover:text-fg"
-                        }`}
+                          }`}
                       >
                         {filter.label} {count}
                       </button>
@@ -1239,11 +1237,10 @@ export const Timeline: React.FC = () => {
                                   aria-label={`Solo ${name}`}
                                   aria-pressed={track.solo}
                                   onClick={() => void soloTrack(track.id, !track.solo)}
-                                  className={`flex h-7 min-w-7 items-center justify-center rounded-md px-1 text-[10px] font-black transition-colors ${
-                                    track.solo
+                                  className={`flex h-7 min-w-7 items-center justify-center rounded-md px-1 text-[10px] font-black transition-colors ${track.solo
                                       ? "bg-status-warning text-black"
                                       : "text-fg-muted hover:bg-hover hover:text-fg"
-                                  }`}
+                                    }`}
                                 >
                                   S
                                 </button>
@@ -1326,7 +1323,7 @@ export const Timeline: React.FC = () => {
                       100,
                       ((pixelsPerSecond - ZOOM_PRESETS.MIN) /
                         (ZOOM_PRESETS.MAX - ZOOM_PRESETS.MIN)) *
-                        100,
+                      100,
                     ),
                   )}%`,
                 }}
@@ -1341,7 +1338,7 @@ export const Timeline: React.FC = () => {
                       100,
                       ((pixelsPerSecond - ZOOM_PRESETS.MIN) /
                         (ZOOM_PRESETS.MAX - ZOOM_PRESETS.MIN)) *
-                        100,
+                      100,
                     ),
                   )}%`,
                 }}
