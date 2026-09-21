@@ -92,7 +92,7 @@ export const V2VToolbarEntry: React.FC = () => {
       {/* Diálogo flotante no-bloqueante para edición en lote de segmentos */}
       {bulkEditorOpen && bulkEditorContext && (
         <div 
-          className="fixed top-14 left-1/2 -translate-x-1/2 w-[calc(100vw-2rem)] max-w-4xl max-h-[58vh] bg-bg-1 border border-border shadow-2xl rounded-xl z-50 flex flex-col overflow-hidden pointer-events-auto"
+          className="fixed top-14 left-1/2 -translate-x-1/2 w-[calc(100vw-2rem)] max-w-4xl max-h-[58vh] bg-bg-1 border border-border shadow-2xl rounded-xl z-[200] flex flex-col overflow-hidden pointer-events-auto"
         >
           {/* Header */}
           <div className="px-5 py-3 space-y-0.5 shrink-0 text-left border-b border-border relative select-none">

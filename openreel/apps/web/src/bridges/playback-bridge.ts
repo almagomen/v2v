@@ -45,25 +45,7 @@ export class PlaybackBridge {
     // Subscribe to project changes to update the playback controller
     this.setupProjectSubscription();
 
-    // Escuchar eventos globales de invalidación de audio / preview
-    if (typeof window !== "undefined") {
-      window.addEventListener("openreel:preview-invalidate", this.handlePreviewInvalidate);
-    }
-
     this.initialized = true;
-  }
-
-  private handlePreviewInvalidate = (e: Event) => {
-    const customEvent = e as CustomEvent<{ mediaId?: string }>;
-    const mediaId = customEvent.detail?.mediaId;
-    this.invalidateAudioBuffer(mediaId);
-  };
-
-  /**
-   * Invalida la caché de audio en el PlaybackController para forzar la recarga del audio nuevo en el timeline.
-   */
-  invalidateAudioBuffer(mediaId?: string): void {
-    this.playbackController?.invalidateAudioBuffer(mediaId);
   }
 
   /**
@@ -464,10 +446,6 @@ export class PlaybackBridge {
     if (this.unsubscribeTimelineStore) {
       this.unsubscribeTimelineStore();
       this.unsubscribeTimelineStore = null;
-    }
-
-    if (typeof window !== "undefined") {
-      window.removeEventListener("openreel:preview-invalidate", this.handlePreviewInvalidate);
     }
 
     this.playbackController = null;

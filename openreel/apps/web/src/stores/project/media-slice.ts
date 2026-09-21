@@ -362,12 +362,6 @@ export function createMediaSlice(set: Set, get: Get): MediaSlice {
           },
         });
 
-        // Invalidar de inmediato la caché de audio en PlaybackController si es audio o video
-        try {
-          const { useEngineStore } = await import("../engine-store");
-          useEngineStore.getState().playbackController?.invalidateAudioBuffer(mediaId);
-        } catch {}
-
         if (updatedItem.type === "video" && !updatedItem.thumbnailUrl) {
           setTimeout(async () => {
             try {
