@@ -6,13 +6,13 @@ import {
   Square,
   Loader2,
   Plus,
-  Volume2,
+  RefreshCw,
+  Clock,
+  ListChecks,
+  X,
   SlidersHorizontal,
   ChevronDown,
   ChevronUp,
-  Clock,
-  CheckCircle2,
-  AlertCircle,
 } from "lucide-react";
 import { Button } from "@openreel/ui";
 
@@ -20,13 +20,21 @@ import { v2vApi, type GeneratedAudioResult } from "../../../lib/v2v-api";
 import { useV2VStore } from "../../../stores/v2v-store";
 import { useProjectStore } from "../../../stores/project-store";
 import { useTimelineStore } from "../../../stores/timeline-store";
+import { useUIStore } from "../../../stores/ui-store";
 import { toast } from "../../../stores/notification-store";
-import { folderNameFromTitle } from "../../../utils/v2v-utils";
+import { folderNameFromTitle, parseV2VSegmentFromName, toSafeToken } from "../../../utils/v2v-utils";
+import { applyRegeneratedSegmentToTimeline } from "../../../utils/v2v-segment-regen";
+import {
+  V2V_EMOTIONS,
+  DEFAULT_EMOTION_TAG,
+  applyEmotionToText,
+  extractEmotionFromText,
+} from "../../../utils/v2v-emotions";
 
 export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
   inDrawer = false,
 }) => {
-  const { project, importMedia, addClip, addTrack } = useProjectStore();
+  const { project, importMedia, addClip, addTrack, getClip, getMediaItem } = useProjectStore();
   const {
     jobId,
     videos,
@@ -36,18 +44,23 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     speaker: defaultSpeaker,
     getFolderRef,
     syncFolderAssets,
+    setBulkEditorOpen,
+    setIsV2VOpen,
+    getSegmentByMediaId,
   } = useV2VStore();
 
   const playheadPosition = useTimelineStore((s) => s.playheadPosition);
+  const selectedItems = useUIStore((s) => s.selectedItems);
+  const clearSelection = useUIStore((s) => s.clearSelection);
 
-  // Cargar speakers al montar si aún no se han obtenido
+  // Cargar lista de speakers al montar
   useEffect(() => {
     if (speakers.length === 0) {
       fetchSpeakers();
     }
   }, [speakers.length, fetchSpeakers]);
 
-  // Resolver el video y carpeta activos
+  // Resolver video y carpeta activos
   const effectiveDropdownValue = useMemo(() => {
     for (let i = 0; i < videos.length; i++) {
       const v = videos[i] as any;
@@ -65,25 +78,68 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     ? folderNameFromTitle(activeVideo.output_name || `video_${activeVideo.index}`)
     : "";
 
+  // Detección de clip seleccionado en el Timeline para modo "Edición Individual"
+  const selectedClipId = selectedItems && selectedItems.length > 0 ? selectedItems[0] : null;
+  const selectedClip = selectedClipId ? getClip(selectedClipId) : null;
+  const selectedMediaItem = selectedClip ? getMediaItem(selectedClip.mediaId) : null;
+
+  const parsedSelectedSegment = useMemo(() => {
+    if (!selectedMediaItem?.name) return null;
+    return parseV2VSegmentFromName(selectedMediaItem.name);
+  }, [selectedMediaItem?.name]);
+
+  const isEditingExistingSegment = Boolean(parsedSelectedSegment && selectedClip);
+
   // Estados del formulario
   const [text, setText] = useState("");
   const [selectedVoice, setSelectedVoice] = useState(defaultSpeaker || "mrbeast");
-  const [speed, setSpeed] = useState(1.0);
+  const [selectedEmotion, setSelectedEmotion] = useState<string>(DEFAULT_EMOTION_TAG);
   const [temperature, setTemperature] = useState(0.7);
-  const [volume, setVolume] = useState(0.0);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // Estados de generación y preview
-  const [isGenerating, setIsGenerating] = useState(false);
+  // Estados de proceso y preescucha
+  const [isProcessing, setIsProcessing] = useState(false);
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
   const [cachedAudio, setCachedAudio] = useState<{
     result: GeneratedAudioResult;
-    text: string;
+    finalText: string;
     voice: string;
-    speed: number;
   } | null>(null);
 
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Sincronizar campos cuando cambia el clip seleccionado en la Timeline
+  useEffect(() => {
+    if (parsedSelectedSegment && selectedClip && selectedMediaItem) {
+      // 1. Obtener texto del segmento existente
+      const folderRef = getFolderRef(activeFolder);
+      const segInfo = folderRef ? getSegmentByMediaId(activeFolder, selectedMediaItem.id) : null;
+      const rawText = segInfo?.editedText || segInfo?.originalText || "";
+
+      if (rawText) {
+        const { emotionTag, cleanText } = extractEmotionFromText(rawText);
+        setText(cleanText);
+        setSelectedEmotion(emotionTag);
+      } else {
+        // Si no está en memoria del store, intentar rescatarlo
+        setText("");
+        setSelectedEmotion(DEFAULT_EMOTION_TAG);
+      }
+
+      // 2. Obtener voz del segmento existente
+      if (parsedSelectedSegment.speakerToken) {
+        const matchingSpeaker = speakers.find(
+          (s) =>
+            s.value === parsedSelectedSegment.speakerToken ||
+            s.label.toLowerCase() === parsedSelectedSegment.speakerToken.toLowerCase(),
+        );
+        if (matchingSpeaker) {
+          setSelectedVoice(matchingSpeaker.value || matchingSpeaker.label);
+        }
+      }
+      setCachedAudio(null);
+    }
+  }, [parsedSelectedSegment, selectedClip, selectedMediaItem, activeFolder, getFolderRef, getSegmentByMediaId, speakers]);
 
   // Limpiar preview al desmontar
   useEffect(() => {
@@ -103,49 +159,12 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     );
   }, [speakers, selectedVoice]);
 
-  // Generar audio invocando la API
-  const generateAudio = useCallback(async (): Promise<GeneratedAudioResult> => {
-    if (!text.trim()) {
-      throw new Error("Por favor escribe un texto para generar el audio.");
-    }
-    if (!jobId && !activeFolder) {
-      throw new Error("No hay un proyecto activo de Video2Video seleccionado.");
-    }
+  // Texto final con la emoción aplicada al principio
+  const computeFinalText = useCallback(() => {
+    return applyEmotionToText(text.trim(), selectedEmotion);
+  }, [text, selectedEmotion]);
 
-    const res = await v2vApi.generateNewAudioSegment(
-      jobId,
-      activeVideoIndex,
-      text.trim(),
-      selectedVoice,
-      {
-        start: playheadPosition,
-        speed,
-        temperature,
-        volume,
-      },
-    );
-
-    setCachedAudio({
-      result: res,
-      text: text.trim(),
-      voice: selectedVoice,
-      speed,
-    });
-
-    return res;
-  }, [
-    text,
-    jobId,
-    activeFolder,
-    activeVideoIndex,
-    selectedVoice,
-    playheadPosition,
-    speed,
-    temperature,
-    volume,
-  ]);
-
-  // Preescucha del audio generado
+  // Preescucha de audio
   const handlePreview = useCallback(async () => {
     if (isPlayingPreview) {
       if (previewAudioRef.current) {
@@ -156,20 +175,38 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       return;
     }
 
+    const finalText = computeFinalText();
+    if (!finalText.trim()) {
+      toast.error("Texto requerido", "Escribe una frase para preescuchar.");
+      return;
+    }
+
     try {
-      setIsGenerating(true);
+      setIsProcessing(true);
       let audioResult: GeneratedAudioResult;
 
-      // Reutilizar si ya se generó exactamente lo mismo
       if (
         cachedAudio &&
-        cachedAudio.text === text.trim() &&
-        cachedAudio.voice === selectedVoice &&
-        cachedAudio.speed === speed
+        cachedAudio.finalText === finalText &&
+        cachedAudio.voice === selectedVoice
       ) {
         audioResult = cachedAudio.result;
       } else {
-        audioResult = await generateAudio();
+        audioResult = await v2vApi.generateNewAudioSegment(
+          jobId,
+          activeVideoIndex,
+          finalText,
+          selectedVoice,
+          {
+            start: isEditingExistingSegment && selectedClip ? selectedClip.startTime : playheadPosition,
+            temperature,
+          },
+        );
+        setCachedAudio({
+          result: audioResult,
+          finalText,
+          voice: selectedVoice,
+        });
       }
 
       if (previewAudioRef.current) {
@@ -187,7 +224,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       audio.onerror = () => {
         setIsPlayingPreview(false);
         URL.revokeObjectURL(audioUrl);
-        toast.error("Error", "No se pudo reproducir el audio de preescucha.");
+        toast.error("Error", "No se pudo reproducir la preescucha.");
       };
 
       await audio.play();
@@ -195,283 +232,375 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     } catch (err: any) {
       toast.error("Error al preescuchar", err?.message || "Ocurrió un error");
     } finally {
-      setIsGenerating(false);
+      setIsProcessing(false);
     }
-  }, [isPlayingPreview, cachedAudio, text, selectedVoice, speed, generateAudio]);
+  }, [
+    isPlayingPreview,
+    computeFinalText,
+    cachedAudio,
+    selectedVoice,
+    jobId,
+    activeVideoIndex,
+    isEditingExistingSegment,
+    selectedClip,
+    playheadPosition,
+    temperature,
+  ]);
 
-  // Insertar en Timeline y Media Library
-  const handleInsertToTimeline = useCallback(async () => {
-    if (!text.trim()) {
-      toast.error("Texto requerido", "Escribe una frase antes de insertarla.");
+  // Ejecutar Acción Principal (Regenerar segmento existente O Generar nuevo N+1)
+  const handleMainAction = useCallback(async () => {
+    const finalText = computeFinalText();
+    if (!finalText.trim()) {
+      toast.error("Texto requerido", "Por favor escribe un texto para sintetizar.");
       return;
     }
 
+    setIsProcessing(true);
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      setIsPlayingPreview(false);
+    }
+
     try {
-      setIsGenerating(true);
-      if (previewAudioRef.current) {
-        previewAudioRef.current.pause();
-        setIsPlayingPreview(false);
-      }
+      if (isEditingExistingSegment && parsedSelectedSegment && selectedClip && selectedMediaItem) {
+        // --- MODO EDICIÓN INDIVIDUAL DE SEGMENTO EXISTENTE ---
+        const start = selectedClip.startTime;
+        const end = selectedClip.startTime + selectedClip.duration;
 
-      let audioResult: GeneratedAudioResult;
-      if (
-        cachedAudio &&
-        cachedAudio.text === text.trim() &&
-        cachedAudio.voice === selectedVoice &&
-        cachedAudio.speed === speed
-      ) {
-        audioResult = cachedAudio.result;
-      } else {
-        audioResult = await generateAudio();
-      }
-
-      const { blob, segIdx, duration, filename } = audioResult;
-      const file = new File([blob], filename, { type: "audio/wav" });
-
-      // 1. Importar a la biblioteca de medios
-      const importRes = await importMedia(file);
-      if (!importRes.success || !importRes.actionId) {
-        throw new Error(
-          typeof importRes.error === "string"
-            ? importRes.error
-            : "No se pudo importar el archivo a la biblioteca de medios.",
+        const regenBlob = await v2vApi.regenerateSegment(
+          jobId,
+          activeVideoIndex,
+          parsedSelectedSegment.segIdx,
+          finalText,
+          start,
+          end,
+          null,
+          selectedVoice,
+          1.0,
+          undefined,
+          { temperature },
         );
-      }
-      const mediaId = importRes.actionId;
 
-      // 2. Encontrar o crear la pista de audio destino
-      const currentProject = useProjectStore.getState().project;
-      const audioTracks = currentProject.timeline.tracks.filter(
-        (t) => t.type === "audio",
-      );
+        const result = await applyRegeneratedSegmentToTimeline({
+          folder: activeFolder,
+          jobId,
+          videoIndex: activeVideoIndex,
+          segIdx: parsedSelectedSegment.segIdx,
+          regenBlob,
+          text: finalText,
+          speaker: selectedVoice,
+          speakerLabel,
+          previousSpeakerToken: parsedSelectedSegment.speakerToken,
+          start,
+          end,
+          effectiveSpeed: 1.0,
+          mediaId: selectedMediaItem.id,
+          clipId: selectedClip.id,
+          trackStart: selectedClip.startTime,
+        });
 
-      const startTime = Math.max(0, playheadPosition);
-      const endTime = startTime + duration;
-
-      // Buscar si existe pista con el nombre del speaker
-      let targetTrack = audioTracks.find((t) =>
-        (t as any).name?.toLowerCase().includes(speakerLabel.toLowerCase()),
-      );
-
-      // Si no existe o tiene colisión en ese timestamp, buscar cualquier pista de audio libre
-      if (!targetTrack || hasCollision(targetTrack, startTime, endTime)) {
-        const freeTrack = audioTracks.find(
-          (t) => !hasCollision(t, startTime, endTime),
-        );
-        if (freeTrack) {
-          targetTrack = freeTrack;
+        if (result.success) {
+          toast.success("Segmento regenerado", result.message);
+          setCachedAudio(null);
         } else {
-          // Crear una nueva pista de audio dedicada
-          const addTrackRes = await addTrack("audio", undefined, {
-            name: speakerLabel,
-          });
-          if (addTrackRes.success) {
-            const updated = useProjectStore.getState().project.timeline.tracks;
-            targetTrack = updated.filter((t) => t.type === "audio").pop();
-          }
+          throw new Error(result.message);
         }
-      }
-
-      if (!targetTrack) {
-        throw new Error("No se pudo asignar una pista de audio en el Timeline.");
-      }
-
-      // 3. Añadir el clip al Timeline
-      await addClip(targetTrack.id, mediaId, startTime);
-
-      // 4. Sincronizar el archivo con Colab para renderizado de fondo
-      if (jobId) {
-        try {
-          await v2vApi.uploadMediaForRender(jobId, activeVideoIndex, file);
-          if (activeFolder) {
-            await syncFolderAssets(jobId, activeVideoIndex, activeFolder);
-          }
-        } catch (syncErr) {
-          console.warn("[V2V] Error sincronizando asset en servidor:", syncErr);
+      } else {
+        // --- MODO NUEVO SEGMENTO TTS (N+1) AL PLAYHEAD ---
+        let audioResult: GeneratedAudioResult;
+        if (
+          cachedAudio &&
+          cachedAudio.finalText === finalText &&
+          cachedAudio.voice === selectedVoice
+        ) {
+          audioResult = cachedAudio.result;
+        } else {
+          audioResult = await v2vApi.generateNewAudioSegment(
+            jobId,
+            activeVideoIndex,
+            finalText,
+            selectedVoice,
+            {
+              start: playheadPosition,
+              temperature,
+            },
+          );
         }
-      }
 
-      // 5. Notificar éxito e invalidar caché visual de waveforms
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("openreel:preview-invalidate", {
-            detail: { mediaId },
-          }),
+        const { blob, segIdx, duration, filename } = audioResult;
+        const file = new File([blob], filename, { type: "audio/wav" });
+
+        // 1. Importar a la Media Library
+        const importRes = await importMedia(file);
+        if (!importRes.success || !importRes.actionId) {
+          throw new Error(
+            typeof importRes.error === "string"
+              ? importRes.error
+              : "No se pudo importar el archivo a la biblioteca de medios.",
+          );
+        }
+        const mediaId = importRes.actionId;
+
+        // 2. Asignar pista de audio
+        const currentProject = useProjectStore.getState().project;
+        const audioTracks = currentProject.timeline.tracks.filter((t) => t.type === "audio");
+        const startTime = Math.max(0, playheadPosition);
+        const endTime = startTime + duration;
+
+        let targetTrack = audioTracks.find((t) =>
+          (t as any).name?.toLowerCase().includes(speakerLabel.toLowerCase()),
         );
+
+        if (!targetTrack || hasCollision(targetTrack, startTime, endTime)) {
+          const freeTrack = audioTracks.find((t) => !hasCollision(t, startTime, endTime));
+          if (freeTrack) {
+            targetTrack = freeTrack;
+          } else {
+            const addTrackRes = await addTrack("audio", undefined, { name: speakerLabel });
+            if (addTrackRes.success) {
+              const updated = useProjectStore.getState().project.timeline.tracks;
+              targetTrack = updated.filter((t) => t.type === "audio").pop();
+            }
+          }
+        }
+
+        if (!targetTrack) {
+          throw new Error("No se pudo asignar una pista de audio en el Timeline.");
+        }
+
+        // 3. Añadir clip a la Timeline
+        await addClip(targetTrack.id, mediaId, startTime);
+
+        // 4. Sincronizar en background con servidor Colab
+        if (jobId) {
+          try {
+            await v2vApi.uploadMediaForRender(jobId, activeVideoIndex, file);
+            if (activeFolder) {
+              await syncFolderAssets(jobId, activeVideoIndex, activeFolder);
+            }
+          } catch (syncErr) {
+            console.warn("[V2V] Error sincronizando asset:", syncErr);
+          }
+        }
+
+        // 5. Notificar éxito e invalidar caché
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent("openreel:preview-invalidate", { detail: { mediaId } }),
+          );
+        }
+
+        toast.success(
+          "Segmento insertado",
+          `Segmento #${segIdx} añadido al timeline en ${startTime.toFixed(2)}s (${duration.toFixed(1)}s)`,
+        );
+
+        setText("");
+        setCachedAudio(null);
       }
-
-      toast.success(
-        "Segmento insertado",
-        `Segmento #${segIdx} añadido al timeline en ${startTime.toFixed(2)}s (${duration.toFixed(1)}s)`,
-      );
-
-      // Limpiar texto para el siguiente segmento
-      setText("");
-      setCachedAudio(null);
     } catch (err: any) {
       toast.error(
-        "Error al insertar",
-        err?.message || "No se pudo insertar el segmento en el Timeline.",
+        isEditingExistingSegment ? "Error al regenerar" : "Error al insertar",
+        err?.message || "Ocurrió un error en el proceso.",
       );
     } finally {
-      setIsGenerating(false);
+      setIsProcessing(false);
     }
   }, [
-    text,
-    cachedAudio,
-    selectedVoice,
-    speed,
-    generateAudio,
-    importMedia,
-    playheadPosition,
-    speakerLabel,
-    addTrack,
-    addClip,
+    computeFinalText,
+    isEditingExistingSegment,
+    parsedSelectedSegment,
+    selectedClip,
+    selectedMediaItem,
     jobId,
     activeVideoIndex,
+    selectedVoice,
+    temperature,
     activeFolder,
+    speakerLabel,
+    cachedAudio,
+    playheadPosition,
+    importMedia,
+    addTrack,
+    addClip,
     syncFolderAssets,
   ]);
 
   return (
-    <div className="bg-bg-2/70 border border-border/80 rounded-xl p-4 space-y-3.5 shadow-sm">
-      {/* Cabecera */}
-      <div className="flex items-center justify-between">
+    <div className="bg-bg-2/70 border border-border/80 rounded-xl p-3.5 space-y-3 shadow-sm">
+      {/* Cabecera integrada */}
+      <div className="flex items-center justify-between border-b border-border/50 pb-2.5">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-red-500/15 text-red-500 flex items-center justify-center">
-            <Mic size={16} />
+          <div
+            className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+              isEditingExistingSegment
+                ? "bg-amber-500/15 text-amber-500"
+                : "bg-red-500/15 text-red-500"
+            }`}
+          >
+            {isEditingExistingSegment ? <RefreshCw size={15} /> : <Mic size={15} />}
           </div>
           <div>
-            <h4 className="text-xs font-bold text-fg flex items-center gap-1.5">
-              Generar Segmento TTS
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
-                IA N+1
+            <div className="flex items-center gap-1.5">
+              <h4 className="text-xs font-bold text-fg">
+                {isEditingExistingSegment
+                  ? `Editar Segmento #${parsedSelectedSegment?.segIdx}`
+                  : "Generador de Voz TTS"}
+              </h4>
+              <span
+                className={`text-[9px] font-medium px-1.5 py-0.2 rounded border ${
+                  isEditingExistingSegment
+                    ? "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                    : "bg-primary/10 text-primary border-primary/20"
+                }`}
+              >
+                {isEditingExistingSegment ? "Clip Seleccionado" : "IA N+1"}
               </span>
-            </h4>
-            <p className="text-[11px] text-fg-3">
-              Crea una locución a partir de texto y colócala en el Timeline
+            </div>
+            <p className="text-[10px] text-fg-3">
+              {isEditingExistingSegment
+                ? "Modifica el texto o voz del segmento seleccionado en Timeline"
+                : "Crea una locución a partir de texto y colócala en el Timeline"}
             </p>
           </div>
         </div>
+
+        {/* Botón de volver a modo Nuevo si está editando un clip */}
+        {isEditingExistingSegment && (
+          <button
+            type="button"
+            onClick={() => {
+              clearSelection();
+              setText("");
+              setCachedAudio(null);
+            }}
+            className="text-[10px] flex items-center gap-1 text-fg-3 hover:text-fg px-1.5 py-1 rounded hover:bg-hover transition-colors"
+            title="Deseleccionar clip y crear un nuevo segmento"
+          >
+            <X size={12} />
+            <span>Nuevo</span>
+          </button>
+        )}
       </div>
 
-      {/* Selector de Voz */}
-      <div className="space-y-1">
-        <label className="text-[11px] font-semibold text-fg-2 flex items-center justify-between">
-          <span>Voz / Hablante</span>
-          <span className="text-[10px] text-fg-3 font-normal">
-            {speakers.length} disponibles
-          </span>
-        </label>
-        <select
-          value={selectedVoice}
-          onChange={(e) => setSelectedVoice(e.target.value)}
-          className="w-full h-8 px-2.5 text-xs bg-bg-1 border border-border rounded-lg text-fg focus:outline-none focus:ring-1 focus:ring-primary"
-        >
-          {speakers.length > 0 ? (
-            speakers.map((s) => (
-              <option key={s.value || s.label} value={s.value || s.label}>
-                {s.label}
+      {/* Selectores en fila: Voz / Hablante y Emoción */}
+      <div className="grid grid-cols-2 gap-2">
+        {/* Selector de Voz */}
+        <div className="space-y-1">
+          <label className="text-[10px] font-semibold text-fg-2 block">
+            Voz / Hablante
+          </label>
+          <select
+            value={selectedVoice}
+            onChange={(e) => setSelectedVoice(e.target.value)}
+            className="w-full h-8 px-2 text-xs bg-bg-1 border border-border rounded-lg text-fg focus:outline-none focus:ring-1 focus:ring-primary truncate"
+          >
+            {speakers.length > 0 ? (
+              speakers.map((s) => (
+                <option key={s.value || s.label} value={s.value || s.label}>
+                  {s.label}
+                </option>
+              ))
+            ) : (
+              <>
+                <option value="mrbeast">mrbeast</option>
+                <option value="default_fish">default_fish</option>
+              </>
+            )}
+          </select>
+        </div>
+
+        {/* Selector de Emoción (con excited por defecto) */}
+        <div className="space-y-1">
+          <label className="text-[10px] font-semibold text-fg-2 flex items-center justify-between">
+            <span>Emoción</span>
+            <span className="text-[9px] text-primary font-medium">S2.1</span>
+          </label>
+          <select
+            value={selectedEmotion}
+            onChange={(e) => setSelectedEmotion(e.target.value)}
+            className="w-full h-8 px-2 text-xs bg-bg-1 border border-border rounded-lg text-fg focus:outline-none focus:ring-1 focus:ring-primary truncate"
+          >
+            {V2V_EMOTIONS.map((em) => (
+              <option key={em.tag} value={em.tag}>
+                {em.emoji} {em.label} {em.tag !== "none" ? `(${em.tag})` : ""}
               </option>
-            ))
-          ) : (
-            <>
-              <option value="mrbeast">mrbeast</option>
-              <option value="default_fish">default_fish</option>
-            </>
-          )}
-        </select>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Área de texto */}
       <div className="space-y-1">
-        <label className="text-[11px] font-semibold text-fg-2">
-          Texto a sintetizar
-        </label>
+        <div className="flex items-center justify-between text-[10px]">
+          <label className="font-semibold text-fg-2">
+            Texto del segmento
+          </label>
+          {selectedEmotion && selectedEmotion !== "none" && (
+            <span className="font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded text-[9px] flex items-center gap-1">
+              <Sparkles size={10} />
+              Se antepondrá {selectedEmotion}
+            </span>
+          )}
+        </div>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Escribe el diálogo o locución que deseas generar..."
+          placeholder={
+            isEditingExistingSegment
+              ? "Edita el diálogo del segmento..."
+              : "Escribe el diálogo o locución que deseas generar..."
+          }
           rows={3}
           className="w-full text-xs p-2.5 rounded-lg bg-bg-1 border border-border text-fg placeholder:text-fg-4 focus:outline-none focus:ring-1 focus:ring-primary resize-none transition-colors"
         />
       </div>
 
-      {/* Indicador de posición de inserción */}
+      {/* Indicador de posición en Timeline */}
       <div className="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-bg-3/50 text-[11px] text-fg-3 border border-border/40">
-        <span className="flex items-center gap-1">
-          <Clock size={12} className="text-primary" /> Posición en Timeline:
+        <span className="flex items-center gap-1 text-[10px]">
+          <Clock size={11} className="text-primary" />{" "}
+          {isEditingExistingSegment ? "Inicio segmento:" : "Posición Playhead:"}
         </span>
-        <span className="font-mono font-semibold text-fg">
-          {formatTime(playheadPosition)} ({playheadPosition.toFixed(2)}s)
+        <span className="font-mono font-semibold text-fg text-[11px]">
+          {isEditingExistingSegment && selectedClip
+            ? `${selectedClip.startTime.toFixed(2)}s (dur: ${selectedClip.duration.toFixed(2)}s)`
+            : `${playheadPosition.toFixed(2)}s`}
         </span>
       </div>
 
-      {/* Controles avanzados desplegables */}
+      {/* Panel colapsable de ajuste único: Temperatura */}
       <div className="border-t border-border/50 pt-2">
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="w-full flex items-center justify-between text-[11px] text-fg-3 hover:text-fg py-1 transition-colors"
+          className="w-full flex items-center justify-between text-[11px] text-fg-3 hover:text-fg py-0.5 transition-colors"
         >
           <span className="flex items-center gap-1.5 font-medium">
             <SlidersHorizontal size={12} />
-            Ajustes avanzados ({speed.toFixed(1)}x)
+            Ajustes avanzados (Expresividad: {temperature.toFixed(2)})
           </span>
-          {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          {showAdvanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
 
         {showAdvanced && (
-          <div className="pt-2 pb-1 space-y-3 animate-in fade-in duration-150">
-            {/* Velocidad */}
-            <div className="space-y-1">
-              <div className="flex justify-between text-[10px] text-fg-3">
-                <span>Velocidad de habla</span>
-                <span className="font-mono">{speed.toFixed(2)}x</span>
-              </div>
-              <input
-                type="range"
-                min="0.5"
-                max="2.0"
-                step="0.05"
-                value={speed}
-                onChange={(e) => setSpeed(parseFloat(e.target.value))}
-                className="w-full accent-primary h-1 bg-border rounded-lg cursor-pointer"
-              />
+          <div className="pt-2 pb-1 space-y-1.5 animate-in fade-in duration-150">
+            <div className="flex justify-between text-[10px] text-fg-3">
+              <span>Expresividad / Temperatura</span>
+              <span className="font-mono text-fg font-semibold">{temperature.toFixed(2)}</span>
             </div>
-
-            {/* Expresividad (Temperatura) */}
-            <div className="space-y-1">
-              <div className="flex justify-between text-[10px] text-fg-3">
-                <span>Expresividad (Temp)</span>
-                <span className="font-mono">{temperature.toFixed(2)}</span>
-              </div>
-              <input
-                type="range"
-                min="0.2"
-                max="1.0"
-                step="0.05"
-                value={temperature}
-                onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                className="w-full accent-primary h-1 bg-border rounded-lg cursor-pointer"
-              />
-            </div>
-
-            {/* Volumen */}
-            <div className="space-y-1">
-              <div className="flex justify-between text-[10px] text-fg-3">
-                <span>Ganancia de volumen</span>
-                <span className="font-mono">{volume > 0 ? `+${volume} dB` : `${volume} dB`}</span>
-              </div>
-              <input
-                type="range"
-                min="-6.0"
-                max="6.0"
-                step="0.5"
-                value={volume}
-                onChange={(e) => setVolume(parseFloat(e.target.value))}
-                className="w-full accent-primary h-1 bg-border rounded-lg cursor-pointer"
-              />
+            <input
+              type="range"
+              min="0.1"
+              max="1.0"
+              step="0.05"
+              value={temperature}
+              onChange={(e) => setTemperature(parseFloat(e.target.value))}
+              className="w-full accent-primary h-1 bg-border rounded-lg cursor-pointer"
+            />
+            <div className="flex justify-between text-[8px] text-fg-4">
+              <span>Más consistente (0.1)</span>
+              <span>Más variado / expresivo (1.0)</span>
             </div>
           </div>
         )}
@@ -484,11 +613,11 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           variant="outline"
           size="sm"
           onClick={handlePreview}
-          disabled={isGenerating || !text.trim()}
+          disabled={isProcessing || !text.trim()}
           className="flex-1 text-xs h-8 gap-1.5 border-border bg-bg-1 hover:bg-bg-3"
           title="Escuchar cómo suena antes de insertarlo en el timeline"
         >
-          {isGenerating ? (
+          {isProcessing ? (
             <Loader2 size={13} className="animate-spin text-primary" />
           ) : isPlayingPreview ? (
             <Square size={13} className="text-red-500 fill-red-500" />
@@ -501,16 +630,43 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         <Button
           type="button"
           size="sm"
-          onClick={handleInsertToTimeline}
-          disabled={isGenerating || !text.trim()}
-          className="flex-1 text-xs h-8 gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow"
+          onClick={handleMainAction}
+          disabled={isProcessing || !text.trim()}
+          className={`flex-1 text-xs h-8 gap-1.5 font-semibold shadow ${
+            isEditingExistingSegment
+              ? "bg-amber-500 hover:bg-amber-600 text-white"
+              : "bg-primary hover:bg-primary/90 text-primary-foreground"
+          }`}
         >
-          {isGenerating ? (
+          {isProcessing ? (
             <Loader2 size={14} className="animate-spin" />
+          ) : isEditingExistingSegment ? (
+            <RefreshCw size={13} />
           ) : (
             <Plus size={14} />
           )}
-          <span>Insertar al Timeline</span>
+          <span>
+            {isEditingExistingSegment
+              ? `Regenerar #${parsedSelectedSegment?.segIdx}`
+              : "Insertar al Timeline"}
+          </span>
+        </Button>
+      </div>
+
+      {/* Botón integrado para abrir el Editor Masivo (Bulk) */}
+      <div className="pt-1.5 border-t border-border/40">
+        <Button
+          type="button"
+          variant="secondary"
+          className="w-full text-xs h-8 gap-1.5 text-fg-2 hover:text-fg bg-bg-3/80 hover:bg-bg-3 border border-border/60"
+          onClick={() => {
+            setBulkEditorOpen(true);
+            setIsV2VOpen(false);
+          }}
+          title="Abrir la ventana de edición masiva de todos los segmentos del video"
+        >
+          <ListChecks size={14} className="text-primary" />
+          <span>Abrir Editor en Lote (Todos los segmentos)...</span>
         </Button>
       </div>
     </div>
@@ -522,14 +678,6 @@ function hasCollision(track: any, start: number, end: number): boolean {
   return track.clips.some((clip: any) => {
     const cStart = clip.startTime;
     const cEnd = clip.startTime + (clip.duration || 0);
-    // Hay solapamiento si los rangos se intersecan
     return !(end <= cStart || start >= cEnd);
   });
-}
-
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 10);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${ms}`;
 }

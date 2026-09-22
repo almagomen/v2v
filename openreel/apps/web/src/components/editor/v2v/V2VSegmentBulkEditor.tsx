@@ -27,6 +27,12 @@ import {
 } from "../../../utils/v2v-segment-regen";
 import { toSafeToken } from "../../../utils/v2v-utils";
 import { autoSaveManager } from "../../../services/auto-save";
+import {
+  V2V_EMOTIONS,
+  DEFAULT_EMOTION_TAG,
+  applyEmotionToText,
+  extractEmotionFromText,
+} from "../../../utils/v2v-emotions";
 
 export type BulkSegmentRow = {
   seg: number;
@@ -74,9 +80,6 @@ function rowIsDirty(row: BulkSegmentRow): boolean {
   if (row.speedMode === "x" && Math.abs(row.speed - row.loadedSpeed) > 0.001) return true;
   if (row.speedInput.trim() !== row.loadedSpeedInput.trim()) return true;
   if (Math.abs((row.temperature ?? 0.7) - 0.7) > 0.01) return true;
-  if (Math.abs((row.topP ?? 0.7) - 0.7) > 0.01) return true;
-  if (Math.abs((row.repetitionPenalty ?? 1.2) - 1.2) > 0.01) return true;
-  if (Math.abs((row.volume ?? 0.0) - 0.0) > 0.01) return true;
   return false;
 }
 
@@ -119,6 +122,29 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
     return "es";
   });
   const [regeneratingSeg, setRegeneratingSeg] = useState<number | null>(null);
+  const [bulkEmotion, setBulkEmotion] = useState<string>(DEFAULT_EMOTION_TAG);
+
+  const handleApplyBulkEmotion = useCallback(() => {
+    const anySelected = rows.some((r) => r.selected);
+    const targetRows = anySelected ? rows.filter((r) => r.selected) : rows;
+    if (targetRows.length === 0) return;
+
+    setRows((prev) =>
+      prev.map((r) => {
+        if (anySelected && !r.selected) return r;
+        const updatedDraft = applyEmotionToText(r.draftText, bulkEmotion);
+        return {
+          ...r,
+          draftText: updatedDraft,
+          dirty: updatedDraft.trim() !== r.loadedText.trim(),
+        };
+      }),
+    );
+    toast.success(
+      "Emoción aplicada",
+      `Se aplicó ${bulkEmotion} a ${targetRows.length} segmento(s).`,
+    );
+  }, [rows, bulkEmotion]);
 
   useEffect(() => {
     if (speakers.length === 0) fetchSpeakers();
@@ -663,6 +689,31 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           </Button>
         </div>
 
+        <div className="flex items-center gap-1 bg-background border border-border rounded-md px-1.5 h-7">
+          <span className="text-[9px] text-text-muted font-medium">Emoción:</span>
+          <select
+            value={bulkEmotion}
+            onChange={(e) => setBulkEmotion(e.target.value)}
+            className="h-6 text-[10px] bg-transparent border-0 focus:outline-none text-text-primary pr-1 max-w-[125px] truncate"
+          >
+            {V2V_EMOTIONS.map((em) => (
+              <option key={em.tag} value={em.tag}>
+                {em.emoji} {em.label}
+              </option>
+            ))}
+          </select>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="text-[9px] h-5 px-1.5"
+            onClick={handleApplyBulkEmotion}
+            title="Aplica la emoción seleccionada a los segmentos marcados (o a todos si no hay selección)"
+          >
+            Aplicar
+          </Button>
+        </div>
+
         <Button type="button" size="sm" className="text-[10px] h-7" disabled={applyBusy} onClick={handleApplySelected}>
           Aplicar seleccionados
         </Button>
@@ -740,19 +791,6 @@ function ApplyProgressBlock({
   );
 }
 
-const QUICK_EMOTIONS = [
-  { tag: "[happy]", label: "Feliz", emoji: "😊" },
-  { tag: "[excited]", label: "Emocionado", emoji: "🤩" },
-  { tag: "[whispering]", label: "Susurro", emoji: "🤫" },
-  { tag: "[emphasis]", label: "Énfasis", emoji: "🗣️" },
-  { tag: "[laughing]", label: "Risa", emoji: "😂" },
-  { tag: "[sad]", label: "Triste", emoji: "😢" },
-  { tag: "[angry]", label: "Enojado", emoji: "😡" },
-  { tag: "[calm]", label: "Calmado", emoji: "😌" },
-  { tag: "[surprised]", label: "Sorprendido", emoji: "😮" },
-  { tag: "[sighing]", label: "Suspiro", emoji: "🥱" },
-  { tag: "[break]", label: "Pausa", emoji: "⏸️" },
-];
 
 const ALL_EMOTIONS_CATEGORIES = [
   {
@@ -810,11 +848,7 @@ function SegmentRow({
   const ratio = row.draftText.length / Math.max(row.originalText.length, 1);
   const problematic = isRowProblematic(row);
 
-  const hasCustomFishAudio =
-    Math.abs(row.temperature - 0.7) > 0.01 ||
-    Math.abs(row.topP - 0.7) > 0.01 ||
-    Math.abs(row.repetitionPenalty - 1.2) > 0.01 ||
-    Math.abs(row.volume - 0.0) > 0.01;
+  const hasCustomFishAudio = Math.abs(row.temperature - 0.7) > 0.01;
 
   return (
     <div
@@ -935,6 +969,12 @@ function SegmentDraftText({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showAllEmotions, setShowAllEmotions] = useState(false);
+  const { emotionTag } = extractEmotionFromText(row.draftText);
+
+  const handleEmotionChange = (newTag: string) => {
+    const updated = applyEmotionToText(row.draftText, newTag);
+    updateRow(row.seg, { draftText: updated });
+  };
 
   const insertTag = (tag: string) => {
     const el = textareaRef.current;
@@ -955,28 +995,53 @@ function SegmentDraftText({
   };
 
   return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between">
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-1">
         <p className="text-[9px] font-medium text-text-muted">TTS / Texto traducido</p>
-        <button
-          type="button"
-          onClick={() => setShowAllEmotions(!showAllEmotions)}
-          className="text-[9px] text-primary hover:underline flex items-center gap-0.5 cursor-pointer"
-        >
-          <Sparkles size={10} />
-          {showAllEmotions ? "Menos emociones" : "+ Todas las emociones"}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] text-text-muted font-medium">Emoción:</span>
+          <select
+            value={emotionTag}
+            onChange={(e) => handleEmotionChange(e.target.value)}
+            className="h-6 text-[10px] px-1.5 bg-background-tertiary border border-border rounded text-text-primary focus:outline-none focus:border-primary"
+          >
+            {V2V_EMOTIONS.map((em) => (
+              <option key={em.tag} value={em.tag}>
+                {em.emoji} {em.label} {em.tag !== "none" ? `(${em.tag})` : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setShowAllEmotions(!showAllEmotions)}
+            className="text-[9px] text-primary hover:underline flex items-center gap-0.5 cursor-pointer ml-1"
+          >
+            <Sparkles size={10} />
+            {showAllEmotions ? "Menos" : "+ Catálogo"}
+          </button>
+        </div>
       </div>
 
-      {/* Barra de Emociones Rápidas con 1 Clic */}
+      {/* Chips de emociones rápidas */}
       <div className="flex flex-wrap items-center gap-1 py-0.5">
-        {QUICK_EMOTIONS.map((e) => (
+        {[
+          { tag: "[excited]", emoji: "🤩", label: "excited" },
+          { tag: "[happy]", emoji: "😊", label: "happy" },
+          { tag: "[whispering]", emoji: "🤫", label: "whisper" },
+          { tag: "[emphasis]", emoji: "🗣️", label: "emphasis" },
+          { tag: "[laughing]", emoji: "😂", label: "laugh" },
+          { tag: "[break]", emoji: "⏸️", label: "break" },
+        ].map((e) => (
           <button
             key={e.tag}
             type="button"
             onClick={() => insertTag(e.tag)}
-            className="text-[9px] px-1.5 py-0.5 rounded bg-background-tertiary hover:bg-primary/20 hover:text-primary border border-border/50 transition-colors flex items-center gap-1 cursor-pointer"
-            title={`Insertar emoción ${e.tag} en el texto`}
+            className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-0.5 cursor-pointer ${
+              emotionTag === e.tag
+                ? "bg-primary/15 border-primary/40 text-primary font-medium"
+                : "bg-background-tertiary hover:bg-primary/20 hover:text-primary border-border/50 text-text-muted"
+            }`}
+            title={`Insertar ${e.tag} en posición del cursor`}
           >
             <span>{e.emoji}</span>
             <span>{e.label}</span>
@@ -984,7 +1049,7 @@ function SegmentDraftText({
         ))}
       </div>
 
-      {/* Catálogo completo desplegable de emociones Fish Audio S2 */}
+      {/* Catálogo completo desplegable de emociones */}
       {showAllEmotions && (
         <div className="p-2 border border-border rounded bg-background-tertiary/70 space-y-2 text-[9px] max-h-40 overflow-y-auto">
           {ALL_EMOTIONS_CATEGORIES.map((cat) => (
@@ -1011,7 +1076,7 @@ function SegmentDraftText({
         ref={textareaRef}
         className="w-full min-h-[52px] text-[10px] px-2 py-1.5 rounded border border-border bg-background-tertiary resize-y focus:outline-none focus:border-primary leading-relaxed"
         value={row.draftText}
-        placeholder="Texto a sintetizar. Puedes usar emociones como [happy], [whispering], etc."
+        placeholder="Texto a sintetizar. Puedes usar emociones como [excited], [happy], etc."
         onChange={(e) => updateRow(row.seg, { draftText: e.target.value })}
       />
     </div>
@@ -1028,9 +1093,6 @@ function SegmentFishAudioSettings({
   const resetDefaults = () => {
     updateRow(row.seg, {
       temperature: 0.7,
-      topP: 0.7,
-      repetitionPenalty: 1.2,
-      volume: 0.0,
     });
   };
 
@@ -1039,103 +1101,36 @@ function SegmentFishAudioSettings({
       <div className="flex items-center justify-between pb-1 border-b border-primary/10">
         <span className="font-semibold text-primary flex items-center gap-1">
           <SlidersHorizontal size={12} />
-          Parámetros Fish Audio (s2.1-pro-free)
+          Parámetro Fish Audio
         </span>
         <button
           type="button"
           onClick={resetDefaults}
           className="text-[9px] text-text-muted hover:text-text-primary flex items-center gap-1 cursor-pointer"
-          title="Restablecer parámetros por defecto"
+          title="Restablecer temperatura por defecto"
         >
           <RotateCcw size={10} />
-          Valores por defecto
+          Restablecer (0.70)
         </button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
-        {/* Expresividad (Temperature) */}
-        <div>
-          <div className="flex justify-between text-[9px] text-text-muted mb-0.5">
-            <span>Expresividad (Temperature)</span>
-            <span className="font-mono text-text-primary">{row.temperature.toFixed(2)}</span>
-          </div>
-          <input
-            type="range"
-            min="0.1"
-            max="1.0"
-            step="0.05"
-            value={row.temperature}
-            onChange={(e) => updateRow(row.seg, { temperature: parseFloat(e.target.value) })}
-            className="w-full accent-primary h-1 bg-background-tertiary rounded cursor-pointer"
-          />
-          <div className="flex justify-between text-[8px] text-text-muted">
-            <span>Consistente (0.1)</span>
-            <span>Expresivo (1.0)</span>
-          </div>
+      <div>
+        <div className="flex justify-between text-[9px] text-text-muted mb-0.5">
+          <span>Expresividad (Temperature)</span>
+          <span className="font-mono text-text-primary font-semibold">{row.temperature.toFixed(2)}</span>
         </div>
-
-        {/* Diversidad (Top-P) */}
-        <div>
-          <div className="flex justify-between text-[9px] text-text-muted mb-0.5">
-            <span>Diversidad (Top-P)</span>
-            <span className="font-mono text-text-primary">{row.topP.toFixed(2)}</span>
-          </div>
-          <input
-            type="range"
-            min="0.1"
-            max="1.0"
-            step="0.05"
-            value={row.topP}
-            onChange={(e) => updateRow(row.seg, { topP: parseFloat(e.target.value) })}
-            className="w-full accent-primary h-1 bg-background-tertiary rounded cursor-pointer"
-          />
-          <div className="flex justify-between text-[8px] text-text-muted">
-            <span>Enfocado (0.1)</span>
-            <span>Variado (1.0)</span>
-          </div>
-        </div>
-
-        {/* Evitar Repeticiones */}
-        <div>
-          <div className="flex justify-between text-[9px] text-text-muted mb-0.5">
-            <span>Anti-Repetición</span>
-            <span className="font-mono text-text-primary">{row.repetitionPenalty.toFixed(2)}</span>
-          </div>
-          <input
-            type="range"
-            min="1.0"
-            max="2.0"
-            step="0.05"
-            value={row.repetitionPenalty}
-            onChange={(e) => updateRow(row.seg, { repetitionPenalty: parseFloat(e.target.value) })}
-            className="w-full accent-primary h-1 bg-background-tertiary rounded cursor-pointer"
-          />
-          <div className="flex justify-between text-[8px] text-text-muted">
-            <span>Normal (1.0)</span>
-            <span>Máximo freno (2.0)</span>
-          </div>
-        </div>
-
-        {/* Volumen */}
-        <div>
-          <div className="flex justify-between text-[9px] text-text-muted mb-0.5">
-            <span>Volumen relativo</span>
-            <span className="font-mono text-text-primary">{row.volume >= 0 ? `+${row.volume} dB` : `${row.volume} dB`}</span>
-          </div>
-          <input
-            type="range"
-            min="-10"
-            max="10"
-            step="1"
-            value={row.volume}
-            onChange={(e) => updateRow(row.seg, { volume: parseFloat(e.target.value) })}
-            className="w-full accent-primary h-1 bg-background-tertiary rounded cursor-pointer"
-          />
-          <div className="flex justify-between text-[8px] text-text-muted">
-            <span>-10 dB</span>
-            <span>0 dB</span>
-            <span>+10 dB</span>
-          </div>
+        <input
+          type="range"
+          min="0.1"
+          max="1.0"
+          step="0.05"
+          value={row.temperature}
+          onChange={(e) => updateRow(row.seg, { temperature: parseFloat(e.target.value) })}
+          className="w-full accent-primary h-1 bg-background-tertiary rounded cursor-pointer"
+        />
+        <div className="flex justify-between text-[8px] text-text-muted">
+          <span>Consistente / Estable (0.1)</span>
+          <span>Variado / Expresivo (1.0)</span>
         </div>
       </div>
     </div>

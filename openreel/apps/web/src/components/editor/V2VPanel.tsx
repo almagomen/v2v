@@ -641,21 +641,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                   ))}
                 </select>
               </div>
-              {bulkEditorContext && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="w-full mt-2 text-xs h-9 gap-2"
-                  title="Editor masivo STT / TTS y retraducción"
-                  onClick={() => {
-                    setBulkEditorOpen(true);
-                    setIsV2VOpen(false);
-                  }}
-                >
-                  <ListChecks size={14} />
-                  Editar segmentos…
-                </Button>
-              )}
             </div>
 
             {/* Generación de voz TTS (N+1) */}
