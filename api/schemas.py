@@ -113,8 +113,15 @@ class ApplySpeedRequest(BaseModel):
 class GenerateAudioSegmentRequest(BaseModel):
     job_id: Optional[str] = Field(None, description="ID del job")
     video_index: int = Field(0, description="Índice del video en el job")
-    text: str
-    speaker: str = "mrbeast"
+    video_path: Optional[str] = Field(None, description="Ruta directa al video (alternativa a job_id)")
+    text: str = Field(..., description="Texto a sintetizar")
+    speaker: str = Field("mrbeast", description="Clave o ID del hablante")
+    start: Optional[float] = Field(0.0, description="Timestamp de inicio sugerido en segundos")
+    speed: Optional[float] = Field(1.0, ge=0.2, le=3.0, description="Factor de velocidad")
+    temperature: float = Field(0.7, ge=0.1, le=1.0, description="Fish Audio expresividad")
+    top_p: float = Field(0.7, ge=0.1, le=1.0, description="Fish Audio diversidad sampling")
+    repetition_penalty: float = Field(1.2, ge=1.0, le=2.0, description="Fish Audio control de repetición")
+    volume: float = Field(0.0, ge=-10.0, le=10.0, description="Fish Audio ajuste volumen en dB")
 
 
 class SpeakerOption(BaseModel):

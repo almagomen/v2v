@@ -103,6 +103,23 @@ export interface AudioSegmentItem {
   filename: string;
 }
 
+export interface GenerateAudioSegmentOptions {
+  start?: number;
+  speed?: number;
+  temperature?: number;
+  top_p?: number;
+  repetition_penalty?: number;
+  volume?: number;
+  video_path?: string;
+}
+
+export interface GeneratedAudioResult {
+  blob: Blob;
+  segIdx: number;
+  duration: number;
+  filename: string;
+}
+
 export interface SegmentEditorRow {
   seg: number;
   start: number;
@@ -294,23 +311,37 @@ export const v2vApi = {
     jobId: string,
     videoIndex: number,
     text: string,
-    speaker: string
-  ): Promise<Blob> {
+    speaker: string,
+    options?: GenerateAudioSegmentOptions,
+  ): Promise<GeneratedAudioResult> {
     const res = await fetch(url("/api/generate-audio-segment"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        job_id: jobId,
+        job_id: jobId || undefined,
         video_index: videoIndex,
+        video_path: options?.video_path,
         text,
         speaker,
+        start: options?.start ?? 0,
+        speed: options?.speed ?? 1.0,
+        temperature: options?.temperature ?? 0.7,
+        top_p: options?.top_p ?? 0.7,
+        repetition_penalty: options?.repetition_penalty ?? 1.2,
+        volume: options?.volume ?? 0.0,
       }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || "Error al generar segmento de audio");
     }
-    return res.blob();
+    const blob = await res.blob();
+    const segIdx = parseInt(res.headers.get("x-seg-idx") || "0", 10);
+    const duration = parseFloat(res.headers.get("x-audio-duration") || "0");
+    const filename =
+      res.headers.get("x-audio-filename") ||
+      `tts_${speaker}_${String(segIdx).padStart(3, "0")}.wav`;
+    return { blob, segIdx, duration, filename };
   },
 
   async regenerateVideo(

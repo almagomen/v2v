@@ -219,8 +219,13 @@ async def apply_speed(req: ApplySpeedRequest):
 
 @router.post("/generate-audio-segment")
 async def generate_audio_segment(req: GenerateAudioSegmentRequest):
-    """Genera un nuevo segmento de audio TTS desde texto sin necesidad de un segmento existente."""
-    path = _get_video_path_from_job(req.job_id, req.video_index)
+    """Genera un nuevo segmento de audio TTS desde texto y lo registra como segmento N+1."""
+    if req.job_id:
+        path = _get_video_path_from_job(req.job_id, req.video_index)
+    elif req.video_path:
+        path = _get_video_path_from_path(req.video_path)
+    else:
+        raise HTTPException(status_code=400, detail="Proporciona job_id o video_path")
 
     pkl_path = path.with_name("result.pkl")
     if not pkl_path.exists():
@@ -241,6 +246,7 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
         ) = pickle.load(f)
 
     from src.tts import model_tts
+    from src.audio_utils import adjust_audio_duration
     import torchaudio
 
     speaker_audio = SPEAKER_OPTIONS.get(req.speaker, req.speaker)
@@ -248,31 +254,87 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     speaker_key = resolve_speaker_key(req.speaker)
     safe_speaker = speaker_key.replace(" ", "_").replace("/", "_").replace("\\", "_")
 
-    arr, rate = model_tts(req.text, lang, speaker_audio)
+    arr, rate = model_tts(
+        req.text,
+        lang,
+        speaker_audio,
+        temperature=req.temperature,
+        top_p=req.top_p,
+        repetition_penalty=req.repetition_penalty,
+        volume=req.volume,
+    )
     if arr is None or rate is None:
         raise HTTPException(status_code=500, detail="Error en modelo TTS")
 
     seqs_trg_dir = path.parent / "Seqs_trg"
     seqs_trg_dir.mkdir(exist_ok=True)
 
-    seq_num = 1
-    while True:
-        proposed_path = seqs_trg_dir / f"gen_{safe_speaker}_{seq_num:03d}.wav"
-        if not proposed_path.exists():
-            break
-        seq_num += 1
+    # El nuevo segmento es N + 1 con respecto a texts_original
+    texts_original = list(texts_original)
+    new_seg_idx = len(texts_original) + 1
 
-    audio_es_path = seqs_trg_dir / f"gen_{safe_speaker}_{seq_num:03d}.wav"
-    raw_es_path = seqs_trg_dir / f"gen_{safe_speaker}_{seq_num:03d}_raw.wav"
+    audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}.wav"
+    raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}_raw.wav"
 
+    # Guardar siempre el RAW sin ajustes
     torchaudio.save(str(raw_es_path), arr, sample_rate=rate)
+
+    # Aplicar velocidad si es diferente de 1.0
+    if req.speed and req.speed > 0 and abs(req.speed - 1.0) > 0.01:
+        source_samples = arr.shape[-1]
+        target_samples = int(source_samples / req.speed)
+        arr = adjust_audio_duration(arr, target_samples, rate)
+
     torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
 
-    from src.assets import update_assets
-    # Registrar en la raíz del manifiesto porque no tiene clip original en segments
+    duration = float(arr.shape[-1]) / float(rate)
+
+    # Registrar el nuevo segmento en result.pkl al final (N + 1)
+    new_segment = {
+        "start": round(float(req.start or 0.0), 3),
+        "end": round(float(req.start or 0.0) + duration, 3),
+        "text": req.text,
+        "speaker": speaker_key,
+    }
+    texts_original.append(new_segment)
+
+    with open(pkl_path, "wb") as f:
+        pickle.dump(
+            (texts_original, output_name, url, result, transcription, diarization, info),
+            f,
+        )
+
+    # Registrar en el manifiesto de activos físicos
+    from src.assets import register_segment, update_assets
+    register_segment(path.parent, new_seg_idx, audio_es_path)
     update_assets(path.parent, **{audio_es_path.name: str(audio_es_path)})
 
-    return FileResponse(audio_es_path, filename=audio_es_path.name, media_type="audio/wav")
+    # Sincronizar en memoria con el job si existe
+    if req.job_id:
+        job = get_job(req.job_id)
+        if job and "videos" in job and 0 <= req.video_index < len(job["videos"]):
+            job_segments = job["videos"][req.video_index].setdefault("segments", [])
+            job_segments.append({
+                "seg": new_seg_idx,
+                "start": new_segment["start"],
+                "end": new_segment["end"],
+                "text": new_segment["text"],
+                "speaker": new_segment["speaker"],
+            })
+
+    headers = {
+        "X-Seg-Idx": str(new_seg_idx),
+        "X-Audio-Duration": str(round(duration, 3)),
+        "X-Audio-Filename": audio_es_path.name,
+        "Access-Control-Expose-Headers": "X-Seg-Idx, X-Audio-Duration, X-Audio-Filename",
+    }
+
+    return FileResponse(
+        audio_es_path,
+        filename=audio_es_path.name,
+        media_type="audio/wav",
+        headers=headers,
+    )
 
 @router.get("/segment-speed")
 async def get_segment_speed(job_id: str, video_index: int, seg_idx: int):

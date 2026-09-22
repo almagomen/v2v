@@ -14,6 +14,7 @@ import {
   importKeyFor,
 } from "../../utils/v2v-utils";
 import { ColabExportTab } from "./ColabExportTab";
+import { V2VGenerateTTSSection } from "./v2v/V2VGenerateTTSSection";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -657,6 +658,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
               )}
             </div>
 
+            {/* Generación de voz TTS (N+1) */}
+            <div className="pt-2">
+              <V2VGenerateTTSSection inDrawer={_embedInDrawer} />
+            </div>
           </>
         )}
 
