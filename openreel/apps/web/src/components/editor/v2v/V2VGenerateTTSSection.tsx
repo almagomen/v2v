@@ -14,14 +14,7 @@ import {
   CheckCircle2,
   AlertCircle,
 } from "lucide-react";
-import {
-  Button,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@openreel/ui";
+import { Button } from "@openreel/ui";
 
 import { v2vApi, type GeneratedAudioResult } from "../../../lib/v2v-api";
 import { useV2VStore } from "../../../stores/v2v-store";
@@ -370,18 +363,24 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             {speakers.length} disponibles
           </span>
         </label>
-        <Select value={selectedVoice} onValueChange={setSelectedVoice}>
-          <SelectTrigger className="w-full h-8 text-xs bg-bg-1 border-border">
-            <SelectValue placeholder="Selecciona una voz" />
-          </SelectTrigger>
-          <SelectContent className="z-[300] max-h-56">
-            {speakers.map((s) => (
-              <SelectItem key={s.value} value={s.value} className="text-xs">
+        <select
+          value={selectedVoice}
+          onChange={(e) => setSelectedVoice(e.target.value)}
+          className="w-full h-8 px-2.5 text-xs bg-bg-1 border border-border rounded-lg text-fg focus:outline-none focus:ring-1 focus:ring-primary"
+        >
+          {speakers.length > 0 ? (
+            speakers.map((s) => (
+              <option key={s.value || s.label} value={s.value || s.label}>
                 {s.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+              </option>
+            ))
+          ) : (
+            <>
+              <option value="mrbeast">mrbeast</option>
+              <option value="default_fish">default_fish</option>
+            </>
+          )}
+        </select>
       </div>
 
       {/* Área de texto */}

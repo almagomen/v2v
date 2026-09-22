@@ -463,11 +463,14 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
             <SelectValue placeholder={speakers.length === 0 ? "Cargando voces..." : "Seleccionar voz..."} />
           </SelectTrigger>
           <SelectContent className="bg-background-secondary border-border">
-            {speakers.map((s) => (
-              <SelectItem key={s.value} value={s.value}>
-                {s.label}
-              </SelectItem>
-            ))}
+            {speakers.map((s) => {
+              const val = s.value || s.label;
+              return (
+                <SelectItem key={val} value={val}>
+                  {s.label}
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
       </div>
