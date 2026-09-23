@@ -161,8 +161,12 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
     for seg_idx in indices:
         if seg_idx < 1 or seg_idx > len(original_list):
             continue
-        orig_d = _segment_dict_at(original_list, seg_idx - 1)
-        text = str(orig_d["text"]).strip()
+        text = ""
+        if req.custom_texts:
+            text = str(req.custom_texts.get(str(seg_idx)) or req.custom_texts.get(seg_idx) or "").strip()
+        if not text:
+            orig_d = _segment_dict_at(original_list, seg_idx - 1)
+            text = str(orig_d["text"]).strip()
         if not text:
             tts_d = _segment_dict_at(_tts_list, seg_idx - 1)
             text = str(tts_d["text"]).strip()

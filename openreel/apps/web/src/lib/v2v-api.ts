@@ -489,6 +489,7 @@ export const v2vApi = {
     videoIndex: number,
     segIndices: number[],
     targetLang?: string | null,
+    customTexts?: Record<number, string>,
   ): Promise<{ segments: Array<{ seg: number; text: string }> }> {
     const res = await fetch(url("/api/retranslate-segments"), {
       method: "POST",
@@ -498,6 +499,7 @@ export const v2vApi = {
         video_index: videoIndex,
         seg_indices: segIndices,
         target_lang: targetLang ?? null,
+        custom_texts: customTexts ?? null,
       }),
     });
     if (!res.ok) {

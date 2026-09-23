@@ -176,6 +176,7 @@ class RetranslateSegmentsRequest(BaseModel):
     video_index: int = 0
     seg_indices: list[int] = Field(..., min_length=1)
     target_lang: Optional[str] = None
+    custom_texts: Optional[dict[str, str]] = None
 
 
 class RetranslateSegmentItem(BaseModel):

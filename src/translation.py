@@ -42,19 +42,23 @@ def translate_text_list(
     target_lang_name = LANGUAGE_NAMES.get(target_lang, "ingles")
 
     prompt = f"""
-Eres un traductor experto. Traduce el siguiente texto del {source_lang_name} al {target_lang_name}.
-El texto original está compuesto por varias frases que forman un párrafo o una secuencia lógica.
-Es CRUCIAL que mantengas la coherencia, el tono y el contexto entre todas las frases traducidas.
-Utiliza las mejores prácticas de traducción para el {target_lang_name}.
+Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
+Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo.
 
-Texto original en {source_lang_name}:
+Directrices obligatorias:
+1. REESCRIBE LA FRASE MANTENIENDO LA IDEA: No hagas una traducción literal o palabra por palabra. Reformula y reescribe la oración preservando la misma idea central y sentido, usando expresiones coloquiales y naturales adecuadas al {target_lang_name}.
+2. VOZ HABLADA Y DOBLAJE: El texto será sintetizado por modelos de voz (TTS). La frase debe tener ritmo fonético natural, ser directa y sonar convincente y orgánica al ser escuchada.
+3. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias.
+4. COHERENCIA: Las frases forman parte de un diálogo o narración continua; preserva la coherencia temática y el flujo entre ellas.
+5. PRESERVACIÓN DE EMOCIONES: Si alguna frase original incluye marcadores de emoción entre corchetes como [happy], [whisper], [laughter], [sad], [excited], etc., CONSÉRVALOS en la posición correspondiente dentro de la frase reescrita.
+
+Texto original ({source_lang_name}):
 ---
 {json.dumps(list_sentences, indent=2, ensure_ascii=False)}
 ---
 
-Por favor, devuelve la traducción como una LISTA JSON de strings, donde cada string
-corresponda a una frase traducida, manteniendo el mismo orden que las frases originales.
-Asegúrate de que la salida sea únicamente la lista JSON y nada más.
+Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea la frase reescrita en el mismo orden:
+["frase 1 reescrita", "frase 2 reescrita", ...]
 """
 
     selected_model = model_name or "gemini-flash-latest"

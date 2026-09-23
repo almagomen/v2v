@@ -108,6 +108,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [retranslateBusy, setRetranslateBusy] = useState(false);
+  const [retranslatingSingleSeg, setRetranslatingSingleSeg] = useState<number | null>(null);
   const [applyBusy, setApplyBusy] = useState(false);
   const [applyProgress, setApplyProgress] = useState<{ current: number; total: number } | null>(
     null,
@@ -275,14 +276,27 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
       return;
     }
 
-    setRetranslateBusy(true);
+    const isSingle = targets.length === 1;
+    if (isSingle) {
+      setRetranslatingSingleSeg(targets[0].seg);
+    } else {
+      setRetranslateBusy(true);
+    }
+
     try {
       const effectiveTargetLang = selectedTargetLang || normalizeTranslateLang || "es";
+      const customMap: Record<number, string> = {};
+      for (const t of targets) {
+        const textToUse = t.originalText?.trim() || t.draftText?.trim();
+        if (textToUse) customMap[t.seg] = textToUse;
+      }
+
       const { segments } = await v2vApi.retranslateSegments(
         jobId,
         videoIndex,
         targets.map((r) => r.seg),
         effectiveTargetLang,
+        Object.keys(customMap).length > 0 ? customMap : undefined,
       );
       const bySeg = new Map(segments.map((s) => [s.seg, s.text]));
       setRows((prev) =>
@@ -293,11 +307,16 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           return { ...next, dirty: rowIsDirty(next) };
         }),
       );
-      toast.success("Traducción propuesta", `${segments.length} segmento(s) actualizados a (${effectiveTargetLang}).`);
+      if (isSingle) {
+        toast.success("Frase reescrita", `Segmento #${targets[0].seg} adaptado con éxito a (${effectiveTargetLang}).`);
+      } else {
+        toast.success("Traducción propuesta", `${segments.length} segmento(s) reescritos a (${effectiveTargetLang}).`);
+      }
     } catch (e) {
-      toast.error("Retraducción fallida", e instanceof Error ? e.message : String(e));
+      toast.error("Error al reescribir frase", e instanceof Error ? e.message : String(e));
     } finally {
       setRetranslateBusy(false);
+      setRetranslatingSingleSeg(null);
     }
   };
 
@@ -746,6 +765,9 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
               onApplyRow={() => void handleApplySpeedOnly(row)}
               onRegenerateSingle={() => void handleRegenerateSingle(row)}
               isRegenerating={regeneratingSeg === row.seg}
+              onProposeTranslation={() => void handleProposeTranslation([row.seg])}
+              isProposingTranslation={retranslatingSingleSeg === row.seg}
+              targetLang={selectedTargetLang || normalizeTranslateLang || "es"}
             />
           ))
         )}
@@ -789,6 +811,9 @@ function SegmentRow({
   onApplyRow,
   onRegenerateSingle,
   isRegenerating,
+  onProposeTranslation,
+  isProposingTranslation,
+  targetLang,
 }: {
   row: BulkSegmentRow;
   updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
@@ -797,6 +822,9 @@ function SegmentRow({
   onApplyRow: () => void;
   onRegenerateSingle: () => void;
   isRegenerating: boolean;
+  onProposeTranslation: () => void;
+  isProposingTranslation: boolean;
+  targetLang: string;
 }) {
   const [showSettings, setShowSettings] = useState(false);
   const hasCustomFishAudio = Math.abs(row.temperature - 0.7) > 0.01;
@@ -819,41 +847,12 @@ function SegmentRow({
   const timelineStart = currentClip ? currentClip.startTime : row.start;
   const timelineDuration = currentClip ? currentClip.duration : row.slotDuration;
 
-  const [startInput, setStartInput] = useState<string>(timelineStart.toFixed(2));
-  const [isEditingStart, setIsEditingStart] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (!isEditingStart) {
-      setStartInput(timelineStart.toFixed(2));
-    }
-  }, [timelineStart, isEditingStart]);
-
-  const handleStartCommit = async () => {
-    const val = parseFloat(startInput);
-    if (!isNaN(val) && val >= 0) {
-      if (currentClip && Math.abs(currentClip.startTime - val) > 0.001) {
-        try {
-          const moveClip = useProjectStore.getState().moveClip;
-          await moveClip(currentClip.id, val);
-        } catch (e) {
-          console.error("[V2V] Error moviendo clip en bulk editor:", e);
-        }
-      }
-      updateRow(row.seg, { start: val, end: val + timelineDuration });
-      setStartInput(val.toFixed(2));
-    } else {
-      setStartInput(timelineStart.toFixed(2));
-    }
-    setIsEditingStart(false);
-  };
-
   return (
     <div
-      className={`rounded-lg border p-2.5 space-y-2.5 transition-colors ${
-        row.missingAudio
+      className={`rounded-lg border p-2.5 space-y-2.5 transition-colors ${row.missingAudio
           ? "border-red-500/40 bg-red-500/5"
           : "border-border bg-background"
-      }`}
+        }`}
     >
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -899,42 +898,22 @@ function SegmentRow({
 
         <div className="flex-1" />
 
-        {/* Posición real en el timeline posicionada del lado derecho (editable) */}
-        <div
-          className="text-[10px] font-mono text-text-muted flex items-center gap-1 bg-background-tertiary px-1.5 py-0.5 rounded border border-border/40"
-          title="Posición real en el timeline: inicio en timeline - duración actual (editable: presiona Enter o cambia de campo para mover el segmento)"
+        {/* Posición real en el timeline posicionada del lado derecho (reactiva) */}
+        <span
+          className="text-[10px] font-mono text-text-muted flex items-center gap-1 bg-background-tertiary px-2 py-0.5 rounded border border-border/40"
+          title="Posición real en el timeline: inicio en timeline - duración actual (se actualiza automáticamente al arrastrar el clip)"
         >
           <Clock size={11} className="text-primary shrink-0" />
-          <span className="text-[9px]">Inicio:</span>
-          <input
-            type="number"
-            step="0.05"
-            min="0"
-            value={startInput}
-            onChange={(e) => {
-              setIsEditingStart(true);
-              setStartInput(e.target.value);
-            }}
-            onBlur={handleStartCommit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                void handleStartCommit();
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-            className="w-14 text-right text-[10px] font-mono bg-background border border-border rounded px-1 py-0.2 text-text-primary focus:outline-none focus:ring-1 focus:ring-primary"
-            title="Edita el inicio del segmento en segundos"
-          />
-          <span className="text-[9px]">s · dur: {timelineDuration.toFixed(2)}s</span>
-        </div>
+          <span>{timelineStart.toFixed(2)}s – dur: {timelineDuration.toFixed(2)}s</span>
+        </span>
 
         {/* Botón para desplegar ajustes de Fish Audio */}
         <button
           type="button"
           onClick={() => setShowSettings(!showSettings)}
           className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${showSettings || hasCustomFishAudio
-              ? "border-primary/40 bg-primary/10 text-primary font-medium"
-              : "border-border/60 bg-background-tertiary text-text-muted hover:text-text-primary"
+            ? "border-primary/40 bg-primary/10 text-primary font-medium"
+            : "border-border/60 bg-background-tertiary text-text-muted hover:text-text-primary"
             }`}
           title="Ajustes de expresividad y voz Fish Audio"
         >
@@ -949,7 +928,13 @@ function SegmentRow({
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
         <SegmentOriginalText row={row} />
-        <SegmentDraftText row={row} updateRow={updateRow} />
+        <SegmentDraftText
+          row={row}
+          updateRow={updateRow}
+          onProposeTranslation={onProposeTranslation}
+          isProposing={isProposingTranslation}
+          targetLang={targetLang}
+        />
       </div>
 
       {/* Panel colapsable de ajustes de Fish Audio */}
@@ -990,9 +975,15 @@ function SegmentOriginalText({ row }: { row: BulkSegmentRow }) {
 function SegmentDraftText({
   row,
   updateRow,
+  onProposeTranslation,
+  isProposing,
+  targetLang,
 }: {
   row: BulkSegmentRow;
   updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
+  onProposeTranslation: () => void;
+  isProposing: boolean;
+  targetLang: string;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -1023,7 +1014,24 @@ function SegmentDraftText({
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center justify-between gap-1">
-        <p className="text-[9px] font-medium text-text-muted">TTS / Texto traducido</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-[9px] font-medium text-text-muted">TTS / Texto traducido</p>
+          <button
+            type="button"
+            disabled={isProposing}
+            onClick={onProposeTranslation}
+            className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition-all cursor-pointer font-medium disabled:opacity-50"
+            title={`Reescribir frase manteniendo la idea según el idioma seleccionado (${targetLang})`}
+          >
+            {isProposing ? (
+              <Loader2 size={10} className="animate-spin text-primary" />
+            ) : (
+              <Sparkles size={10} className="text-primary" />
+            )}
+            <span>{isProposing ? "Reescribiendo..." : "Proponer"}</span>
+          </button>
+        </div>
+
         <div className="flex items-center gap-1.5">
           <span className="text-[9px] text-text-muted font-medium">Emoción:</span>
           <select
@@ -1032,7 +1040,7 @@ function SegmentDraftText({
             className="h-6 text-[10px] px-1.5 bg-background-tertiary border border-border rounded text-text-primary focus:outline-none focus:border-primary cursor-pointer max-w-[210px] truncate font-medium"
             title="Selecciona una emoción para insertarla en la posición del cursor"
           >
-            <option value="" disabled>✨ Insertar emoción...</option>
+            <option value="" disabled>✨ Insertar...</option>
             {EMOTION_CATEGORIES.map((cat) => (
               <optgroup key={cat.name} label={`${cat.emoji} ${cat.label}`}>
                 {getEmotionsByCategory(cat.name).map((em) => (

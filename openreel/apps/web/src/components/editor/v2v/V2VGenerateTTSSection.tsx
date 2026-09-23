@@ -273,6 +273,29 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     setPositionInput(val);
   };
 
+  const handleStepPosition = useCallback(async (delta: number) => {
+    const current = parseFloat(positionInput);
+    const fallback = isEditingExistingSegment && selectedClip ? selectedClip.startTime : playheadPosition;
+    const base = !isNaN(current) && current >= 0 ? current : fallback;
+    const raw = Math.max(0, base + delta);
+    const newVal = Math.round(raw * 100) / 100;
+    const formatted = newVal.toFixed(2);
+    setPositionInput(formatted);
+    setIsManualPosition(true);
+
+    if (isEditingExistingSegment && selectedClip) {
+      if (Math.abs(selectedClip.startTime - newVal) > 0.001) {
+        try {
+          await moveClip(selectedClip.id, newVal);
+        } catch (e) {
+          console.error("[V2V] Error al mover clip:", e);
+        }
+      }
+    } else {
+      seekTo(newVal);
+    }
+  }, [positionInput, isEditingExistingSegment, selectedClip, playheadPosition, moveClip, seekTo]);
+
   const handlePositionBlur = useCallback(async () => {
     const val = parseFloat(positionInput);
     if (!isNaN(val) && val >= 0) {
@@ -688,8 +711,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         <div className="flex items-center gap-2">
           <div
             className={`w-7 h-7 rounded-lg flex items-center justify-center ${isEditingExistingSegment
-                ? "bg-amber-500/15 text-amber-500"
-                : "bg-red-500/15 text-red-500"
+              ? "bg-amber-500/15 text-amber-500"
+              : "bg-red-500/15 text-red-500"
               }`}
           >
             {isEditingExistingSegment ? <RefreshCw size={15} /> : <Mic size={15} />}
@@ -702,12 +725,16 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
                   : "Generador de Voz TTS"}
               </h4>
               <span
-                className={`text-[9px] font-medium px-1.5 py-0.2 rounded border ${isEditingExistingSegment
-                    ? "bg-amber-500/10 text-amber-500 border-amber-500/20"
-                    : "bg-primary/10 text-primary border-primary/20"
+                className={`text-[9px] font-medium px-1.5 py-0.2 rounded border font-mono ${isEditingExistingSegment
+                  ? "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                  : "bg-primary/10 text-primary border-primary/20"
                   }`}
               >
-                {isEditingExistingSegment ? "Clip Seleccionado" : "IA N+1"}
+                {isEditingExistingSegment && selectedClip
+                  ? `dur: ${selectedClip.duration.toFixed(2)}s`
+                  : isEditingExistingSegment
+                    ? "Clip"
+                    : "IA N+1"}
               </span>
             </div>
             <p className="text-[10px] text-fg-3">
@@ -743,7 +770,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         {/* Selector de Voz */}
         <div className="space-y-1">
           <label className="text-[10px] font-semibold text-fg-2 block">
-            Voz / Hablante
+            Voz
           </label>
           <select
             value={selectedVoice}
@@ -768,7 +795,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         {/* Selector de Emoción (inserta en el cursor) */}
         <div className="space-y-1">
           <label className="text-[10px] font-semibold text-fg-2 flex items-center justify-between">
-            <span>Insertar Emoción</span>
+            <span>Insertar</span>
             <span className="text-[9px] text-primary font-medium">S2.1</span>
           </label>
           <select
@@ -777,7 +804,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             className="w-full h-8 px-2 text-xs bg-bg-1 border border-border rounded-lg text-fg focus:outline-none focus:ring-1 focus:ring-primary truncate cursor-pointer"
             title="Selecciona una emoción para insertarla donde esté la barra de texto"
           >
-            <option value="" disabled>✨ Insertar emoción...</option>
+            <option value="" disabled>✨ Insertar...</option>
             {EMOTION_CATEGORIES.map((cat) => (
               <optgroup key={cat.name} label={`${cat.emoji} ${cat.label}`}>
                 {getEmotionsByCategory(cat.name).map((em) => (
@@ -817,11 +844,6 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           <span className="text-[10px] font-semibold text-fg-2 truncate">
             {isEditingExistingSegment ? "Inicio segmento:" : "Posición Playhead:"}
           </span>
-          {isEditingExistingSegment && selectedClip && (
-            <span className="text-[9px] text-fg-4 font-mono">
-              (dur: {selectedClip.duration.toFixed(2)}s)
-            </span>
-          )}
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
@@ -837,8 +859,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             </button>
           )}
 
-          {/* Input editable de posición en segundos */}
-          <div className="flex items-center gap-1 bg-bg-1 border border-border rounded px-1.5 py-0.5 focus-within:ring-1 focus-within:ring-primary focus-within:border-primary transition-all">
+          {/* Input editable de posición en segundos con flechas arriba/abajo después de la s */}
+          <div className="flex items-center bg-bg-1 border border-border rounded px-1.5 py-0.5 focus-within:ring-1 focus-within:ring-primary focus-within:border-primary transition-all">
             <input
               type="number"
               step="0.05"
@@ -850,12 +872,38 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
                 if (e.key === "Enter") {
                   void handlePositionBlur();
                   (e.target as HTMLInputElement).blur();
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  void handleStepPosition(0.05);
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  void handleStepPosition(-0.05);
                 }
               }}
-              className="w-14 text-right font-mono text-xs bg-transparent text-fg focus:outline-none"
-              title="Edita los segundos para posicionar el segmento"
+              className="w-12 text-right font-mono text-xs bg-transparent text-fg focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              title="Edita los segundos o usa las flechas para mover el segmento en tiempo real"
             />
-            <span className="text-[10px] text-fg-4 font-mono font-medium">s</span>
+            <span className="text-[10px] text-fg-4 font-mono font-medium ml-1 mr-1 select-none">s</span>
+
+            {/* Flechas de paso fino dinámico (arriba y abajo) después de la 's' */}
+            <div className="flex flex-col border-l border-border/60 pl-1 -my-0.5 justify-center">
+              <button
+                type="button"
+                onClick={() => void handleStepPosition(0.05)}
+                className="p-0.5 text-fg-3 hover:text-primary hover:bg-hover rounded transition-colors cursor-pointer"
+                title="Avanzar +0.05s (dinámico)"
+              >
+                <ChevronUp size={10} />
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleStepPosition(-0.05)}
+                className="p-0.5 text-fg-3 hover:text-primary hover:bg-hover rounded transition-colors cursor-pointer"
+                title="Retroceder -0.05s (dinámico)"
+              >
+                <ChevronDown size={10} />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1001,7 +1049,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           ) : (
             <Play size={13} className="text-fg-2" />
           )}
-          <span>{isPlayingPreview ? "Detener" : "Preescuchar"}</span>
+          <span>{isPlayingPreview ? "Detener" : "Reproducir"}</span>
         </Button>
 
         <Button
@@ -1010,8 +1058,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           onClick={handleMainAction}
           disabled={isProcessing || !text.trim()}
           className={`flex-1 text-xs h-8 gap-1.5 font-semibold shadow ${isEditingExistingSegment
-              ? "bg-amber-500 hover:bg-amber-600 text-white"
-              : "bg-primary hover:bg-primary/90 text-primary-foreground"
+            ? "bg-amber-500 hover:bg-amber-600 text-white"
+            : "bg-primary hover:bg-primary/90 text-primary-foreground"
             }`}
         >
           {isProcessing ? (
