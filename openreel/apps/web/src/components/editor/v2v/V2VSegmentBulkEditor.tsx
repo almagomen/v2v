@@ -30,6 +30,8 @@ import { autoSaveManager } from "../../../services/auto-save";
 import {
   V2V_EMOTIONS,
   DEFAULT_EMOTION_TAG,
+  EMOTION_CATEGORIES,
+  getEmotionsByCategory,
   applyEmotionToText,
   extractEmotionFromText,
 } from "../../../utils/v2v-emotions";
@@ -694,12 +696,16 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           <select
             value={bulkEmotion}
             onChange={(e) => setBulkEmotion(e.target.value)}
-            className="h-6 text-[10px] bg-transparent border-0 focus:outline-none text-text-primary pr-1 max-w-[125px] truncate"
+            className="h-6 text-[10px] bg-transparent border-0 focus:outline-none text-text-primary pr-1 max-w-[170px] truncate cursor-pointer font-medium"
           >
-            {V2V_EMOTIONS.map((em) => (
-              <option key={em.tag} value={em.tag}>
-                {em.emoji} {em.label}
-              </option>
+            {EMOTION_CATEGORIES.map((cat) => (
+              <optgroup key={cat.name} label={`${cat.emoji} ${cat.label}`}>
+                {getEmotionsByCategory(cat.name).map((em) => (
+                  <option key={em.tag} value={em.tag}>
+                    {em.emoji} {em.label}{em.description ? ` · ${em.description}` : ""} ({em.tag})
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
           <Button
@@ -791,41 +797,6 @@ function ApplyProgressBlock({
   );
 }
 
-
-const ALL_EMOTIONS_CATEGORIES = [
-  {
-    category: "Emociones Básicas",
-    items: [
-      "[happy]", "[sad]", "[angry]", "[excited]", "[calm]", "[nervous]",
-      "[confident]", "[surprised]", "[satisfied]", "[delighted]", "[scared]",
-      "[worried]", "[upset]", "[frustrated]", "[depressed]", "[empathetic]",
-      "[embarrassed]", "[disgusted]", "[moved]", "[proud]", "[relaxed]",
-      "[grateful]", "[curious]", "[sarcastic]"
-    ],
-  },
-  {
-    category: "Tonos y Entrega",
-    items: [
-      "[in a hurry tone]", "[shouting]", "[screaming]", "[whispering]",
-      "[soft tone]", "[emphasis]"
-    ],
-  },
-  {
-    category: "Efectos de Audio",
-    items: [
-      "[laughing]", "[chuckling]", "[sobbing]", "[crying loudly]",
-      "[sighing]", "[groaning]", "[panting]", "[gasping]", "[yawning]",
-      "[snoring]", "[clear throat]"
-    ],
-  },
-  {
-    category: "Pausas y Ambiente",
-    items: [
-      "[break]", "[long-break]", "[audience laughing]",
-      "[background laughter]", "[crowd laughing]"
-    ],
-  },
-];
 
 function SegmentRow({
   row,
@@ -968,7 +939,6 @@ function SegmentDraftText({
   updateRow: (seg: number, patch: Partial<BulkSegmentRow>) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [showAllEmotions, setShowAllEmotions] = useState(false);
 
   const insertTag = (tag: string) => {
     if (!tag || tag === "none") return;
@@ -1003,24 +973,20 @@ function SegmentDraftText({
           <select
             value=""
             onChange={(e) => handleEmotionChange(e.target.value)}
-            className="h-6 text-[10px] px-1.5 bg-background-tertiary border border-border rounded text-text-primary focus:outline-none focus:border-primary cursor-pointer max-w-[140px] truncate"
+            className="h-6 text-[10px] px-1.5 bg-background-tertiary border border-border rounded text-text-primary focus:outline-none focus:border-primary cursor-pointer max-w-[190px] truncate font-medium"
             title="Selecciona una emoción para insertarla en la posición del cursor"
           >
-            <option value="" disabled>Insertar emoción...</option>
-            {V2V_EMOTIONS.filter((em) => em.tag !== "none").map((em) => (
-              <option key={em.tag} value={em.tag}>
-                {em.emoji} {em.label} ({em.tag})
-              </option>
+            <option value="" disabled>✨ Insertar emoción...</option>
+            {EMOTION_CATEGORIES.map((cat) => (
+              <optgroup key={cat.name} label={`${cat.emoji} ${cat.label}`}>
+                {getEmotionsByCategory(cat.name).map((em) => (
+                  <option key={em.tag} value={em.tag}>
+                    {em.emoji} {em.label}{em.description ? ` · ${em.description}` : ""} ({em.tag})
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
-          <button
-            type="button"
-            onClick={() => setShowAllEmotions(!showAllEmotions)}
-            className="text-[9px] text-primary hover:underline flex items-center gap-0.5 cursor-pointer ml-1"
-          >
-            <Sparkles size={10} />
-            {showAllEmotions ? "Menos" : "+ Catálogo"}
-          </button>
         </div>
       </div>
 
@@ -1029,6 +995,7 @@ function SegmentDraftText({
         {[
           { tag: "[excited]", emoji: "🤩", label: "excited" },
           { tag: "[happy]", emoji: "😊", label: "happy" },
+          { tag: "[in a hurry tone]", emoji: "⚡", label: "apurado" },
           { tag: "[whispering]", emoji: "🤫", label: "whisper" },
           { tag: "[emphasis]", emoji: "🗣️", label: "emphasis" },
           { tag: "[laughing]", emoji: "😂", label: "laugh" },
@@ -1046,29 +1013,6 @@ function SegmentDraftText({
           </button>
         ))}
       </div>
-
-      {/* Catálogo completo desplegable de emociones */}
-      {showAllEmotions && (
-        <div className="p-2 border border-border rounded bg-background-tertiary/70 space-y-2 text-[9px] max-h-40 overflow-y-auto">
-          {ALL_EMOTIONS_CATEGORIES.map((cat) => (
-            <div key={cat.category} className="space-y-1">
-              <span className="font-semibold text-text-primary block">{cat.category}:</span>
-              <div className="flex flex-wrap gap-1">
-                {cat.items.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    onClick={() => insertTag(item)}
-                    className="px-1.5 py-0.5 rounded bg-background border border-border hover:border-primary hover:text-primary transition-colors cursor-pointer font-mono"
-                  >
-                    {item}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
 
       <textarea
         ref={textareaRef}

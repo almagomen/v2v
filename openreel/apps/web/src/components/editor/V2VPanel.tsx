@@ -15,7 +15,12 @@ import {
 } from "../../utils/v2v-utils";
 import { ColabExportTab } from "./ColabExportTab";
 import { V2VGenerateTTSSection } from "./v2v/V2VGenerateTTSSection";
-import { V2V_EMOTIONS, DEFAULT_EMOTION_TAG } from "../../utils/v2v-emotions";
+import {
+  V2V_EMOTIONS,
+  DEFAULT_EMOTION_TAG,
+  EMOTION_CATEGORIES,
+  getEmotionsByCategory,
+} from "../../utils/v2v-emotions";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -482,10 +487,15 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
               disabled={isProcessing}
               title="Emoción inicial que se antepondrá a los segmentos durante la generación"
             >
-              {V2V_EMOTIONS.map((em) => (
-                <option key={em.tag} value={em.tag}>
-                  {em.emoji} {em.label} {em.tag !== "none" ? `(${em.tag})` : ""}
-                </option>
+              <option value="none">⚪ Sin emoción previa</option>
+              {EMOTION_CATEGORIES.map((cat) => (
+                <optgroup key={cat.name} label={`${cat.emoji} ${cat.label}`}>
+                  {getEmotionsByCategory(cat.name).map((em) => (
+                    <option key={em.tag} value={em.tag}>
+                      {em.emoji} {em.label}{em.description ? ` · ${em.description}` : ""} ({em.tag})
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>

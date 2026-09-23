@@ -26,6 +26,8 @@ import { folderNameFromTitle, parseV2VSegmentFromName, toSafeToken } from "../..
 import { applyRegeneratedSegmentToTimeline } from "../../../utils/v2v-segment-regen";
 import {
   V2V_EMOTIONS,
+  EMOTION_CATEGORIES,
+  getEmotionsByCategory,
 } from "../../../utils/v2v-emotions";
 
 export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
@@ -688,10 +690,14 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             title="Selecciona una emoción para insertarla donde esté la barra de texto"
           >
             <option value="" disabled>✨ Insertar emoción...</option>
-            {V2V_EMOTIONS.filter((em) => em.tag !== "none").map((em) => (
-              <option key={em.tag} value={em.tag}>
-                {em.emoji} {em.label} ({em.tag})
-              </option>
+            {EMOTION_CATEGORIES.map((cat) => (
+              <optgroup key={cat.name} label={`${cat.emoji} ${cat.label}`}>
+                {getEmotionsByCategory(cat.name).map((em) => (
+                  <option key={em.tag} value={em.tag}>
+                    {em.emoji} {em.label}{em.description ? ` · ${em.description}` : ""} ({em.tag})
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </div>
@@ -740,46 +746,6 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         />
       </div>
 
-      {/* Control de velocidad (solo si es edición individual de segmento existente) */}
-      {isEditingExistingSegment && (
-        <div className="flex items-center gap-2 p-2 rounded-lg bg-bg-1 border border-border/70 text-xs">
-          <span className="text-[10px] text-fg-3 font-medium whitespace-nowrap">Ajuste de velocidad:</span>
-          <select
-            value={speedMode}
-            onChange={(e) => {
-              const isS = e.target.value === "s";
-              setSpeedMode(isS ? "s" : "x");
-              if (selectedClip) {
-                setSpeedInput(isS ? selectedClip.duration.toFixed(3) : "1.000");
-              }
-            }}
-            className="h-7 w-12 text-[10px] px-1 bg-bg-2 border border-border rounded text-fg focus:outline-none focus:ring-1 focus:ring-primary font-mono cursor-pointer"
-          >
-            <option value="x">×</option>
-            <option value="s">s</option>
-          </select>
-          <input
-            type="text"
-            className="w-18 h-7 text-[10px] px-2 rounded border border-border bg-bg-2 font-mono text-fg focus:outline-none focus:ring-1 focus:ring-primary"
-            placeholder={speedMode === "x" ? "1.000" : (selectedClip?.duration.toFixed(2) || "1.0")}
-            value={speedInput}
-            onChange={(e) => setSpeedInput(e.target.value)}
-          />
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            className="text-[9px] h-7 px-2.5 ml-auto shrink-0 bg-bg-3 hover:bg-bg-2 text-fg border border-border"
-            disabled={isProcessing || isApplyingSpeed}
-            onClick={handleApplySpeedOnly}
-            title="Aplica la velocidad sin volver a generar audio con la IA"
-          >
-            {isApplyingSpeed ? <Loader2 size={11} className="animate-spin mr-1" /> : null}
-            Solo velocidad
-          </Button>
-        </div>
-      )}
-
       {/* Indicador de posición en Timeline */}
       <div className="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-bg-3/50 text-[11px] text-fg-3 border border-border/40">
         <span className="flex items-center gap-1 text-[10px]">
@@ -822,23 +788,72 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       </div>
 
       {showAdvanced && (
-        <div className="pb-1 space-y-1.5 animate-in fade-in duration-150">
-          <div className="flex justify-between text-[10px] text-fg-3">
-            <span>Expresividad / Temperatura</span>
-            <span className="font-mono text-fg font-semibold">{temperature.toFixed(2)}</span>
-          </div>
-          <input
-            type="range"
-            min="0.1"
-            max="1.0"
-            step="0.05"
-            value={temperature}
-            onChange={(e) => setTemperature(parseFloat(e.target.value))}
-            className="w-full accent-primary h-1 bg-border rounded-lg cursor-pointer"
-          />
-          <div className="flex justify-between text-[8px] text-fg-4">
-            <span>Más consistente (0.1)</span>
-            <span>Más variado / expresivo (1.0)</span>
+        <div className="pb-1 space-y-2.5 animate-in fade-in duration-150">
+          {/* Control de velocidad (solo al abrir ajustes avanzados con segmento existente) */}
+          {isEditingExistingSegment && (
+            <div className="p-2 rounded-lg bg-bg-1 border border-border/70 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-fg-3 font-medium">Ajuste de velocidad:</span>
+                <span className="text-[9px] text-fg-4 font-mono">
+                  {selectedClip ? `actual: ${selectedClip.duration.toFixed(2)}s` : ""}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={speedMode}
+                  onChange={(e) => {
+                    const isS = e.target.value === "s";
+                    setSpeedMode(isS ? "s" : "x");
+                    if (selectedClip) {
+                      setSpeedInput(isS ? selectedClip.duration.toFixed(3) : "1.000");
+                    }
+                  }}
+                  className="h-7 w-12 text-[10px] px-1 bg-bg-2 border border-border rounded text-fg focus:outline-none focus:ring-1 focus:ring-primary font-mono cursor-pointer"
+                >
+                  <option value="x">×</option>
+                  <option value="s">s</option>
+                </select>
+                <input
+                  type="text"
+                  className="w-20 h-7 text-[10px] px-2 rounded border border-border bg-bg-2 font-mono text-fg focus:outline-none focus:ring-1 focus:ring-primary"
+                  placeholder={speedMode === "x" ? "1.000" : (selectedClip?.duration.toFixed(2) || "1.0")}
+                  value={speedInput}
+                  onChange={(e) => setSpeedInput(e.target.value)}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="text-[9px] h-7 px-2.5 ml-auto shrink-0 bg-bg-3 hover:bg-bg-2 text-fg border border-border"
+                  disabled={isProcessing || isApplyingSpeed}
+                  onClick={handleApplySpeedOnly}
+                  title="Aplica la velocidad sin volver a generar audio con la IA"
+                >
+                  {isApplyingSpeed ? <Loader2 size={11} className="animate-spin mr-1" /> : null}
+                  Solo velocidad
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <div className="flex justify-between text-[10px] text-fg-3">
+              <span>Expresividad / Temperatura</span>
+              <span className="font-mono text-fg font-semibold">{temperature.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="0.1"
+              max="1.0"
+              step="0.05"
+              value={temperature}
+              onChange={(e) => setTemperature(parseFloat(e.target.value))}
+              className="w-full accent-primary h-1 bg-border rounded-lg cursor-pointer"
+            />
+            <div className="flex justify-between text-[8px] text-fg-4">
+              <span>Más consistente (0.1)</span>
+              <span>Más variado / expresivo (1.0)</span>
+            </div>
           </div>
         </div>
       )}
