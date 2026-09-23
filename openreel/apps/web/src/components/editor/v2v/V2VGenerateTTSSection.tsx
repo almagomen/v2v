@@ -34,7 +34,7 @@ import {
 export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
   inDrawer = false,
 }) => {
-  const { project, importMedia, addClip, addTrack, getClip, getMediaItem } = useProjectStore();
+  const { project, importMedia, addClip, addTrack, getClip, getMediaItem, moveClip } = useProjectStore();
   const {
     jobId,
     videos,
@@ -50,6 +50,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
   } = useV2VStore();
 
   const playheadPosition = useTimelineStore((s) => s.playheadPosition);
+  const seekTo = useTimelineStore((s) => s.seekTo);
   const selectedItems = useUIStore((s) => s.selectedItems);
   const clearSelection = useUIStore((s) => s.clearSelection);
 
@@ -110,6 +111,10 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
   const [speedMode, setSpeedMode] = useState<"x" | "s">("x");
   const [speedInput, setSpeedInput] = useState<string>("1.000");
   const [isApplyingSpeed, setIsApplyingSpeed] = useState<boolean>(false);
+
+  // Estados para posición editable de Playhead / Inicio de segmento
+  const [positionInput, setPositionInput] = useState<string>("");
+  const [isManualPosition, setIsManualPosition] = useState<boolean>(false);
 
   // Estados de proceso y preescucha
   const [isProcessing, setIsProcessing] = useState(false);
@@ -224,6 +229,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       setSpeedMode("x");
       setSpeedInput("1.000");
       setCachedAudio(null);
+      setIsManualPosition(false);
+      setPositionInput(selectedClip.startTime.toFixed(2));
     }
   }, [
     parsedSelectedSegment?.segIdx,
@@ -240,6 +247,17 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     videos,
   ]);
 
+  // Sincronizar posición con el timeline cuando el usuario mueve el playhead o cambia el clip
+  useEffect(() => {
+    if (!isManualPosition) {
+      if (isEditingExistingSegment && selectedClip) {
+        setPositionInput(selectedClip.startTime.toFixed(2));
+      } else if (!isEditingExistingSegment) {
+        setPositionInput(playheadPosition.toFixed(2));
+      }
+    }
+  }, [playheadPosition, isEditingExistingSegment, selectedClip?.id, selectedClip?.startTime, isManualPosition]);
+
   // Limpiar preview al desmontar
   useEffect(() => {
     return () => {
@@ -249,6 +267,47 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       }
     };
   }, []);
+
+  const handlePositionChange = (val: string) => {
+    setIsManualPosition(true);
+    setPositionInput(val);
+  };
+
+  const handlePositionBlur = useCallback(async () => {
+    const val = parseFloat(positionInput);
+    if (!isNaN(val) && val >= 0) {
+      if (isEditingExistingSegment && selectedClip) {
+        if (Math.abs(selectedClip.startTime - val) > 0.001) {
+          try {
+            await moveClip(selectedClip.id, val);
+          } catch (e) {
+            console.error("[V2V] Error al mover clip:", e);
+          }
+        }
+      } else {
+        seekTo(val);
+      }
+      setPositionInput(val.toFixed(2));
+    } else {
+      const fallback = isEditingExistingSegment && selectedClip ? selectedClip.startTime : playheadPosition;
+      setPositionInput(fallback.toFixed(2));
+      setIsManualPosition(false);
+    }
+  }, [positionInput, isEditingExistingSegment, selectedClip, moveClip, seekTo, playheadPosition]);
+
+  const handleSnapToPlayhead = useCallback(async () => {
+    const target = Math.max(0, playheadPosition);
+    setPositionInput(target.toFixed(2));
+    setIsManualPosition(true);
+    if (isEditingExistingSegment && selectedClip) {
+      try {
+        await moveClip(selectedClip.id, target);
+        toast.info("Segmento movido", `Inicio fijado al playhead (${target.toFixed(2)}s)`);
+      } catch (e) {
+        console.error("[V2V] Error al mover clip al playhead:", e);
+      }
+    }
+  }, [playheadPosition, isEditingExistingSegment, selectedClip, moveClip]);
 
   const speakerLabel = useMemo(() => {
     return (
@@ -291,13 +350,18 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       ) {
         audioResult = cachedAudio.result;
       } else {
+        const parsedPos = parseFloat(positionInput);
+        const effectivePreviewStart = !isNaN(parsedPos) && parsedPos >= 0
+          ? parsedPos
+          : (isEditingExistingSegment && selectedClip ? selectedClip.startTime : playheadPosition);
+
         audioResult = await v2vApi.generateNewAudioSegment(
           jobId,
           activeVideoIndex,
           finalText,
           selectedVoice,
           {
-            start: isEditingExistingSegment && selectedClip ? selectedClip.startTime : playheadPosition,
+            start: effectivePreviewStart,
             temperature,
           },
         );
@@ -361,6 +425,9 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       effectiveSpeed = 1.0;
     }
 
+    const parsedPos = parseFloat(positionInput);
+    const startToUse = !isNaN(parsedPos) && parsedPos >= 0 ? parsedPos : selectedClip.startTime;
+
     try {
       const regenBlob = await v2vApi.applyAudioSpeed(
         jobId,
@@ -382,12 +449,13 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         speaker: selectedVoice,
         speakerLabel,
         previousSpeakerToken: parsedSelectedSegment.speakerToken,
-        start: selectedClip.startTime,
-        end: selectedClip.startTime + selectedClip.duration,
+        start: startToUse,
+        end: startToUse + (targetDuration ?? selectedClip.duration),
         effectiveSpeed: speedForStore,
         mediaId: selectedMediaItem.id,
         clipId: selectedClip.id,
         trackStart: selectedClip.startTime,
+        targetStartTime: startToUse,
       });
 
       if (!result.success) {
@@ -432,8 +500,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     try {
       if (isEditingExistingSegment && parsedSelectedSegment && selectedClip && selectedMediaItem) {
         // --- MODO EDICIÓN INDIVIDUAL DE SEGMENTO EXISTENTE ---
-        const start = selectedClip.startTime;
-        const end = selectedClip.startTime + selectedClip.duration;
+        const parsedPos = parseFloat(positionInput);
+        const start = !isNaN(parsedPos) && parsedPos >= 0 ? parsedPos : selectedClip.startTime;
 
         let effectiveSpeed = 1.0;
         let targetDuration: number | undefined = undefined;
@@ -447,6 +515,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           targetDuration = !isNaN(parsed) && parsed > 0 ? parsed : selectedClip.duration;
           effectiveSpeed = 1.0;
         }
+
+        const end = start + (targetDuration ?? selectedClip.duration);
 
         const regenBlob = await v2vApi.regenerateSegment(
           jobId,
@@ -478,6 +548,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           mediaId: selectedMediaItem.id,
           clipId: selectedClip.id,
           trackStart: selectedClip.startTime,
+          targetStartTime: start,
         });
 
         if (result.success) {
@@ -488,6 +559,9 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         }
       } else {
         // --- MODO NUEVO SEGMENTO TTS (N+1) AL PLAYHEAD ---
+        const parsedPos = parseFloat(positionInput);
+        const targetStart = !isNaN(parsedPos) && parsedPos >= 0 ? parsedPos : playheadPosition;
+
         let audioResult: GeneratedAudioResult;
         if (
           cachedAudio &&
@@ -502,7 +576,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             finalText,
             selectedVoice,
             {
-              start: playheadPosition,
+              start: targetStart,
               temperature,
             },
           );
@@ -525,7 +599,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         // 2. Asignar pista de audio
         const currentProject = useProjectStore.getState().project;
         const audioTracks = currentProject.timeline.tracks.filter((t) => t.type === "audio");
-        const startTime = Math.max(0, playheadPosition);
+        const startTime = Math.max(0, targetStart);
         const endTime = startTime + duration;
 
         let targetTrack = audioTracks.find((t) =>
@@ -652,6 +726,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
               clearSelection();
               setText("");
               setCachedAudio(null);
+              setIsManualPosition(false);
+              setPositionInput(playheadPosition.toFixed(2));
             }}
             className="text-[10px] flex items-center gap-1 text-fg-3 hover:text-fg px-1.5 py-1 rounded hover:bg-hover transition-colors"
             title="Deseleccionar clip y crear un nuevo segmento"
@@ -734,17 +810,54 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         />
       </div>
 
-      {/* Indicador de posición en Timeline */}
-      <div className="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-bg-3/50 text-[11px] text-fg-3 border border-border/40">
-        <span className="flex items-center gap-1 text-[10px]">
-          <Clock size={11} className="text-primary" />{" "}
-          {isEditingExistingSegment ? "Inicio segmento:" : "Posición Playhead:"}
-        </span>
-        <span className="font-mono font-semibold text-fg text-[11px]">
-          {isEditingExistingSegment && selectedClip
-            ? `${selectedClip.startTime.toFixed(2)}s (dur: ${selectedClip.duration.toFixed(2)}s)`
-            : `${playheadPosition.toFixed(2)}s`}
-        </span>
+      {/* Indicador y edición de posición en Timeline */}
+      <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md bg-bg-3/50 text-[11px] text-fg-3 border border-border/40">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Clock size={12} className="text-primary shrink-0" />
+          <span className="text-[10px] font-semibold text-fg-2 truncate">
+            {isEditingExistingSegment ? "Inicio segmento:" : "Posición Playhead:"}
+          </span>
+          {isEditingExistingSegment && selectedClip && (
+            <span className="text-[9px] text-fg-4 font-mono">
+              (dur: {selectedClip.duration.toFixed(2)}s)
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Botón rápido para fijar al Playhead si estamos editando un clip existente */}
+          {isEditingExistingSegment && (
+            <button
+              type="button"
+              onClick={handleSnapToPlayhead}
+              className="text-[9px] px-1.5 py-0.5 rounded bg-bg-1 hover:bg-hover border border-border/60 text-fg-3 hover:text-primary transition-colors cursor-pointer"
+              title="Alinear inicio del clip a la posición actual del Playhead"
+            >
+              Al Playhead
+            </button>
+          )}
+
+          {/* Input editable de posición en segundos */}
+          <div className="flex items-center gap-1 bg-bg-1 border border-border rounded px-1.5 py-0.5 focus-within:ring-1 focus-within:ring-primary focus-within:border-primary transition-all">
+            <input
+              type="number"
+              step="0.05"
+              min="0"
+              value={positionInput}
+              onChange={(e) => handlePositionChange(e.target.value)}
+              onBlur={handlePositionBlur}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  void handlePositionBlur();
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              className="w-14 text-right font-mono text-xs bg-transparent text-fg focus:outline-none"
+              title="Edita los segundos para posicionar el segmento"
+            />
+            <span className="text-[10px] text-fg-4 font-mono font-medium">s</span>
+          </div>
+        </div>
       </div>
 
       {/* Fila: Ajustes avanzados + Botón Editor en Lote */}

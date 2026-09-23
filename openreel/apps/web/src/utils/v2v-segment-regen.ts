@@ -82,6 +82,7 @@ export type ApplyRegenParams = {
   mediaId?: string;
   clipId?: string;
   trackStart: number;
+  targetStartTime?: number;
 };
 
 export type ApplyRegenResult = {
@@ -157,7 +158,9 @@ export async function applyRegeneratedSegmentToTimeline(
 
   let currentProject = useProjectStore.getState().project;
 
-  // Actualizar el clip en el timeline para apuntar al nuevo mediaId y duración
+  // Actualizar el clip en el timeline para apuntar al nuevo mediaId, posición y duración
+  const effectiveNewStart = params.targetStartTime !== undefined ? params.targetStartTime : params.start;
+
   if (clipId) {
     currentProject = {
       ...currentProject,
@@ -170,6 +173,7 @@ export async function applyRegeneratedSegmentToTimeline(
               const inPoint = clip.inPoint ?? 0;
               return {
                 ...clip,
+                startTime: effectiveNewStart !== undefined ? effectiveNewStart : clip.startTime,
                 mediaId: newMediaId,
                 inPoint,
                 outPoint: inPoint + newDuration,
@@ -192,7 +196,7 @@ export async function applyRegeneratedSegmentToTimeline(
       currentProject,
       clipId,
       speakerLabel,
-      trackStart,
+      effectiveNewStart !== undefined ? effectiveNewStart : trackStart,
     );
     if (moveResult.success) {
       currentProject = moveResult.project;

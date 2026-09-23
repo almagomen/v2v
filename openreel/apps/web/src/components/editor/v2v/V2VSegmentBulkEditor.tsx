@@ -72,13 +72,6 @@ function speakerLabelFor(speakers: { value: string; label: string }[], token: st
   return speakers.find((s) => s.value === token)?.label || token;
 }
 
-function isRowProblematic(row: BulkSegmentRow): boolean {
-  const origLen = Math.max(row.originalText.length, 1);
-  if (row.draftText.length / origLen > 1.15) return true;
-  if (row.speed > 1.05) return true;
-  return false;
-}
-
 function rowIsDirty(row: BulkSegmentRow): boolean {
   if (row.draftText.trim() !== row.loadedText.trim()) return true;
   if (row.speedMode === "x" && Math.abs(row.speed - row.loadedSpeed) > 0.001) return true;
@@ -113,7 +106,6 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
   const [rows, setRows] = useState<BulkSegmentRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [onlyProblematic, setOnlyProblematic] = useState(false);
 
   const [retranslateBusy, setRetranslateBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
@@ -258,10 +250,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
     };
   }, [jobId, videoIndex, buildRow]);
 
-  const visibleRows = useMemo(() => {
-    if (!onlyProblematic) return rows;
-    return rows.filter(isRowProblematic);
-  }, [rows, onlyProblematic]);
+  const visibleRows = rows;
 
   const selectedCount = useMemo(() => rows.filter((r) => r.selected).length, [rows]);
   const dirtyCount = useMemo(() => rows.filter((r) => r.dirty).length, [rows]);
@@ -278,8 +267,6 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
 
   const selectAll = () => setRows((prev) => prev.map((r) => ({ ...r, selected: true })));
   const selectNone = () => setRows((prev) => prev.map((r) => ({ ...r, selected: false })));
-  const selectProblematic = () =>
-    setRows((prev) => prev.map((r) => ({ ...r, selected: isRowProblematic(r) })));
 
   const handleProposeTranslation = async (specificSegs?: number[]) => {
     const targets = specificSegs ? rows.filter(r => specificSegs.includes(r.seg)) : rows.filter((r) => r.selected);
@@ -366,6 +353,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         mediaId: row.mediaId,
         clipId: row.clipId,
         trackStart: row.start,
+        targetStartTime: row.start,
       });
 
       if (!result.success) {
@@ -442,6 +430,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         mediaId: row.mediaId,
         clipId: row.clipId,
         trackStart: row.start,
+        targetStartTime: row.start,
       });
 
       if (!result.success) {
@@ -537,6 +526,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           mediaId: row.mediaId,
           clipId: row.clipId,
           trackStart: row.start,
+          targetStartTime: row.start,
         });
 
         if (!result.success) {
@@ -647,15 +637,6 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         <p className="text-[10px] text-text-muted">
           {selectedCount} sel. · {dirtyCount} mod.
         </p>
-        <label className="flex items-center gap-1.5 text-[10px] text-text-muted cursor-pointer">
-          <input
-            type="checkbox"
-            checked={onlyProblematic}
-            onChange={(e) => setOnlyProblematic(e.target.checked)}
-            className="rounded border-border"
-          />
-          Solo problemáticos
-        </label>
       </div>
 
       <div className="flex flex-wrap gap-1.5">
@@ -664,9 +645,6 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         </Button>
         <Button type="button" size="sm" variant="secondary" className="text-[10px] h-7 px-2" onClick={selectNone}>
           Ninguno
-        </Button>
-        <Button type="button" size="sm" variant="secondary" className="text-[10px] h-7 px-2" onClick={selectProblematic}>
-          Problemáticos
         </Button>
 
 
@@ -773,11 +751,6 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         )}
       </div>
 
-      {onlyProblematic && visibleRows.length < rows.length && (
-        <p className="text-[9px] text-text-muted text-center">
-          Mostrando {visibleRows.length} de {rows.length} segmentos
-        </p>
-      )}
     </div>
   );
 };
@@ -826,8 +799,6 @@ function SegmentRow({
   isRegenerating: boolean;
 }) {
   const [showSettings, setShowSettings] = useState(false);
-  const ratio = row.draftText.length / Math.max(row.originalText.length, 1);
-  const problematic = isRowProblematic(row);
   const hasCustomFishAudio = Math.abs(row.temperature - 0.7) > 0.01;
 
   // Clip reactivo en el timeline para actualizar posición en tiempo real si el usuario lo mueve o recorta
@@ -848,14 +819,41 @@ function SegmentRow({
   const timelineStart = currentClip ? currentClip.startTime : row.start;
   const timelineDuration = currentClip ? currentClip.duration : row.slotDuration;
 
+  const [startInput, setStartInput] = useState<string>(timelineStart.toFixed(2));
+  const [isEditingStart, setIsEditingStart] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!isEditingStart) {
+      setStartInput(timelineStart.toFixed(2));
+    }
+  }, [timelineStart, isEditingStart]);
+
+  const handleStartCommit = async () => {
+    const val = parseFloat(startInput);
+    if (!isNaN(val) && val >= 0) {
+      if (currentClip && Math.abs(currentClip.startTime - val) > 0.001) {
+        try {
+          const moveClip = useProjectStore.getState().moveClip;
+          await moveClip(currentClip.id, val);
+        } catch (e) {
+          console.error("[V2V] Error moviendo clip en bulk editor:", e);
+        }
+      }
+      updateRow(row.seg, { start: val, end: val + timelineDuration });
+      setStartInput(val.toFixed(2));
+    } else {
+      setStartInput(timelineStart.toFixed(2));
+    }
+    setIsEditingStart(false);
+  };
+
   return (
     <div
-      className={`rounded-lg border p-2.5 space-y-2.5 transition-colors ${row.missingAudio
+      className={`rounded-lg border p-2.5 space-y-2.5 transition-colors ${
+        row.missingAudio
           ? "border-red-500/40 bg-red-500/5"
-          : problematic
-            ? "border-amber-500/40 bg-amber-500/5"
-            : "border-border bg-background"
-        }`}
+          : "border-border bg-background"
+      }`}
     >
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -901,14 +899,34 @@ function SegmentRow({
 
         <div className="flex-1" />
 
-        {/* Posición real en el timeline posicionada del lado derecho (reactiva) */}
-        <span
-          className="text-[10px] font-mono text-text-muted flex items-center gap-1 bg-background-tertiary px-2 py-0.5 rounded border border-border/40"
-          title="Posición real en el timeline: inicio en timeline - duración actual (se actualiza automáticamente al arrastrar el clip)"
+        {/* Posición real en el timeline posicionada del lado derecho (editable) */}
+        <div
+          className="text-[10px] font-mono text-text-muted flex items-center gap-1 bg-background-tertiary px-1.5 py-0.5 rounded border border-border/40"
+          title="Posición real en el timeline: inicio en timeline - duración actual (editable: presiona Enter o cambia de campo para mover el segmento)"
         >
           <Clock size={11} className="text-primary shrink-0" />
-          <span>{timelineStart.toFixed(2)}s – dur: {timelineDuration.toFixed(2)}s</span>
-        </span>
+          <span className="text-[9px]">Inicio:</span>
+          <input
+            type="number"
+            step="0.05"
+            min="0"
+            value={startInput}
+            onChange={(e) => {
+              setIsEditingStart(true);
+              setStartInput(e.target.value);
+            }}
+            onBlur={handleStartCommit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                void handleStartCommit();
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            className="w-14 text-right text-[10px] font-mono bg-background border border-border rounded px-1 py-0.2 text-text-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            title="Edita el inicio del segmento en segundos"
+          />
+          <span className="text-[9px]">s · dur: {timelineDuration.toFixed(2)}s</span>
+        </div>
 
         {/* Botón para desplegar ajustes de Fish Audio */}
         <button
