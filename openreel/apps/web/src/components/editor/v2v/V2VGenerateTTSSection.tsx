@@ -203,7 +203,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             const t = row.tts_text || row.original_text || "";
             if (t) setText(t);
           }
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       setText(rawText);
@@ -435,6 +435,19 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         const start = selectedClip.startTime;
         const end = selectedClip.startTime + selectedClip.duration;
 
+        let effectiveSpeed = 1.0;
+        let targetDuration: number | undefined = undefined;
+
+        if (speedMode === "x") {
+          const parsed = parseFloat(speedInput);
+          effectiveSpeed = !isNaN(parsed) && parsed > 0 ? parsed : 1.0;
+          targetDuration = undefined;
+        } else {
+          const parsed = parseFloat(speedInput);
+          targetDuration = !isNaN(parsed) && parsed > 0 ? parsed : selectedClip.duration;
+          effectiveSpeed = 1.0;
+        }
+
         const regenBlob = await v2vApi.regenerateSegment(
           jobId,
           activeVideoIndex,
@@ -444,8 +457,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           end,
           null,
           selectedVoice,
-          1.0,
-          undefined,
+          effectiveSpeed,
+          targetDuration,
           { temperature },
         );
 
@@ -461,7 +474,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           previousSpeakerToken: parsedSelectedSegment.speakerToken,
           start,
           end,
-          effectiveSpeed: 1.0,
+          effectiveSpeed: speedMode === "x" ? effectiveSpeed : 1.0,
           mediaId: selectedMediaItem.id,
           clipId: selectedClip.id,
           trackStart: selectedClip.startTime,
@@ -584,8 +597,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     activeVideoIndex,
     selectedVoice,
     temperature,
-    activeFolder,
-    speakerLabel,
+    speedMode,
+    speedInput,
     cachedAudio,
     playheadPosition,
     importMedia,
@@ -600,11 +613,10 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       <div className="flex items-center justify-between border-b border-border/50 pb-2.5">
         <div className="flex items-center gap-2">
           <div
-            className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-              isEditingExistingSegment
+            className={`w-7 h-7 rounded-lg flex items-center justify-center ${isEditingExistingSegment
                 ? "bg-amber-500/15 text-amber-500"
                 : "bg-red-500/15 text-red-500"
-            }`}
+              }`}
           >
             {isEditingExistingSegment ? <RefreshCw size={15} /> : <Mic size={15} />}
           </div>
@@ -616,11 +628,10 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
                   : "Generador de Voz TTS"}
               </h4>
               <span
-                className={`text-[9px] font-medium px-1.5 py-0.2 rounded border ${
-                  isEditingExistingSegment
+                className={`text-[9px] font-medium px-1.5 py-0.2 rounded border ${isEditingExistingSegment
                     ? "bg-amber-500/10 text-amber-500 border-amber-500/20"
                     : "bg-primary/10 text-primary border-primary/20"
-                }`}
+                  }`}
               >
                 {isEditingExistingSegment ? "Clip Seleccionado" : "IA N+1"}
               </span>
@@ -770,7 +781,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           {isEditingExistingSegment && (
             <div className="p-2 rounded-lg bg-bg-1 border border-border/70 space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] text-fg-3 font-medium">Ajuste de velocidad:</span>
+                <span className="text-[10px] text-fg-3 font-medium">Velocidad:</span>
                 <span className="text-[9px] text-fg-4 font-mono">
                   {selectedClip ? `actual: ${selectedClip.duration.toFixed(2)}s` : ""}
                 </span>
@@ -785,18 +796,42 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
                       setSpeedInput(isS ? selectedClip.duration.toFixed(3) : "1.000");
                     }
                   }}
-                  className="h-7 w-12 text-[10px] px-1 bg-bg-2 border border-border rounded text-fg focus:outline-none focus:ring-1 focus:ring-primary font-mono cursor-pointer"
+                  className="h-7 w-12 text-[10px] px-1 bg-bg-2 border border-border rounded text-fg focus:outline-none focus:ring-1 focus:ring-primary font-mono cursor-pointer shrink-0"
                 >
                   <option value="x">×</option>
                   <option value="s">s</option>
                 </select>
-                <input
-                  type="text"
-                  className="w-20 h-7 text-[10px] px-2 rounded border border-border bg-bg-2 font-mono text-fg focus:outline-none focus:ring-1 focus:ring-primary"
-                  placeholder={speedMode === "x" ? "1.000" : (selectedClip?.duration.toFixed(2) || "1.0")}
-                  value={speedInput}
-                  onChange={(e) => setSpeedInput(e.target.value)}
-                />
+                {speedMode === "x" ? (
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="2.0"
+                      step="0.05"
+                      value={parseFloat(speedInput) || 1.0}
+                      onChange={(e) => setSpeedInput(parseFloat(e.target.value).toFixed(2))}
+                      className="w-20 accent-primary h-1 bg-border rounded cursor-pointer"
+                      title="Deslizar para ajustar velocidad del segmento sintetizado (0.5x – 2.0x)"
+                    />
+                    <input
+                      type="text"
+                      className="w-14 h-7 text-[10px] px-1 text-center rounded border border-border bg-bg-2 font-mono text-fg focus:outline-none focus:ring-1 focus:ring-primary"
+                      placeholder="1.00"
+                      value={speedInput}
+                      onChange={(e) => setSpeedInput(e.target.value)}
+                      title="Multiplicador de velocidad"
+                    />
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    className="w-20 h-7 text-[10px] px-2 rounded border border-border bg-bg-2 font-mono text-fg focus:outline-none focus:ring-1 focus:ring-primary"
+                    placeholder={selectedClip?.duration.toFixed(2) || "1.0"}
+                    value={speedInput}
+                    onChange={(e) => setSpeedInput(e.target.value)}
+                    title="Duración exacta en segundos"
+                  />
+                )}
                 <Button
                   type="button"
                   size="sm"
@@ -807,7 +842,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
                   title="Aplica la velocidad sin volver a generar audio con la IA"
                 >
                   {isApplyingSpeed ? <Loader2 size={11} className="animate-spin mr-1" /> : null}
-                  Solo velocidad
+                  Ajustar
                 </Button>
               </div>
             </div>
@@ -861,11 +896,10 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           size="sm"
           onClick={handleMainAction}
           disabled={isProcessing || !text.trim()}
-          className={`flex-1 text-xs h-8 gap-1.5 font-semibold shadow ${
-            isEditingExistingSegment
+          className={`flex-1 text-xs h-8 gap-1.5 font-semibold shadow ${isEditingExistingSegment
               ? "bg-amber-500 hover:bg-amber-600 text-white"
               : "bg-primary hover:bg-primary/90 text-primary-foreground"
-          }`}
+            }`}
         >
           {isProcessing ? (
             <Loader2 size={14} className="animate-spin" />

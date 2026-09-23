@@ -170,15 +170,9 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
       const speakerToken = stored?.speaker || apiRow.speaker || defaultSpeaker || "speaker";
       const speakerLabel = speakerLabelFor(speakers, speakerToken);
 
-      let loadedSpeed = stored?.speed ?? 1;
-      try {
-        const { speed } = await v2vApi.getSegmentSpeed(jobId, videoIndex, apiRow.seg);
-        if (speed && speed > 0) loadedSpeed = speed;
-      } catch {
-        // ignore
-      }
-
-      const loadedSpeedInput = loadedSpeed !== 1 ? loadedSpeed.toFixed(3) : "";
+      // Velocidad directa como multiplicador del segmento sintetizado (por defecto 1.0)
+      const loadedSpeed = stored?.speed ?? 1.0;
+      const loadedSpeedInput = loadedSpeed !== 1.0 ? loadedSpeed.toFixed(3) : "1.000";
 
       const mediaId =
         stored?.mediaId ||
@@ -323,15 +317,19 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
   const handleRegenerateSingle = async (row: BulkSegmentRow) => {
     setRegeneratingSeg(row.seg);
     try {
-      let effectiveSpeed =
-        parseFloat(row.speedInput) ||
-        (row.speedMode === "x" ? row.speed || 1 : row.slotDuration);
-      let targetDuration: number | undefined;
-      if (row.speedMode === "s" && effectiveSpeed > 0) {
-        targetDuration = effectiveSpeed;
-        effectiveSpeed = 1;
+      let effectiveSpeed = 1.0;
+      let targetDuration: number | undefined = undefined;
+
+      if (row.speedMode === "x") {
+        const parsed = parseFloat(row.speedInput);
+        effectiveSpeed = !isNaN(parsed) && parsed > 0 ? parsed : 1.0;
+        targetDuration = undefined;
+      } else {
+        const parsed = parseFloat(row.speedInput);
+        targetDuration = !isNaN(parsed) && parsed > 0 ? parsed : row.slotDuration;
+        effectiveSpeed = 1.0;
       }
-      const speedForStore = row.speedMode === "x" ? effectiveSpeed : row.loadedSpeed;
+      const speedForStore = row.speedMode === "x" ? effectiveSpeed : 1.0;
 
       const regenBlob = await v2vApi.regenerateSegment(
         jobId,
@@ -380,17 +378,17 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         prev.map((r) =>
           r.seg === row.seg
             ? {
-                ...r,
-                loadedText: row.draftText,
-                loadedSpeed: speedForStore,
-                loadedSpeedInput: newSpeedInput,
-                speed: speedForStore,
-                speedInput: newSpeedInput,
-                mediaId: result.mediaId ?? r.mediaId,
-                clipId: result.clipId ?? r.clipId,
-                dirty: false,
-                missingAudio: false,
-              }
+              ...r,
+              loadedText: row.draftText,
+              loadedSpeed: speedForStore,
+              loadedSpeedInput: newSpeedInput,
+              speed: speedForStore,
+              speedInput: newSpeedInput,
+              mediaId: result.mediaId ?? r.mediaId,
+              clipId: result.clipId ?? r.clipId,
+              dirty: false,
+              missingAudio: false,
+            }
             : r,
         ),
       );
@@ -404,11 +402,17 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
 
   const handleApplySpeedOnly = async (row: BulkSegmentRow) => {
     setApplyBusy(true);
-    let effectiveSpeed = parseFloat(row.speedInput) || (row.speedMode === "x" ? row.speed || 1 : row.slotDuration);
-    let targetDuration: number | undefined;
-    if (row.speedMode === "s" && effectiveSpeed > 0) {
-      targetDuration = effectiveSpeed;
-      effectiveSpeed = 1;
+    let effectiveSpeed = 1.0;
+    let targetDuration: number | undefined = undefined;
+
+    if (row.speedMode === "x") {
+      const parsed = parseFloat(row.speedInput);
+      effectiveSpeed = !isNaN(parsed) && parsed > 0 ? parsed : 1.0;
+      targetDuration = undefined;
+    } else {
+      const parsed = parseFloat(row.speedInput);
+      targetDuration = !isNaN(parsed) && parsed > 0 ? parsed : row.slotDuration;
+      effectiveSpeed = 1.0;
     }
 
     try {
@@ -420,7 +424,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         targetDuration
       );
 
-      const speedForStore = row.speedMode === "x" ? effectiveSpeed : row.loadedSpeed;
+      const speedForStore = row.speedMode === "x" ? effectiveSpeed : 1.0;
 
       const result = await applyRegeneratedSegmentToTimeline({
         folder,
@@ -448,12 +452,12 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         prev.map((r) =>
           r.seg === row.seg
             ? {
-                ...r,
-                loadedText: r.draftText, // El texto en el timeline podría no cambiar, pero si lo modificó no importa
-                loadedSpeedInput: row.speedInput,
-                loadedSpeed: row.speedMode === "x" ? effectiveSpeed : row.loadedSpeed,
-                dirty: false,
-              }
+              ...r,
+              loadedText: r.draftText, // El texto en el timeline podría no cambiar, pero si lo modificó no importa
+              loadedSpeedInput: row.speedInput,
+              loadedSpeed: row.speedMode === "x" ? effectiveSpeed : row.loadedSpeed,
+              dirty: false,
+            }
             : r
         )
       );
@@ -482,16 +486,20 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
       const row = dirtyRows[i];
       setApplyProgress({ current: i + 1, total: dirtyRows.length });
 
-      let effectiveSpeed =
-        parseFloat(row.speedInput) ||
-        (row.speedMode === "x" ? row.speed || 1 : row.slotDuration);
-      let targetDuration: number | undefined;
-      if (row.speedMode === "s" && effectiveSpeed > 0) {
-        targetDuration = effectiveSpeed;
-        effectiveSpeed = 1;
+      let effectiveSpeed = 1.0;
+      let targetDuration: number | undefined = undefined;
+
+      if (row.speedMode === "x") {
+        const parsed = parseFloat(row.speedInput);
+        effectiveSpeed = !isNaN(parsed) && parsed > 0 ? parsed : 1.0;
+        targetDuration = undefined;
+      } else {
+        const parsed = parseFloat(row.speedInput);
+        targetDuration = !isNaN(parsed) && parsed > 0 ? parsed : row.slotDuration;
+        effectiveSpeed = 1.0;
       }
 
-      const speedForStore = row.speedMode === "x" ? effectiveSpeed : row.loadedSpeed;
+      const speedForStore = row.speedMode === "x" ? effectiveSpeed : 1.0;
 
       try {
         const regenBlob = await v2vApi.regenerateSegment(
@@ -820,18 +828,34 @@ function SegmentRow({
   const [showSettings, setShowSettings] = useState(false);
   const ratio = row.draftText.length / Math.max(row.originalText.length, 1);
   const problematic = isRowProblematic(row);
-
   const hasCustomFishAudio = Math.abs(row.temperature - 0.7) > 0.01;
+
+  // Clip reactivo en el timeline para actualizar posición en tiempo real si el usuario lo mueve o recorta
+  const currentClip = useProjectStore((state) => {
+    for (const track of state.project.timeline.tracks) {
+      if (row.clipId) {
+        const found = track.clips.find((c) => c.id === row.clipId);
+        if (found) return found;
+      }
+      if (row.mediaId) {
+        const found = track.clips.find((c) => c.mediaId === row.mediaId);
+        if (found) return found;
+      }
+    }
+    return null;
+  });
+
+  const timelineStart = currentClip ? currentClip.startTime : row.start;
+  const timelineDuration = currentClip ? currentClip.duration : row.slotDuration;
 
   return (
     <div
-      className={`rounded-lg border p-2.5 space-y-2.5 transition-colors ${
-        row.missingAudio
+      className={`rounded-lg border p-2.5 space-y-2.5 transition-colors ${row.missingAudio
           ? "border-red-500/40 bg-red-500/5"
           : problematic
             ? "border-amber-500/40 bg-amber-500/5"
             : "border-border bg-background"
-      }`}
+        }`}
     >
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -846,29 +870,6 @@ function SegmentRow({
           title={`Segmento consecutivo #${row.seg}`}
         >
           Seg #{row.seg}
-        </span>
-        <span
-          className="text-[10px] text-text-muted flex items-center gap-1 font-mono bg-background-tertiary px-1.5 py-0.5 rounded border border-border/40"
-          title="Intervalo de tiempo en el video original (inicio - fin)"
-        >
-          <Clock size={11} className="text-text-muted shrink-0" />
-          <span>{row.start.toFixed(2)}s – {row.end.toFixed(2)}s</span>
-        </span>
-        <span
-          className="text-[10px] text-text-muted font-medium bg-background-tertiary px-1.5 py-0.5 rounded border border-border/40"
-          title="Duración del hueco disponible para hablar sin invadir el siguiente diálogo"
-        >
-          Hueco: <span className="font-mono text-text-primary font-semibold">{row.slotDuration.toFixed(2)}s</span>
-        </span>
-        <span
-          className={`text-[9px] px-1.5 py-0.5 rounded font-mono border transition-colors ${
-            ratio > 1.15
-              ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
-              : "bg-background-tertiary text-text-muted border-border/40"
-          }`}
-          title={`Longitud relativa del texto traducido vs original (${Math.round((ratio - 1) * 100)}% ${ratio >= 1 ? "más largo" : "más corto"}). Si supera 1.15x podría requerir acelerar la locución.`}
-        >
-          Texto: ×{ratio.toFixed(2)} {ratio > 1.15 ? "(largo)" : ""}
         </span>
         {row.missingAudio && (
           <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-medium">
@@ -900,15 +901,23 @@ function SegmentRow({
 
         <div className="flex-1" />
 
+        {/* Posición real en el timeline posicionada del lado derecho (reactiva) */}
+        <span
+          className="text-[10px] font-mono text-text-muted flex items-center gap-1 bg-background-tertiary px-2 py-0.5 rounded border border-border/40"
+          title="Posición real en el timeline: inicio en timeline - duración actual (se actualiza automáticamente al arrastrar el clip)"
+        >
+          <Clock size={11} className="text-primary shrink-0" />
+          <span>{timelineStart.toFixed(2)}s – dur: {timelineDuration.toFixed(2)}s</span>
+        </span>
+
         {/* Botón para desplegar ajustes de Fish Audio */}
         <button
           type="button"
           onClick={() => setShowSettings(!showSettings)}
-          className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
-            showSettings || hasCustomFishAudio
+          className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${showSettings || hasCustomFishAudio
               ? "border-primary/40 bg-primary/10 text-primary font-medium"
               : "border-border/60 bg-background-tertiary text-text-muted hover:text-text-primary"
-          }`}
+            }`}
           title="Ajustes de expresividad y voz Fish Audio"
         >
           <SlidersHorizontal size={11} />
@@ -930,9 +939,9 @@ function SegmentRow({
         <SegmentFishAudioSettings row={row} updateRow={updateRow} />
       )}
 
-      <SegmentSpeedControls 
-        row={row} 
-        updateRow={updateRow} 
+      <SegmentSpeedControls
+        row={row}
+        updateRow={updateRow}
         jobId={jobId}
         videoIndex={videoIndex}
         onApplyRow={onApplyRow}
@@ -945,8 +954,16 @@ function SegmentRow({
 
 function SegmentOriginalText({ row }: { row: BulkSegmentRow }) {
   return (
-    <div className="bg-background-tertiary/30 rounded p-1.5 border border-border/40">
-      <p className="text-[9px] font-medium text-text-muted mb-0.5">Original (STT)</p>
+    <div className="bg-background-tertiary/30 rounded p-1.5 border border-border/40 space-y-1">
+      <div className="flex items-center justify-between text-[9px] text-text-muted mb-0.5">
+        <span className="font-medium">Original (STT)</span>
+        <span
+          className="font-mono bg-background-tertiary px-1.5 py-0.2 rounded border border-border/40 text-[9px]"
+          title="Duración original del segmento detectada en el video"
+        >
+          duración orig: {row.slotDuration.toFixed(2)}s
+        </span>
+      </div>
       <p className="text-[10px] text-text-muted leading-snug break-words">{row.originalText || "—"}</p>
     </div>
   );
@@ -1127,7 +1144,7 @@ function SegmentSpeedControls({
           const isS = v === "s";
           updateRow(row.seg, {
             speedMode: isS ? "s" : "x",
-            speedInput: isS ? row.slotDuration.toFixed(3) : row.loadedSpeedInput || "1.000",
+            speedInput: isS ? row.slotDuration.toFixed(3) : (row.loadedSpeed !== 1.0 ? row.loadedSpeed.toFixed(3) : "1.000"),
           });
         }}
       >
@@ -1139,13 +1156,37 @@ function SegmentSpeedControls({
           <SelectItem value="s">s</SelectItem>
         </SelectContent>
       </Select>
-      <input
-        type="text"
-        className="w-18 h-7 text-[10px] px-2 rounded border border-border bg-background-tertiary font-mono"
-        placeholder={row.speedMode === "x" ? "1.0" : row.slotDuration.toFixed(2)}
-        value={row.speedInput}
-        onChange={(e) => updateRow(row.seg, { speedInput: e.target.value })}
-      />
+      {row.speedMode === "x" ? (
+        <div className="flex items-center gap-1.5">
+          <input
+            type="range"
+            min="0.5"
+            max="2.0"
+            step="0.05"
+            value={parseFloat(row.speedInput) || 1.0}
+            onChange={(e) => updateRow(row.seg, { speedInput: parseFloat(e.target.value).toFixed(2) })}
+            className="w-20 accent-primary h-1 bg-background-tertiary rounded cursor-pointer"
+            title="Deslizar para ajustar velocidad del segmento sintetizado (0.5x – 2.0x)"
+          />
+          <input
+            type="text"
+            className="w-14 h-7 text-[10px] px-1 text-center rounded border border-border bg-background-tertiary font-mono"
+            placeholder="1.00"
+            value={row.speedInput}
+            onChange={(e) => updateRow(row.seg, { speedInput: e.target.value })}
+            title="Factor multiplicador de velocidad"
+          />
+        </div>
+      ) : (
+        <input
+          type="text"
+          className="w-18 h-7 text-[10px] px-2 rounded border border-border bg-background-tertiary font-mono"
+          placeholder={row.slotDuration.toFixed(2)}
+          value={row.speedInput}
+          onChange={(e) => updateRow(row.seg, { speedInput: e.target.value })}
+          title="Duración exacta en segundos para este segmento"
+        />
+      )}
       <Button
         type="button"
         size="sm"
@@ -1155,7 +1196,7 @@ function SegmentSpeedControls({
         onClick={onApplyRow}
         title="Aplica la velocidad sin volver a llamar a la API de voz"
       >
-        Solo velocidad
+        Ajustar
       </Button>
 
       <div className="flex-1 min-w-[8px]" />
