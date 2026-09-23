@@ -197,7 +197,8 @@ export const v2vApi = {
   async processUrls(
     urls: string[],
     translateLang: string | null,
-    speaker: string
+    speaker: string,
+    emotion?: string | null
   ): Promise<ProcessUrlsResponse> {
     const res = await fetch(url("/api/process-urls"), {
       method: "POST",
@@ -206,6 +207,7 @@ export const v2vApi = {
         urls,
         translate_lang: translateLang,
         speaker,
+        emotion: emotion || null,
       }),
     });
     if (!res.ok) {

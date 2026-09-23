@@ -10,6 +10,9 @@ class ProcessUrlsRequest(BaseModel):
         None, description="Idioma de traducción: es, pt, en, fr, de, it, o null"
     )
     speaker: str = Field("mrbeast", description="Nombre de voz/speaker")
+    emotion: Optional[str] = Field(
+        None, description="Emoción inicial opcional para anteponer a los segmentos (ej: [excited])"
+    )
 
 
 class ProcessUrlsResponse(BaseModel):

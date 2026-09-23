@@ -48,8 +48,15 @@ class JobLogWriter(io.TextIOBase):
         pass
 
 
-def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, speaker_name: str) -> None:
+def _run_pipeline(
+    job_id: str,
+    urls: list[str],
+    translate_lang: str | None,
+    speaker_name: str,
+    emotion: str | None = None,
+) -> None:
     """Run pipeline with stdout redirected to job log."""
+    import pickle
     from src.pipeline import process_video_queue, split_all_sequences
     from src.audio_utils import clone_voice_segments
     from src.tts import model_tts
@@ -160,6 +167,26 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
             for t in texts:
                 t["speaker"] = speaker_name
 
+            # Si se especificó una emoción en el proceso inicial, se antepone a cada segmento
+            if emotion and emotion != "none":
+                clean_tag = emotion if emotion.startswith("[") else f"[{emotion}]"
+                for t in texts:
+                    current_txt = t.get("text", "").strip()
+                    if not current_txt.startswith(clean_tag):
+                        t["text"] = f"{clean_tag} {current_txt}"
+
+                # Persistir textos con la emoción antepuesta en result.pkl
+                output_file = path.with_name("result.pkl")
+                if output_file.exists():
+                    try:
+                        with open(output_file, "rb") as f:
+                            pkl_data = list(pickle.load(f))
+                        pkl_data[0] = texts
+                        with open(output_file, "wb") as f:
+                            pickle.dump(tuple(pkl_data), f)
+                    except Exception as pkl_err:
+                        print(f"⚠️ No se pudo actualizar result.pkl con emoción: {pkl_err}")
+
             print("⚡ TTS:")
             paths_es, _times, _freq = clone_voice_segments(
                 path, texts, lang, speaker_audio, model_tts,
@@ -200,12 +227,17 @@ def _run_pipeline(job_id: str, urls: list[str], translate_lang: str | None, spea
         sys.stderr = old_stderr
 
 
-def start_process(urls: list[str], translate_lang: str | None, speaker_name: str) -> str:
+def start_process(
+    urls: list[str],
+    translate_lang: str | None,
+    speaker_name: str,
+    emotion: str | None = None,
+) -> str:
     """Start pipeline in background, return job_id."""
     job_id = create_job()
     thread = threading.Thread(
         target=_run_pipeline,
-        args=(job_id, urls, translate_lang, speaker_name),
+        args=(job_id, urls, translate_lang, speaker_name, emotion),
     )
     thread.start()
     return job_id

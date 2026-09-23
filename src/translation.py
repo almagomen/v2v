@@ -110,7 +110,7 @@ Requisitos:
 
 IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones adicionales.
 """
-    selected_model = model_name or "gemini-2.5-flash"
+    selected_model = model_name or "gemini-flash-lite-latest"
     contents = types.Content(
         parts=[
             types.Part(file_data=types.FileData(file_uri=youtube_url)),

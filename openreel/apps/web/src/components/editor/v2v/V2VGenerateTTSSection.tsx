@@ -26,9 +26,6 @@ import { folderNameFromTitle, parseV2VSegmentFromName, toSafeToken } from "../..
 import { applyRegeneratedSegmentToTimeline } from "../../../utils/v2v-segment-regen";
 import {
   V2V_EMOTIONS,
-  DEFAULT_EMOTION_TAG,
-  applyEmotionToText,
-  extractEmotionFromText,
 } from "../../../utils/v2v-emotions";
 
 export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
@@ -78,24 +75,38 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     ? folderNameFromTitle(activeVideo.output_name || `video_${activeVideo.index}`)
     : "";
 
-  // Detección de clip seleccionado en el Timeline para modo "Edición Individual"
-  const selectedClipId = selectedItems && selectedItems.length > 0 ? selectedItems[0] : null;
+  // Detección robusta de clip seleccionado en el Timeline para modo "Edición Individual"
+  const selectedClipItem = selectedItems?.find(
+    (it) => it.type === "clip" || (it as any).type === "audio-clip"
+  ) ?? selectedItems?.[0];
+  const selectedClipId = selectedClipItem
+    ? (typeof selectedClipItem === "string" ? selectedClipItem : selectedClipItem.id)
+    : null;
   const selectedClip = selectedClipId ? getClip(selectedClipId) : null;
   const selectedMediaItem = selectedClip ? getMediaItem(selectedClip.mediaId) : null;
 
+  const clipCandidateName = selectedMediaItem?.name || (selectedClip as any)?.name || (selectedClip as any)?.label || "";
+
   const parsedSelectedSegment = useMemo(() => {
-    if (!selectedMediaItem?.name) return null;
-    return parseV2VSegmentFromName(selectedMediaItem.name);
-  }, [selectedMediaItem?.name]);
+    if (!clipCandidateName) return null;
+    return parseV2VSegmentFromName(clipCandidateName);
+  }, [clipCandidateName]);
 
   const isEditingExistingSegment = Boolean(parsedSelectedSegment && selectedClip);
+
+  // Referencia al textarea para insertar emociones en la posición del cursor
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Estados del formulario
   const [text, setText] = useState("");
   const [selectedVoice, setSelectedVoice] = useState(defaultSpeaker || "mrbeast");
-  const [selectedEmotion, setSelectedEmotion] = useState<string>(DEFAULT_EMOTION_TAG);
   const [temperature, setTemperature] = useState(0.7);
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Estados para ajuste de velocidad sin regenerar TTS
+  const [speedMode, setSpeedMode] = useState<"x" | "s">("x");
+  const [speedInput, setSpeedInput] = useState<string>("1.000");
+  const [isApplyingSpeed, setIsApplyingSpeed] = useState<boolean>(false);
 
   // Estados de proceso y preescucha
   const [isProcessing, setIsProcessing] = useState(false);
@@ -108,25 +119,93 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
 
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Inserción de emoción en la posición de la barra de texto / cursor
+  const insertEmotionAtCursor = useCallback((tag: string) => {
+    if (!tag || tag === "none") return;
+    const formattedTag = tag.startsWith("[") ? tag : `[${tag}]`;
+    const el = textareaRef.current;
+    if (!el) {
+      setText((prev) => (prev ? `${prev} ${formattedTag}` : formattedTag));
+      return;
+    }
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    const current = text;
+    const inserted = current.substring(0, start) + `${formattedTag} ` + current.substring(end);
+    setText(inserted);
+    setTimeout(() => {
+      el.focus();
+      const pos = start + formattedTag.length + 1;
+      el.setSelectionRange(pos, pos);
+    }, 0);
+  }, [text]);
+
   // Sincronizar campos cuando cambia el clip seleccionado en la Timeline
   useEffect(() => {
-    if (parsedSelectedSegment && selectedClip && selectedMediaItem) {
-      // 1. Obtener texto del segmento existente
-      const folderRef = getFolderRef(activeFolder);
-      const segInfo = folderRef ? getSegmentByMediaId(activeFolder, selectedMediaItem.id) : null;
-      const rawText = segInfo?.editedText || segInfo?.originalText || "";
+    if (parsedSelectedSegment && selectedClip) {
+      let rawText = "";
 
-      if (rawText) {
-        const { emotionTag, cleanText } = extractEmotionFromText(rawText);
-        setText(cleanText);
-        setSelectedEmotion(emotionTag);
-      } else {
-        // Si no está en memoria del store, intentar rescatarlo
-        setText("");
-        setSelectedEmotion(DEFAULT_EMOTION_TAG);
+      // 1. Buscar en folderRefs
+      const folderRef = getFolderRef(activeFolder);
+      if (folderRef) {
+        if (selectedMediaItem?.id) {
+          const segInfo = getSegmentByMediaId(activeFolder, selectedMediaItem.id);
+          if (segInfo?.editedText || segInfo?.originalText) {
+            rawText = segInfo.editedText || segInfo.originalText || "";
+          }
+        }
+        if (!rawText && folderRef.segments) {
+          const segByNumber = Object.values(folderRef.segments).find(
+            (s: any) => s.segIdx === parsedSelectedSegment.segIdx
+          );
+          if (segByNumber?.editedText || segByNumber?.originalText) {
+            rawText = segByNumber.editedText || segByNumber.originalText || "";
+          }
+        }
       }
 
-      // 2. Obtener voz del segmento existente
+      // 2. Buscar en activeVideo.segments
+      if (!rawText && activeVideo && (activeVideo as any).segments) {
+        const vSeg = (activeVideo as any).segments.find(
+          (s: any) => s.seg === parsedSelectedSegment.segIdx
+        );
+        if (vSeg?.text) rawText = vSeg.text;
+      }
+
+      // 3. Buscar en todos los videos del store
+      if (!rawText && videos && videos.length > 0) {
+        for (const v of videos) {
+          const s = (v as any).segments?.find(
+            (seg: any) => seg.seg === parsedSelectedSegment.segIdx
+          );
+          if (s?.text) {
+            rawText = s.text;
+            break;
+          }
+        }
+      }
+
+      // 4. Buscar en useV2VStore.getState().segments
+      if (!rawText) {
+        const globalSegs = (useV2VStore.getState() as any).segments || [];
+        const s = globalSegs.find((seg: any) => seg.seg === parsedSelectedSegment.segIdx);
+        if (s?.text) rawText = s.text;
+      }
+
+      // 5. Fallback asíncrono desde el endpoint de segmentos si aún no está en memoria
+      if (!rawText && jobId) {
+        v2vApi.getSegmentsEditor(jobId, activeVideoIndex).then((res) => {
+          const row = res.segments?.find((r) => r.seg === parsedSelectedSegment.segIdx);
+          if (row) {
+            const t = row.tts_text || row.original_text || "";
+            if (t) setText(t);
+          }
+        }).catch(() => {});
+      }
+
+      setText(rawText);
+
+      // Obtener voz del segmento existente
       if (parsedSelectedSegment.speakerToken) {
         const matchingSpeaker = speakers.find(
           (s) =>
@@ -137,9 +216,26 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           setSelectedVoice(matchingSpeaker.value || matchingSpeaker.label);
         }
       }
+
+      // Inicializar control de velocidad con la duración actual del clip
+      setSpeedMode("x");
+      setSpeedInput("1.000");
       setCachedAudio(null);
     }
-  }, [parsedSelectedSegment, selectedClip, selectedMediaItem, activeFolder, getFolderRef, getSegmentByMediaId, speakers]);
+  }, [
+    parsedSelectedSegment?.segIdx,
+    parsedSelectedSegment?.speakerToken,
+    selectedClip?.id,
+    selectedMediaItem?.id,
+    activeFolder,
+    activeVideoIndex,
+    jobId,
+    speakers,
+    getFolderRef,
+    getSegmentByMediaId,
+    activeVideo,
+    videos,
+  ]);
 
   // Limpiar preview al desmontar
   useEffect(() => {
@@ -159,10 +255,10 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     );
   }, [speakers, selectedVoice]);
 
-  // Texto final con la emoción aplicada al principio
+  // El texto final es el editado directamente por el usuario (con emociones donde las ubicó)
   const computeFinalText = useCallback(() => {
-    return applyEmotionToText(text.trim(), selectedEmotion);
-  }, [text, selectedEmotion]);
+    return text.trim();
+  }, [text]);
 
   // Preescucha de audio
   const handlePreview = useCallback(async () => {
@@ -245,6 +341,75 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     selectedClip,
     playheadPosition,
     temperature,
+  ]);
+
+  // Acción: Ajustar solo velocidad al clip existente sin regenerar TTS
+  const handleApplySpeedOnly = useCallback(async () => {
+    if (!isEditingExistingSegment || !parsedSelectedSegment || !selectedClip || !selectedMediaItem) {
+      toast.error("Selección requerida", "Debes tener seleccionado un segmento del timeline.");
+      return;
+    }
+
+    setIsApplyingSpeed(true);
+    let effectiveSpeed = parseFloat(speedInput) || 1.0;
+    let targetDuration: number | undefined;
+    if (speedMode === "s" && effectiveSpeed > 0) {
+      targetDuration = effectiveSpeed;
+      effectiveSpeed = 1.0;
+    }
+
+    try {
+      const regenBlob = await v2vApi.applyAudioSpeed(
+        jobId,
+        activeVideoIndex,
+        parsedSelectedSegment.segIdx,
+        speedMode === "x" ? effectiveSpeed : null,
+        targetDuration,
+      );
+
+      const speedForStore = speedMode === "x" ? effectiveSpeed : 1.0;
+
+      const result = await applyRegeneratedSegmentToTimeline({
+        folder: activeFolder,
+        jobId,
+        videoIndex: activeVideoIndex,
+        segIdx: parsedSelectedSegment.segIdx,
+        regenBlob,
+        text: text.trim(),
+        speaker: selectedVoice,
+        speakerLabel,
+        previousSpeakerToken: parsedSelectedSegment.speakerToken,
+        start: selectedClip.startTime,
+        end: selectedClip.startTime + selectedClip.duration,
+        effectiveSpeed: speedForStore,
+        mediaId: selectedMediaItem.id,
+        clipId: selectedClip.id,
+        trackStart: selectedClip.startTime,
+      });
+
+      if (!result.success) {
+        throw new Error(result.message || "No se pudo actualizar el timeline");
+      }
+
+      toast.success("Velocidad aplicada", "Se ajustó el segmento sin regenerar voz.");
+    } catch (e: any) {
+      toast.error("Error al aplicar velocidad", e?.message || String(e));
+    } finally {
+      setIsApplyingSpeed(false);
+    }
+  }, [
+    isEditingExistingSegment,
+    parsedSelectedSegment,
+    selectedClip,
+    selectedMediaItem,
+    speedInput,
+    speedMode,
+    jobId,
+    activeVideoIndex,
+    activeFolder,
+    text,
+    selectedVoice,
+    speakerLabel,
   ]);
 
   // Ejecutar Acción Principal (Regenerar segmento existente O Generar nuevo N+1)
@@ -510,40 +675,59 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           </select>
         </div>
 
-        {/* Selector de Emoción (con excited por defecto) */}
+        {/* Selector de Emoción (inserta en el cursor) */}
         <div className="space-y-1">
           <label className="text-[10px] font-semibold text-fg-2 flex items-center justify-between">
-            <span>Emoción</span>
+            <span>Insertar Emoción</span>
             <span className="text-[9px] text-primary font-medium">S2.1</span>
           </label>
           <select
-            value={selectedEmotion}
-            onChange={(e) => setSelectedEmotion(e.target.value)}
-            className="w-full h-8 px-2 text-xs bg-bg-1 border border-border rounded-lg text-fg focus:outline-none focus:ring-1 focus:ring-primary truncate"
+            value=""
+            onChange={(e) => insertEmotionAtCursor(e.target.value)}
+            className="w-full h-8 px-2 text-xs bg-bg-1 border border-border rounded-lg text-fg focus:outline-none focus:ring-1 focus:ring-primary truncate cursor-pointer"
+            title="Selecciona una emoción para insertarla donde esté la barra de texto"
           >
-            {V2V_EMOTIONS.map((em) => (
+            <option value="" disabled>✨ Insertar emoción...</option>
+            {V2V_EMOTIONS.filter((em) => em.tag !== "none").map((em) => (
               <option key={em.tag} value={em.tag}>
-                {em.emoji} {em.label} {em.tag !== "none" ? `(${em.tag})` : ""}
+                {em.emoji} {em.label} ({em.tag})
               </option>
             ))}
           </select>
         </div>
       </div>
 
+      {/* Chips de emociones rápidas para insertar en la barra de texto */}
+      <div className="flex flex-wrap items-center gap-1">
+        {[
+          { tag: "[excited]", emoji: "🤩", label: "excited" },
+          { tag: "[happy]", emoji: "😊", label: "happy" },
+          { tag: "[in a hurry tone]", emoji: "⚡", label: "apurado" },
+          { tag: "[whispering]", emoji: "🤫", label: "whisper" },
+          { tag: "[emphasis]", emoji: "🗣️", label: "emphasis" },
+          { tag: "[laughing]", emoji: "😂", label: "laugh" },
+          { tag: "[break]", emoji: "⏸️", label: "break" },
+        ].map((e) => (
+          <button
+            key={e.tag}
+            type="button"
+            onClick={() => insertEmotionAtCursor(e.tag)}
+            className="text-[9px] px-1.5 py-0.5 rounded border border-border/60 bg-bg-1 hover:bg-primary/15 hover:text-primary hover:border-primary/40 text-fg-3 transition-colors flex items-center gap-1 cursor-pointer"
+            title={`Insertar ${e.tag} en la posición del cursor`}
+          >
+            <span>{e.emoji}</span>
+            <span>{e.label}</span>
+          </button>
+        ))}
+      </div>
+
       {/* Área de texto */}
       <div className="space-y-1">
-        <div className="flex items-center justify-between text-[10px]">
-          <label className="font-semibold text-fg-2">
-            Texto del segmento
-          </label>
-          {selectedEmotion && selectedEmotion !== "none" && (
-            <span className="font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded text-[9px] flex items-center gap-1">
-              <Sparkles size={10} />
-              Se antepondrá {selectedEmotion}
-            </span>
-          )}
-        </div>
+        <label className="text-[10px] font-semibold text-fg-2 block">
+          Texto del segmento
+        </label>
         <textarea
+          ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder={
@@ -555,6 +739,46 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           className="w-full text-xs p-2.5 rounded-lg bg-bg-1 border border-border text-fg placeholder:text-fg-4 focus:outline-none focus:ring-1 focus:ring-primary resize-none transition-colors"
         />
       </div>
+
+      {/* Control de velocidad (solo si es edición individual de segmento existente) */}
+      {isEditingExistingSegment && (
+        <div className="flex items-center gap-2 p-2 rounded-lg bg-bg-1 border border-border/70 text-xs">
+          <span className="text-[10px] text-fg-3 font-medium whitespace-nowrap">Ajuste de velocidad:</span>
+          <select
+            value={speedMode}
+            onChange={(e) => {
+              const isS = e.target.value === "s";
+              setSpeedMode(isS ? "s" : "x");
+              if (selectedClip) {
+                setSpeedInput(isS ? selectedClip.duration.toFixed(3) : "1.000");
+              }
+            }}
+            className="h-7 w-12 text-[10px] px-1 bg-bg-2 border border-border rounded text-fg focus:outline-none focus:ring-1 focus:ring-primary font-mono cursor-pointer"
+          >
+            <option value="x">×</option>
+            <option value="s">s</option>
+          </select>
+          <input
+            type="text"
+            className="w-18 h-7 text-[10px] px-2 rounded border border-border bg-bg-2 font-mono text-fg focus:outline-none focus:ring-1 focus:ring-primary"
+            placeholder={speedMode === "x" ? "1.000" : (selectedClip?.duration.toFixed(2) || "1.0")}
+            value={speedInput}
+            onChange={(e) => setSpeedInput(e.target.value)}
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="text-[9px] h-7 px-2.5 ml-auto shrink-0 bg-bg-3 hover:bg-bg-2 text-fg border border-border"
+            disabled={isProcessing || isApplyingSpeed}
+            onClick={handleApplySpeedOnly}
+            title="Aplica la velocidad sin volver a generar audio con la IA"
+          >
+            {isApplyingSpeed ? <Loader2 size={11} className="animate-spin mr-1" /> : null}
+            Solo velocidad
+          </Button>
+        </div>
+      )}
 
       {/* Indicador de posición en Timeline */}
       <div className="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-bg-3/50 text-[11px] text-fg-3 border border-border/40">

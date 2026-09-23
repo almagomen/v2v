@@ -15,6 +15,7 @@ import {
 } from "../../utils/v2v-utils";
 import { ColabExportTab } from "./ColabExportTab";
 import { V2VGenerateTTSSection } from "./v2v/V2VGenerateTTSSection";
+import { V2V_EMOTIONS, DEFAULT_EMOTION_TAG } from "../../utils/v2v-emotions";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -95,6 +96,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
   const [fishApiKey, setFishApiKey] = React.useState("");
   const [googleApiKey, setGoogleApiKey] = React.useState("");
+  const [initialEmotion, setInitialEmotion] = React.useState<string>(DEFAULT_EMOTION_TAG);
   const [showTokenSettings, setShowTokenSettings] = React.useState(false);
   const [isSavingTokens, setIsSavingTokens] = React.useState(false);
   const [showFishApiKey, setShowFishApiKey] = React.useState(false);
@@ -210,7 +212,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       const res = await v2vApi.processUrls(
         newUrls,
         translateLang === "None" ? null : translateLang,
-        speaker
+        speaker,
+        initialEmotion === "none" ? null : initialEmotion
       );
       setJobId(res.job_id);
       startPolling(res.job_id);
@@ -218,7 +221,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       setError(e instanceof Error ? e.message : "Error al iniciar");
       setIsProcessing(false);
     }
-  }, [urls, translateLang, speaker, urlItems, startPolling, setJobId, setError, setLog, setIsProcessing, setJobPhase]);
+  }, [urls, translateLang, speaker, initialEmotion, urlItems, startPolling, setJobId, setError, setLog, setIsProcessing, setJobPhase]);
 
   const handleVideoSelect = useCallback(
     async (idx: number) => {
@@ -429,11 +432,11 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           />
         </div>
 
-        <div className="flex gap-2">
-          <div className="flex-1">
+        <div className="grid grid-cols-3 gap-2">
+          <div>
             <label className="text-[10px] text-text-muted block mb-1">Idioma</label>
             <select
-              className="w-full px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
+              className="w-full px-2.5 py-2 text-xs bg-background-tertiary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary truncate"
               value={translateLang}
               onChange={(e) => setTranslateLang(e.target.value)}
               disabled={isProcessing}
@@ -445,10 +448,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
               ))}
             </select>
           </div>
-          <div className="flex-1">
+          <div>
             <label className="text-[10px] text-text-muted block mb-1">Voz</label>
             <select
-              className="w-full px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
+              className="w-full px-2.5 py-2 text-xs bg-background-tertiary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary truncate"
               value={speaker}
               onChange={(e) => setSpeaker(e.target.value)}
               disabled={isProcessing}
@@ -465,6 +468,25 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                   <option value="default_fish">default_fish</option>
                 </>
               )}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] text-text-muted block mb-1 flex items-center justify-between">
+              <span>Emoción</span>
+              <span className="text-[9px] text-primary">S2.1</span>
+            </label>
+            <select
+              className="w-full px-2 py-2 text-xs bg-background-tertiary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary truncate"
+              value={initialEmotion}
+              onChange={(e) => setInitialEmotion(e.target.value)}
+              disabled={isProcessing}
+              title="Emoción inicial que se antepondrá a los segmentos durante la generación"
+            >
+              {V2V_EMOTIONS.map((em) => (
+                <option key={em.tag} value={em.tag}>
+                  {em.emoji} {em.label} {em.tag !== "none" ? `(${em.tag})` : ""}
+                </option>
+              ))}
             </select>
           </div>
         </div>

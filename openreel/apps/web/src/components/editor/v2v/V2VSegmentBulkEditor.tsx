@@ -969,29 +969,29 @@ function SegmentDraftText({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showAllEmotions, setShowAllEmotions] = useState(false);
-  const { emotionTag } = extractEmotionFromText(row.draftText);
-
-  const handleEmotionChange = (newTag: string) => {
-    const updated = applyEmotionToText(row.draftText, newTag);
-    updateRow(row.seg, { draftText: updated });
-  };
 
   const insertTag = (tag: string) => {
+    if (!tag || tag === "none") return;
+    const formattedTag = tag.startsWith("[") ? tag : `[${tag}]`;
     const el = textareaRef.current;
     if (!el) {
-      updateRow(row.seg, { draftText: `${tag} ${row.draftText}`.trim() });
+      updateRow(row.seg, { draftText: `${row.draftText} ${formattedTag}`.trim() });
       return;
     }
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
     const text = row.draftText;
-    const inserted = text.substring(0, start) + `${tag} ` + text.substring(end);
+    const inserted = text.substring(0, start) + `${formattedTag} ` + text.substring(end);
     updateRow(row.seg, { draftText: inserted });
     setTimeout(() => {
       el.focus();
-      const pos = start + tag.length + 1;
+      const pos = start + formattedTag.length + 1;
       el.setSelectionRange(pos, pos);
     }, 0);
+  };
+
+  const handleEmotionChange = (newTag: string) => {
+    insertTag(newTag);
   };
 
   return (
@@ -1001,13 +1001,15 @@ function SegmentDraftText({
         <div className="flex items-center gap-1.5">
           <span className="text-[9px] text-text-muted font-medium">Emoción:</span>
           <select
-            value={emotionTag}
+            value=""
             onChange={(e) => handleEmotionChange(e.target.value)}
-            className="h-6 text-[10px] px-1.5 bg-background-tertiary border border-border rounded text-text-primary focus:outline-none focus:border-primary"
+            className="h-6 text-[10px] px-1.5 bg-background-tertiary border border-border rounded text-text-primary focus:outline-none focus:border-primary cursor-pointer max-w-[140px] truncate"
+            title="Selecciona una emoción para insertarla en la posición del cursor"
           >
-            {V2V_EMOTIONS.map((em) => (
+            <option value="" disabled>Insertar emoción...</option>
+            {V2V_EMOTIONS.filter((em) => em.tag !== "none").map((em) => (
               <option key={em.tag} value={em.tag}>
-                {em.emoji} {em.label} {em.tag !== "none" ? `(${em.tag})` : ""}
+                {em.emoji} {em.label} ({em.tag})
               </option>
             ))}
           </select>
