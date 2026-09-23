@@ -1038,11 +1038,7 @@ function SegmentDraftText({
             key={e.tag}
             type="button"
             onClick={() => insertTag(e.tag)}
-            className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-0.5 cursor-pointer ${
-              emotionTag === e.tag
-                ? "bg-primary/15 border-primary/40 text-primary font-medium"
-                : "bg-background-tertiary hover:bg-primary/20 hover:text-primary border-border/50 text-text-muted"
-            }`}
+            className="text-[9px] px-1.5 py-0.5 rounded border border-border/50 bg-background-tertiary hover:bg-primary/20 hover:text-primary transition-colors flex items-center gap-0.5 cursor-pointer text-text-muted"
             title={`Insertar ${e.tag} en posición del cursor`}
           >
             <span>{e.emoji}</span>

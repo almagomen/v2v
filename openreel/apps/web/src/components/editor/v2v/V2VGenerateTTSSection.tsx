@@ -793,42 +793,55 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         </span>
       </div>
 
-      {/* Panel colapsable de ajuste único: Temperatura */}
-      <div className="border-t border-border/50 pt-2">
+      {/* Fila: Ajustes avanzados + Botón Editor en Lote */}
+      <div className="border-t border-border/50 pt-2 flex items-center justify-between gap-2">
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="w-full flex items-center justify-between text-[11px] text-fg-3 hover:text-fg py-0.5 transition-colors"
+          className="flex items-center gap-1.5 text-[11px] text-fg-3 hover:text-fg py-1 transition-colors cursor-pointer"
         >
-          <span className="flex items-center gap-1.5 font-medium">
-            <SlidersHorizontal size={12} />
-            Ajustes avanzados (Expresividad: {temperature.toFixed(2)})
-          </span>
+          <SlidersHorizontal size={12} />
+          <span className="font-medium">Ajustes avanzados</span>
           {showAdvanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
 
-        {showAdvanced && (
-          <div className="pt-2 pb-1 space-y-1.5 animate-in fade-in duration-150">
-            <div className="flex justify-between text-[10px] text-fg-3">
-              <span>Expresividad / Temperatura</span>
-              <span className="font-mono text-fg font-semibold">{temperature.toFixed(2)}</span>
-            </div>
-            <input
-              type="range"
-              min="0.1"
-              max="1.0"
-              step="0.05"
-              value={temperature}
-              onChange={(e) => setTemperature(parseFloat(e.target.value))}
-              className="w-full accent-primary h-1 bg-border rounded-lg cursor-pointer"
-            />
-            <div className="flex justify-between text-[8px] text-fg-4">
-              <span>Más consistente (0.1)</span>
-              <span>Más variado / expresivo (1.0)</span>
-            </div>
-          </div>
-        )}
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="text-[10px] h-7 px-2.5 gap-1.5 text-fg-2 hover:text-fg bg-bg-3/80 hover:bg-bg-3 border border-border/60 cursor-pointer"
+          onClick={() => {
+            setBulkEditorOpen(true);
+            setIsV2VOpen(false);
+          }}
+          title="Abrir la ventana de edición masiva de todos los segmentos del video"
+        >
+          <ListChecks size={13} className="text-primary" />
+          <span>Editor en Lote</span>
+        </Button>
       </div>
+
+      {showAdvanced && (
+        <div className="pb-1 space-y-1.5 animate-in fade-in duration-150">
+          <div className="flex justify-between text-[10px] text-fg-3">
+            <span>Expresividad / Temperatura</span>
+            <span className="font-mono text-fg font-semibold">{temperature.toFixed(2)}</span>
+          </div>
+          <input
+            type="range"
+            min="0.1"
+            max="1.0"
+            step="0.05"
+            value={temperature}
+            onChange={(e) => setTemperature(parseFloat(e.target.value))}
+            className="w-full accent-primary h-1 bg-border rounded-lg cursor-pointer"
+          />
+          <div className="flex justify-between text-[8px] text-fg-4">
+            <span>Más consistente (0.1)</span>
+            <span>Más variado / expresivo (1.0)</span>
+          </div>
+        </div>
+      )}
 
       {/* Botones de acción */}
       <div className="flex items-center gap-2 pt-1">
@@ -874,23 +887,6 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
               ? `Regenerar #${parsedSelectedSegment?.segIdx}`
               : "Insertar al Timeline"}
           </span>
-        </Button>
-      </div>
-
-      {/* Botón integrado para abrir el Editor Masivo (Bulk) */}
-      <div className="pt-1.5 border-t border-border/40">
-        <Button
-          type="button"
-          variant="secondary"
-          className="w-full text-xs h-8 gap-1.5 text-fg-2 hover:text-fg bg-bg-3/80 hover:bg-bg-3 border border-border/60"
-          onClick={() => {
-            setBulkEditorOpen(true);
-            setIsV2VOpen(false);
-          }}
-          title="Abrir la ventana de edición masiva de todos los segmentos del video"
-        >
-          <ListChecks size={14} className="text-primary" />
-          <span>Abrir Editor en Lote (Todos los segmentos)...</span>
         </Button>
       </div>
     </div>

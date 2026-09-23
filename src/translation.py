@@ -110,7 +110,7 @@ Requisitos:
 
 IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones adicionales.
 """
-    selected_model = model_name or "gemini-flash-lite-latest"
+    selected_model = model_name or "gemini-3.1-flash-lite"
     contents = types.Content(
         parts=[
             types.Part(file_data=types.FileData(file_uri=youtube_url)),
@@ -122,13 +122,13 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
         response = client.models.generate_content(model=selected_model, contents=contents)
         return response.text.strip() if response.text else None
     except Exception as e:
-        if not model_name and selected_model != "gemini-flash-lite-latest":
-            print(f"⚠️ Error con {selected_model}, intentando fallback a gemini-flash-lite-latest: {e}")
+        if not model_name and selected_model != "gemini-3.1-flash-lite":
+            print(f"⚠️ Error con {selected_model}, intentando fallback a gemini-3.1-flash-lite: {e}")
             try:
-                response = client.models.generate_content(model="gemini-flash-lite-latest", contents=contents)
+                response = client.models.generate_content(model="gemini-3.1-flash-lite", contents=contents)
                 return response.text.strip() if response.text else None
             except Exception as e2:
-                print(f"❌ Fallback a gemini-flash-lite-latest fallido: {e2}")
+                print(f"❌ Fallback a gemini-3.1-flash-lite fallido: {e2}")
                 raise e2
         else:
             raise e
