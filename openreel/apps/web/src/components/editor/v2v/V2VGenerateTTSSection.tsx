@@ -28,6 +28,7 @@ import {
   V2V_EMOTIONS,
   EMOTION_CATEGORIES,
   getEmotionsByCategory,
+  formatEmotionLabel,
 } from "../../../utils/v2v-emotions";
 
 export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
@@ -694,37 +695,13 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
               <optgroup key={cat.name} label={`${cat.emoji} ${cat.label}`}>
                 {getEmotionsByCategory(cat.name).map((em) => (
                   <option key={em.tag} value={em.tag}>
-                    {em.emoji} {em.label}{em.description ? ` · ${em.description}` : ""} ({em.tag})
+                    {formatEmotionLabel(em)}
                   </option>
                 ))}
               </optgroup>
             ))}
           </select>
         </div>
-      </div>
-
-      {/* Chips de emociones rápidas para insertar en la barra de texto */}
-      <div className="flex flex-wrap items-center gap-1">
-        {[
-          { tag: "[excited]", emoji: "🤩", label: "excited" },
-          { tag: "[happy]", emoji: "😊", label: "happy" },
-          { tag: "[in a hurry tone]", emoji: "⚡", label: "apurado" },
-          { tag: "[whispering]", emoji: "🤫", label: "whisper" },
-          { tag: "[emphasis]", emoji: "🗣️", label: "emphasis" },
-          { tag: "[laughing]", emoji: "😂", label: "laugh" },
-          { tag: "[break]", emoji: "⏸️", label: "break" },
-        ].map((e) => (
-          <button
-            key={e.tag}
-            type="button"
-            onClick={() => insertEmotionAtCursor(e.tag)}
-            className="text-[9px] px-1.5 py-0.5 rounded border border-border/60 bg-bg-1 hover:bg-primary/15 hover:text-primary hover:border-primary/40 text-fg-3 transition-colors flex items-center gap-1 cursor-pointer"
-            title={`Insertar ${e.tag} en la posición del cursor`}
-          >
-            <span>{e.emoji}</span>
-            <span>{e.label}</span>
-          </button>
-        ))}
       </div>
 
       {/* Área de texto */}

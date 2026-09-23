@@ -20,6 +20,7 @@ import {
   DEFAULT_EMOTION_TAG,
   EMOTION_CATEGORIES,
   getEmotionsByCategory,
+  formatEmotionLabel,
 } from "../../utils/v2v-emotions";
 
 const TRANSLATE_OPTIONS = [
@@ -492,7 +493,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 <optgroup key={cat.name} label={`${cat.emoji} ${cat.label}`}>
                   {getEmotionsByCategory(cat.name).map((em) => (
                     <option key={em.tag} value={em.tag}>
-                      {em.emoji} {em.label}{em.description ? ` · ${em.description}` : ""} ({em.tag})
+                      {formatEmotionLabel(em)}
                     </option>
                   ))}
                 </optgroup>
@@ -634,7 +635,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         {log && (
           <div className="space-y-1">
             <p className="text-[10px] text-text-muted">Logs</p>
-            <pre className="p-2 rounded-lg bg-background-tertiary font-mono text-[10px] max-h-40 overflow-y-auto overflow-x-auto whitespace-pre">
+            <pre className="p-2.5 rounded-lg bg-background-tertiary font-mono text-[10px] min-h-[90px] max-h-[420px] overflow-auto resize-y whitespace-pre border border-border/50 select-text">
               {(() => {
                 let out = log || "";
 

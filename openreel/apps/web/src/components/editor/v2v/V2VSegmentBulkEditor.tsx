@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
+  Clock,
   Loader2,
   ListChecks,
   RefreshCw,
@@ -32,6 +33,7 @@ import {
   DEFAULT_EMOTION_TAG,
   EMOTION_CATEGORIES,
   getEmotionsByCategory,
+  formatEmotionLabel,
   applyEmotionToText,
   extractEmotionFromText,
 } from "../../../utils/v2v-emotions";
@@ -696,13 +698,13 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           <select
             value={bulkEmotion}
             onChange={(e) => setBulkEmotion(e.target.value)}
-            className="h-6 text-[10px] bg-transparent border-0 focus:outline-none text-text-primary pr-1 max-w-[170px] truncate cursor-pointer font-medium"
+            className="h-6 text-[10px] bg-transparent border-0 focus:outline-none text-text-primary pr-1 max-w-[200px] truncate cursor-pointer font-medium"
           >
             {EMOTION_CATEGORIES.map((cat) => (
               <optgroup key={cat.name} label={`${cat.emoji} ${cat.label}`}>
                 {getEmotionsByCategory(cat.name).map((em) => (
                   <option key={em.tag} value={em.tag}>
-                    {em.emoji} {em.label}{em.description ? ` · ${em.description}` : ""} ({em.tag})
+                    {formatEmotionLabel(em)}
                   </option>
                 ))}
               </optgroup>
@@ -836,18 +838,37 @@ function SegmentRow({
           type="checkbox"
           checked={row.selected}
           onChange={(e) => updateRow(row.seg, { selected: e.target.checked })}
-          className="rounded border-border"
+          className="rounded border-border cursor-pointer"
+          title="Seleccionar segmento para acciones en lote"
         />
-        <span className="text-[10px] font-mono font-semibold text-text-primary">#{row.seg}</span>
-        <span className="text-[10px] text-text-muted">
-          {row.start.toFixed(2)}–{row.end.toFixed(2)}s · slot {row.slotDuration.toFixed(2)}s
+        <span
+          className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/25 font-mono"
+          title={`Segmento consecutivo #${row.seg}`}
+        >
+          Seg #{row.seg}
         </span>
         <span
-          className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
-            ratio > 1.15 ? "bg-amber-500/20 text-amber-400" : "bg-background-tertiary text-text-muted"
-          }`}
+          className="text-[10px] text-text-muted flex items-center gap-1 font-mono bg-background-tertiary px-1.5 py-0.5 rounded border border-border/40"
+          title="Intervalo de tiempo en el video original (inicio - fin)"
         >
-          ×{ratio.toFixed(2)}
+          <Clock size={11} className="text-text-muted shrink-0" />
+          <span>{row.start.toFixed(2)}s – {row.end.toFixed(2)}s</span>
+        </span>
+        <span
+          className="text-[10px] text-text-muted font-medium bg-background-tertiary px-1.5 py-0.5 rounded border border-border/40"
+          title="Duración del hueco disponible para hablar sin invadir el siguiente diálogo"
+        >
+          Hueco: <span className="font-mono text-text-primary font-semibold">{row.slotDuration.toFixed(2)}s</span>
+        </span>
+        <span
+          className={`text-[9px] px-1.5 py-0.5 rounded font-mono border transition-colors ${
+            ratio > 1.15
+              ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
+              : "bg-background-tertiary text-text-muted border-border/40"
+          }`}
+          title={`Longitud relativa del texto traducido vs original (${Math.round((ratio - 1) * 100)}% ${ratio >= 1 ? "más largo" : "más corto"}). Si supera 1.15x podría requerir acelerar la locución.`}
+        >
+          Texto: ×{ratio.toFixed(2)} {ratio > 1.15 ? "(largo)" : ""}
         </span>
         {row.missingAudio && (
           <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-medium">
@@ -973,7 +994,7 @@ function SegmentDraftText({
           <select
             value=""
             onChange={(e) => handleEmotionChange(e.target.value)}
-            className="h-6 text-[10px] px-1.5 bg-background-tertiary border border-border rounded text-text-primary focus:outline-none focus:border-primary cursor-pointer max-w-[190px] truncate font-medium"
+            className="h-6 text-[10px] px-1.5 bg-background-tertiary border border-border rounded text-text-primary focus:outline-none focus:border-primary cursor-pointer max-w-[210px] truncate font-medium"
             title="Selecciona una emoción para insertarla en la posición del cursor"
           >
             <option value="" disabled>✨ Insertar emoción...</option>
@@ -981,37 +1002,13 @@ function SegmentDraftText({
               <optgroup key={cat.name} label={`${cat.emoji} ${cat.label}`}>
                 {getEmotionsByCategory(cat.name).map((em) => (
                   <option key={em.tag} value={em.tag}>
-                    {em.emoji} {em.label}{em.description ? ` · ${em.description}` : ""} ({em.tag})
+                    {formatEmotionLabel(em)}
                   </option>
                 ))}
               </optgroup>
             ))}
           </select>
         </div>
-      </div>
-
-      {/* Chips de emociones rápidas */}
-      <div className="flex flex-wrap items-center gap-1 py-0.5">
-        {[
-          { tag: "[excited]", emoji: "🤩", label: "excited" },
-          { tag: "[happy]", emoji: "😊", label: "happy" },
-          { tag: "[in a hurry tone]", emoji: "⚡", label: "apurado" },
-          { tag: "[whispering]", emoji: "🤫", label: "whisper" },
-          { tag: "[emphasis]", emoji: "🗣️", label: "emphasis" },
-          { tag: "[laughing]", emoji: "😂", label: "laugh" },
-          { tag: "[break]", emoji: "⏸️", label: "break" },
-        ].map((e) => (
-          <button
-            key={e.tag}
-            type="button"
-            onClick={() => insertTag(e.tag)}
-            className="text-[9px] px-1.5 py-0.5 rounded border border-border/50 bg-background-tertiary hover:bg-primary/20 hover:text-primary transition-colors flex items-center gap-0.5 cursor-pointer text-text-muted"
-            title={`Insertar ${e.tag} en posición del cursor`}
-          >
-            <span>{e.emoji}</span>
-            <span>{e.label}</span>
-          </button>
-        ))}
       </div>
 
       <textarea
