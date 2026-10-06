@@ -179,7 +179,47 @@ def get_fish_api_key() -> str | None:
     except Exception:
         pass
 
+def get_hf_token() -> str | None:
+    """Retorna el token de Hugging Face desde env, Colab userdata o Kaggle secrets."""
+    # 1. Variables de entorno
+    for env_var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
+        val = os.getenv(env_var)
+        if val:
+            return val
+
+    # 2. Colab Secrets (userdata)
+    try:
+        from google.colab import userdata
+        for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
+            try:
+                val = userdata.get(key)
+                if val:
+                    os.environ["HF_TOKEN"] = str(val)
+                    os.environ["HUGGING_FACE_HUB_TOKEN"] = str(val)
+                    return str(val)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 3. Kaggle Secrets (UserSecretsClient)
+    try:
+        from kaggle_secrets import UserSecretsClient
+        user_secrets = UserSecretsClient()
+        for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
+            try:
+                val = user_secrets.get_secret(key)
+                if val:
+                    os.environ["HF_TOKEN"] = str(val)
+                    os.environ["HUGGING_FACE_HUB_TOKEN"] = str(val)
+                    return str(val)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     return None
 
 
 def get_drive_mount() -> bool: return _google_drive and is_colab()
+

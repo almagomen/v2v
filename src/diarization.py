@@ -15,7 +15,7 @@ except ImportError:
     Pipeline = None
     Segment = None
 
-from src.config import DEVICE, DRIVE_DIR, KAGGLE_INPUT_DIR
+from src.config import DEVICE, DRIVE_DIR, KAGGLE_INPUT_DIR, get_hf_token
 from src.models import get_or_load_model
 
 DIARIZATION_DIR = DRIVE_DIR / "speaker-diarization-community-1" if DRIVE_DIR else None
@@ -36,7 +36,21 @@ def _load_diarization_model() -> Any:
         if DIARIZATION_DIR and DIARIZATION_DIR.exists()
         else "pyannote/speaker-diarization-3.1"
     )
-    model = Pipeline.from_pretrained(pretrained)
+    token = get_hf_token()
+    load_kwargs = {}
+    if token and not (DIARIZATION_DIR and DIARIZATION_DIR.exists()):
+        load_kwargs["token"] = token
+
+    try:
+        model = Pipeline.from_pretrained(pretrained, **load_kwargs)
+    except TypeError:
+        # Retrocompatibilidad con versiones de pyannote.audio que usan use_auth_token
+        if "token" in load_kwargs:
+            load_kwargs["use_auth_token"] = load_kwargs.pop("token")
+            model = Pipeline.from_pretrained(pretrained, **load_kwargs)
+        else:
+            raise
+
     model.to(torch.device(DEVICE))
     return model
 
