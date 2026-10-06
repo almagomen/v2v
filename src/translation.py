@@ -31,16 +31,38 @@ POPULAR_GEMINI_MODELS = [
 ]
 
 
-def get_default_gemini_model() -> str:
-    """Retorna el modelo configurado por defecto para títulos."""
+def get_default_title_model() -> str:
+    """Retorna el modelo configurado por defecto para títulos virales."""
     return DEFAULT_TITLE_MODEL
 
 
-def set_default_gemini_model(model_name: str) -> None:
-    """Permite cambiar el modelo por defecto para títulos en caliente."""
+def set_default_title_model(model_name: str) -> None:
+    """Permite cambiar el modelo por defecto para títulos virales en caliente."""
     global DEFAULT_TITLE_MODEL
     if model_name and isinstance(model_name, str):
         DEFAULT_TITLE_MODEL = model_name.strip()
+
+
+def get_default_translation_model() -> str:
+    """Retorna el modelo configurado por defecto para traducción."""
+    return DEFAULT_TRANSLATION_MODEL
+
+
+def set_default_translation_model(model_name: str) -> None:
+    """Permite cambiar el modelo por defecto para traducción en caliente."""
+    global DEFAULT_TRANSLATION_MODEL
+    if model_name and isinstance(model_name, str):
+        DEFAULT_TRANSLATION_MODEL = model_name.strip()
+
+
+def get_default_gemini_model() -> str:
+    """Retorna el modelo configurado por defecto para títulos (compatibilidad)."""
+    return get_default_title_model()
+
+
+def set_default_gemini_model(model_name: str) -> None:
+    """Permite cambiar el modelo por defecto para títulos en caliente (compatibilidad)."""
+    set_default_title_model(model_name)
 
 
 

@@ -208,6 +208,15 @@ export interface GeminiModelsResponse {
   models: string[];
 }
 
+export interface TokenSettingsResponse {
+  fish_api_key?: string;
+  google_api_key?: string;
+  title_model?: string;
+  translation_model?: string;
+  available_models?: string[];
+  message?: string;
+}
+
 export interface RegenerateTitlePayload {
   job_id?: string;
   video_index?: number;
@@ -646,27 +655,31 @@ export const v2vApi = {
     return await readJsonOrThrow<{ status: string; message: string }>(res);
   },
 
-  async getTokens(): Promise<{ fish_api_key?: string; google_api_key?: string }> {
+  async getTokens(): Promise<TokenSettingsResponse> {
     const res = await fetch(url("/api/settings/tokens"));
-    if (!res.ok) throw new Error("Error al obtener la configuración de tokens");
-    return readJsonOrThrow<{ fish_api_key?: string; google_api_key?: string }>(res);
+    if (!res.ok) throw new Error("Error al obtener la configuración de tokens y modelos");
+    return readJsonOrThrow<TokenSettingsResponse>(res);
   },
 
   async saveTokens(
     fishApiKey?: string,
-    googleApiKey?: string
-  ): Promise<{ fish_api_key?: string; google_api_key?: string; message: string }> {
+    googleApiKey?: string,
+    titleModel?: string,
+    translationModel?: string
+  ): Promise<TokenSettingsResponse> {
     const res = await fetch(url("/api/settings/tokens"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         fish_api_key: fishApiKey || null,
         google_api_key: googleApiKey || null,
+        title_model: titleModel || null,
+        translation_model: translationModel || null,
       }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al actualizar la configuración de tokens");
+      throw new Error(err.detail || "Error al actualizar la configuración de tokens y modelos");
     }
     return readJsonOrThrow(res);
   },

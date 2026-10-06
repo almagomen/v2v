@@ -171,9 +171,17 @@ def reconcile_jobs():
 @router.get("/settings/tokens", response_model=TokenSettingsResponse)
 def get_tokens():
     from src.config import get_google_api_key, get_fish_api_key
+    from src.translation import (
+        get_default_title_model,
+        get_default_translation_model,
+        POPULAR_GEMINI_MODELS,
+    )
     return TokenSettingsResponse(
         fish_api_key=get_fish_api_key() or "",
         google_api_key=get_google_api_key() or "",
+        title_model=get_default_title_model(),
+        translation_model=get_default_translation_model(),
+        available_models=POPULAR_GEMINI_MODELS,
     )
 
 
@@ -181,6 +189,13 @@ def get_tokens():
 def post_tokens(req: TokenSettingsRequest):
     import os
     from pathlib import Path
+    from src.translation import (
+        set_default_title_model,
+        set_default_translation_model,
+        get_default_title_model,
+        get_default_translation_model,
+        POPULAR_GEMINI_MODELS,
+    )
 
     fish_api_val = (req.fish_api_key or "").strip()
     if fish_api_val:
@@ -191,6 +206,14 @@ def post_tokens(req: TokenSettingsRequest):
         google_api_val = req.google_api_key.strip()
         os.environ["GOOGLE_API_KEY"] = google_api_val
 
+    if req.title_model and req.title_model.strip():
+        set_default_title_model(req.title_model.strip())
+        os.environ["DEFAULT_TITLE_MODEL"] = req.title_model.strip()
+
+    if req.translation_model and req.translation_model.strip():
+        set_default_translation_model(req.translation_model.strip())
+        os.environ["DEFAULT_TRANSLATION_MODEL"] = req.translation_model.strip()
+
     # Intentar guardar persistente en .env
     env_path = Path(__file__).resolve().parent.parent.parent / ".env"
     try:
@@ -198,6 +221,8 @@ def post_tokens(req: TokenSettingsRequest):
         exists = env_path.exists()
         google_found = False
         fish_found = False
+        title_found = False
+        trans_found = False
 
         if exists:
             with open(env_path, "r", encoding="utf-8") as f:
@@ -212,11 +237,23 @@ def post_tokens(req: TokenSettingsRequest):
                     if google_api_val:
                         lines[i] = f"GOOGLE_API_KEY={google_api_val}\n"
                     google_found = True
+                elif line.strip().startswith("DEFAULT_TITLE_MODEL="):
+                    if req.title_model:
+                        lines[i] = f"DEFAULT_TITLE_MODEL={req.title_model.strip()}\n"
+                    title_found = True
+                elif line.strip().startswith("DEFAULT_TRANSLATION_MODEL="):
+                    if req.translation_model:
+                        lines[i] = f"DEFAULT_TRANSLATION_MODEL={req.translation_model.strip()}\n"
+                    trans_found = True
 
         if not fish_found and fish_api_val:
             lines.append(f"FISH_API_KEY={fish_api_val}\n")
         if not google_found and google_api_val:
             lines.append(f"GOOGLE_API_KEY={google_api_val}\n")
+        if not title_found and req.title_model:
+            lines.append(f"DEFAULT_TITLE_MODEL={req.title_model.strip()}\n")
+        if not trans_found and req.translation_model:
+            lines.append(f"DEFAULT_TRANSLATION_MODEL={req.translation_model.strip()}\n")
 
         with open(env_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
@@ -226,5 +263,8 @@ def post_tokens(req: TokenSettingsRequest):
     return TokenSettingsResponse(
         fish_api_key=fish_api_val or None,
         google_api_key=google_api_val or None,
-        message="Configuración de tokens actualizada en caliente",
+        title_model=get_default_title_model(),
+        translation_model=get_default_translation_model(),
+        available_models=POPULAR_GEMINI_MODELS,
+        message="Configuración de tokens y modelos actualizada en caliente",
     )

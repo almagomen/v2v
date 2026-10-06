@@ -191,11 +191,16 @@ class RetranslateSegmentsResponse(BaseModel):
 class TokenSettingsRequest(BaseModel):
     fish_api_key: Optional[str] = Field(None, description="Nuevo valor para FISH_API_KEY")
     google_api_key: Optional[str] = Field(None, description="Nuevo valor para GOOGLE_API_KEY")
+    title_model: Optional[str] = Field(None, description="Modelo de Gemini por defecto para títulos virales")
+    translation_model: Optional[str] = Field(None, description="Modelo de Gemini por defecto para traducción")
 
 
 class TokenSettingsResponse(BaseModel):
     fish_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
+    title_model: Optional[str] = None
+    translation_model: Optional[str] = None
+    available_models: list[str] = Field(default_factory=list)
     message: str = "Configuración actualizada exitosamente"
 
 
