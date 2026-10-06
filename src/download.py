@@ -7,7 +7,15 @@ import io
 import contextlib
 from pathlib import Path
 
-from src.config import BASE_DIR, QUEUE_DIR, DRIVE_DIR, KAGGLE_INPUT_DIR, DEVICE_SECONDARY, google_drive
+from src.config import (
+    BASE_DIR,
+    QUEUE_DIR,
+    DRIVE_DIR,
+    KAGGLE_INPUT_DIR,
+    DEVICE_SECONDARY,
+    google_drive,
+    get_hf_token,
+)
 from src.models import get_or_load_model
 from src.assets import update_assets
 
@@ -67,14 +75,41 @@ def _load_bs_roformer():
             break
 
     if not roformer_path:
-        raise FileNotFoundError(
-            "No se encontró el modelo BS-RoFormer. "
-            "Asegúrate de colocar 'bs_roformer_revive3e.ckpt' y 'config.yaml' en "
-            f"{ROFORMER_DIR or (BASE_DIR / 'bs-roformer-revive3e')}."
-        )
+        dest_dir = ROFORMER_DIR or (BASE_DIR / "models" / "bs-roformer-revive3e")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        print(f"📥 Descargando modelo BS-RoFormer (Revive3e) desde Hugging Face hacia {dest_dir}...")
+        try:
+            from huggingface_hub import hf_hub_download
+            token = get_hf_token()
+            for fname in ("config.yaml", "bs_roformer_revive3e.ckpt"):
+                hf_hub_download(
+                    repo_id="pcunwa/BS-Roformer-Revive",
+                    filename=fname,
+                    local_dir=str(dest_dir),
+                    token=token,
+                )
+            roformer_path = dest_dir
+            print("✅ Modelo BS-RoFormer descargado correctamente.")
+        except Exception as e:
+            raise FileNotFoundError(
+                f"No se encontró el modelo BS-RoFormer y falló la auto-descarga desde Hugging Face: {e}. "
+                f"Asegúrate de colocar 'bs_roformer_revive3e.ckpt' y 'config.yaml' en {dest_dir}."
+            ) from e
 
     model_path = roformer_path / "bs_roformer_revive3e.ckpt"
     config_path = roformer_path / "config.yaml"
+
+    if not config_path.exists():
+        try:
+            from huggingface_hub import hf_hub_download
+            hf_hub_download(
+                repo_id="pcunwa/BS-Roformer-Revive",
+                filename="config.yaml",
+                local_dir=str(roformer_path),
+                token=get_hf_token(),
+            )
+        except Exception:
+            pass
 
     if not config_path.exists():
         raise FileNotFoundError(
