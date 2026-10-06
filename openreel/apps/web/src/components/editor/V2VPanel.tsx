@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings, Eye, EyeOff, ChevronDown, Terminal } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings, Eye, EyeOff, ChevronDown, Terminal, Copy, Check } from "lucide-react";
 import {
   ScrollArea,
   Button,
@@ -108,6 +108,15 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [showFishApiKey, setShowFishApiKey] = React.useState(false);
   const [showGoogleApiKey, setShowGoogleApiKey] = React.useState(false);
   const [isLogsOpen, setIsLogsOpen] = React.useState(false);
+  const [titleDisplayModes, setTitleDisplayModes] = React.useState<Record<string, number>>({});
+  const [copiedUrlKey, setCopiedUrlKey] = React.useState<string | null>(null);
+
+  const cycleTitleMode = (itemKey: string) => {
+    setTitleDisplayModes((prev) => {
+      const current = prev[itemKey] || 0;
+      return { ...prev, [itemKey]: (current + 1) % 3 };
+    });
+  };
 
   useEffect(() => {
     // Cargar tokens al montar
@@ -595,38 +604,113 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {urlItems.map((it: any, i: number) => (
-                    <tr key={it.url} className="border-t border-border">
-                      <td className="px-2 py-1 tabular-nums">{i + 1}</td>
-                      <td className="px-2 py-1 max-w-[220px] truncate" title={it.url}>
-                        {it.output_name?.replace(/^\d+\.\s*/, "") || it.url}
-                        {typeof it.index === "number" &&
-                          importStatusByKey[importKeyFor(it.url, it.index)] === "done" && (
-                            <span className="ml-1 text-primary">(importado)</span>
-                          )}
-                      </td>
-                      <td className="px-2 py-1">
-                        <span
-                          className={`inline-flex items-center px-1.5 py-0.5 rounded ${statusToBadgeClass(it.status)}`}
+                  {urlItems.map((it: any, i: number) => {
+                    const itemKey = `${it.url}_${it.index ?? i}`;
+                    const importKey = typeof it.index === "number" ? importKeyFor(it.url, it.index) : null;
+                    const isImported = importKey ? importStatusByKey[importKey] === "done" : false;
+                    const isImporting = importKey ? importStatusByKey[importKey] === "in_progress" : false;
+
+                    const currentMode = titleDisplayModes[itemKey] || 0; // 0: Viral, 1: Original, 2: Link
+                    const viralTitle = it.output_name?.replace(/^\d+\.\s*/, "") || it.original_title || it.url;
+                    const origTitle = it.original_title || it.output_name?.replace(/^\d+\.\s*/, "") || it.url;
+                    const linkUrl = it.url;
+
+                    let currentTitle = viralTitle;
+                    let modeBadge = "Viral";
+                    if (currentMode === 1) {
+                      currentTitle = origTitle;
+                      modeBadge = "Original";
+                    } else if (currentMode === 2) {
+                      currentTitle = linkUrl;
+                      modeBadge = "Link";
+                    }
+
+                    // Estado del badge:
+                    // Si backend dice "done", solo es "Completado" si ya se importó al timeline
+                    let displayBadgeText = STATUS_LABEL[it.status] || it.status;
+                    let displayBadgeClass = statusToBadgeClass(it.status);
+
+                    if (it.status === "done") {
+                      if (isImported) {
+                        displayBadgeText = "Completado";
+                        displayBadgeClass = "bg-primary/15 text-primary border border-primary/30";
+                      } else if (isImporting) {
+                        displayBadgeText = "Importando...";
+                        displayBadgeClass = "bg-blue-500/15 text-blue-400 border border-blue-500/30 animate-pulse";
+                      } else {
+                        displayBadgeText = "Listo (en cola)";
+                        displayBadgeClass = "bg-purple-500/10 text-purple-400 border border-purple-500/20";
+                      }
+                    }
+
+                    return (
+                      <tr key={itemKey} className="border-t border-border">
+                        <td className="px-2 py-1 tabular-nums">{i + 1}</td>
+                        <td
+                          className="px-2 py-1 max-w-[220px] cursor-pointer group select-none"
+                          title={currentTitle}
+                          onClick={() => cycleTitleMode(itemKey)}
                         >
-                          {STATUS_LABEL[it.status] || it.status}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1 text-center">
-                        <button
-                          className="text-text-muted hover:text-red-500 transition-colors p-1"
-                          title="Borrar carpeta y permitir re-intento"
-                          disabled={isProcessing}
-                          onClick={() => {
-                            const folder = folderNameFromTitle(it.output_name || it.url);
-                            handleDeleteFolder(folder, it.url);
-                          }}
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span
+                              className="text-[8px] font-mono uppercase px-1 py-0.5 rounded border border-border bg-background-tertiary/70 text-text-muted group-hover:border-primary/40 group-hover:text-primary shrink-0 transition-colors"
+                              title={`Modo: ${modeBadge}. Clic para alternar (Viral -> Original -> Link)`}
+                            >
+                              {modeBadge}
+                            </span>
+                            <span className="truncate group-hover:text-primary transition-colors text-[11px]">
+                              {currentTitle}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-2 py-1">
+                          <span
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded ${displayBadgeClass}`}
+                          >
+                            {displayBadgeText}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              className="text-text-muted hover:text-text-primary transition-colors p-1 rounded hover:bg-background-tertiary"
+                              title={`Copiar ${modeBadge.toLowerCase()} al portapapeles`}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  await navigator.clipboard.writeText(currentTitle);
+                                  setCopiedUrlKey(itemKey);
+                                  toast.success("Copiado", `Se copió el ${modeBadge.toLowerCase()} al portapapeles.`);
+                                  setTimeout(() => setCopiedUrlKey(null), 2000);
+                                } catch (err) {
+                                  console.error("Error al copiar:", err);
+                                  toast.error("Error", "No se pudo copiar al portapapeles.");
+                                }
+                              }}
+                            >
+                              {copiedUrlKey === itemKey ? (
+                                <Check size={12} className="text-emerald-400" />
+                              ) : (
+                                <Copy size={12} />
+                              )}
+                            </button>
+                            <button
+                              className="text-text-muted hover:text-red-500 transition-colors p-1 rounded hover:bg-background-tertiary"
+                              title="Borrar carpeta y permitir re-intento"
+                              disabled={isProcessing}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const folder = folderNameFromTitle(it.output_name || it.url);
+                                handleDeleteFolder(folder, it.url);
+                              }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

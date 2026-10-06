@@ -148,8 +148,25 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     }, 0);
   }, [text]);
 
+  // Referencia para evitar sobreescribir el texto mientras el usuario edita y hay polling en segundo plano
+  const lastLoadedClipKeyRef = useRef<string | null>(null);
+
   // Sincronizar campos cuando cambia el clip seleccionado en la Timeline
   useEffect(() => {
+    const currentClipKey = selectedClip ? `${selectedClip.id}_${parsedSelectedSegment?.segIdx ?? ""}` : null;
+
+    if (!currentClipKey) {
+      lastLoadedClipKeyRef.current = null;
+      return;
+    }
+
+    // Si ya cargamos el texto de este mismo clip, NO sobreescribir con el polling de fondo
+    if (lastLoadedClipKeyRef.current === currentClipKey) {
+      return;
+    }
+
+    lastLoadedClipKeyRef.current = currentClipKey;
+
     if (parsedSelectedSegment && selectedClip) {
       let rawText = "";
 
@@ -206,7 +223,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           const row = res.segments?.find((r) => r.seg === parsedSelectedSegment.segIdx);
           if (row) {
             const t = row.tts_text || row.original_text || "";
-            if (t) setText(t);
+            if (t && lastLoadedClipKeyRef.current === currentClipKey) setText(t);
           }
         }).catch(() => { });
       }
@@ -243,8 +260,6 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     speakers,
     getFolderRef,
     getSegmentByMediaId,
-    activeVideo,
-    videos,
   ]);
 
   // Sincronizar posición con el timeline cuando el usuario mueve el playhead o cambia el clip

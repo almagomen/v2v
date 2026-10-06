@@ -129,6 +129,8 @@ def _run_pipeline(
             # Leer activos deterministas desde el manifiesto
             assets = load_assets(path.parent)
 
+            orig_title = (r.get("info") or {}).get("title") or path.stem
+
             def make_segments(texts_list: list) -> list:
                 return [
                     {
@@ -141,7 +143,7 @@ def _run_pipeline(
                     for i, t in enumerate(texts_list)
                 ]
 
-            set_url_state(r.get("url", ""), "tts", "TTS:", index=idx, output_name=output_name)
+            set_url_state(r.get("url", ""), "tts", "TTS:", index=idx, output_name=output_name, original_title=orig_title)
 
             # ── Caché: el job ya fue procesado antes ──────────────────────────────
             # Detectamos si los segmentos TTS ya existen como señal de caché completo.
@@ -154,7 +156,7 @@ def _run_pipeline(
                 segments = make_segments(texts)
                 videos_data.append(build_entry(idx, path, output_name, segments, assets, r.get("url", "")))
                 update_job(job_id, videos=videos_data, progress=(idx + 0.5) / len(urls))
-                set_url_state(r.get("url", ""), "done", f"Listo (cache): {output_name}", index=idx, output_name=output_name)
+                set_url_state(r.get("url", ""), "done", f"Listo (cache): {output_name}", index=idx, output_name=output_name, original_title=orig_title)
                 continue
 
             # ── Nuevo proceso ─────────────────────────────────────────────────────
@@ -204,7 +206,7 @@ def _run_pipeline(
             segments = make_segments(texts)
             videos_data.append(build_entry(idx, path, output_name, segments, assets, r.get("url", "")))
             update_job(job_id, videos=videos_data, progress=(idx + 1.0) / len(urls))
-            set_url_state(r.get("url", ""), "done", f"Listo: {output_name}", index=idx, output_name=output_name)
+            set_url_state(r.get("url", ""), "done", f"Listo: {output_name}", index=idx, output_name=output_name, original_title=orig_title)
 
         if not videos_data:
             update_job(job_id, status="error", message="No se pudo procesar ningún video.", error="No results")
