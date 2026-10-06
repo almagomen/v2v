@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from api.job_store import get_job
-from src.config import QUEUE_DIR, TEMP_DIR
+from src.config import QUEUE_DIR, TEMP_DIR, GPU_COUNT
 from src.assets import load_assets, update_assets, register_segment
 from src.download import to_safe_name
 from src.edit_utils import get_video_bitrate
@@ -384,6 +384,7 @@ def _build_ffmpeg_cmd(
     output_path: Path,
     job_id: str = None,
     video_index: int = None,
+    gpu_id: int = 0,
 ) -> list[str]:
     """
     Build an ffmpeg command that renders the timeline clips into a single MP4.
@@ -496,6 +497,8 @@ def _build_ffmpeg_cmd(
         # Configuración de Video Encoder (NVENC con fallback a libx264)
         if _check_nvenc_available():
             cmd += [
+                "-gpu",
+                str(gpu_id),
                 "-c:v",
                 "h264_nvenc",
                 "-profile:v",
@@ -664,7 +667,14 @@ async def render_timeline(req: RenderTimelineRequest):
         print(f"⏩ [Colab Render] Timeline sin cambios para {req.output_name}. Reutilizando {candidate.name} ({candidate.stat().st_size / (1024*1024):.1f} MB)...")
         output_path = candidate
     else:
-        cmd = _build_ffmpeg_cmd(req.clips, folder, output_path, req.job_id, req.video_index)
+        cmd = _build_ffmpeg_cmd(
+            req.clips,
+            folder,
+            output_path,
+            req.job_id,
+            req.video_index,
+            gpu_id=1 if GPU_COUNT >= 2 else 0,
+        )
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise HTTPException(
@@ -791,7 +801,12 @@ async def render_batch(req: RenderBatchRequest):
                     continue
 
                 cmd = _build_ffmpeg_cmd(
-                    item.clips, folder, output_path, item.job_id, item.video_index
+                    item.clips,
+                    folder,
+                    output_path,
+                    item.job_id,
+                    item.video_index,
+                    gpu_id=idx % GPU_COUNT if GPU_COUNT > 0 else 0,
                 )
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode != 0:
