@@ -739,58 +739,65 @@ async def render_batch(req: RenderBatchRequest):
         "step": f"Iniciando render de {total} proyectos...",
     }
 
-    results: list[Path] = []
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    results: list[tuple[Path, str]] = []
     errors: list[str] = []
     catbox_urls: list[dict] = []
+    completed_lock = threading.Lock()
+    completed_count = 0
 
-    try:
-        for idx, item in enumerate(req.renders):
-            current_num = idx + 1
-            pct = round((idx / max(1, total)) * 100)
-            _batch_progress[batch_id] = {
-                "status": "rendering",
-                "current": current_num,
-                "total": total,
-                "percentage": pct,
-                "current_name": item.output_name,
-                "step": f"Renderizando ({current_num}/{total}): {item.output_name}",
-            }
+    max_workers = min(2, GPU_COUNT) if GPU_COUNT >= 2 else 1
+    if max_workers > 1:
+        print(f"⚡ [Multi-GPU Render] Renderizando batch en paralelo con {max_workers} GPUs (GPU 0 y GPU 1 simultáneamente)...")
 
-            try:
-                folder = _job_folder(item.job_id, item.video_index)
-                safe_name = to_safe_name(item.output_name)  # para nombre de archivo en disco
-                zip_name = to_zip_name(item.output_name)     # para arcname en ZIP (preserva emojis y hashtags)
-                output_path = folder / f"_render_{safe_name}.mp4"
+    def process_render_item(idx_item):
+        nonlocal completed_count
+        idx, item = idx_item
+        gpu_id = idx % GPU_COUNT if GPU_COUNT > 0 else 0
+        try:
+            folder = _job_folder(item.job_id, item.video_index)
+            safe_name = to_safe_name(item.output_name)
+            zip_name = to_zip_name(item.output_name)
+            output_path = folder / f"_render_{safe_name}.mp4"
 
-                # Comprobar si ya existe un render previo completado para este video
-                existing_file: Optional[Path] = None
-                for cand in [output_path, folder / f"_export_{safe_name}.mp4"]:
+            # Comprobar si ya existe un render previo completado para este video
+            existing_file: Optional[Path] = None
+            for cand in [output_path, folder / f"_export_{safe_name}.mp4"]:
+                if cand.exists() and cand.stat().st_size > 50000:
+                    existing_file = cand
+                    break
+
+            if not existing_file:
+                for cand in list(folder.glob("_render_*.mp4")) + list(folder.glob("_export_*.mp4")):
                     if cand.exists() and cand.stat().st_size > 50000:
                         existing_file = cand
                         break
 
-                if not existing_file:
-                    # Búsqueda fallback en la carpeta por si el safe_name varió ligeramente
-                    for cand in list(folder.glob("_render_*.mp4")) + list(folder.glob("_export_*.mp4")):
-                        if cand.exists() and cand.stat().st_size > 50000:
-                            existing_file = cand
-                            break
+            cache_valid = bool(
+                existing_file
+                and not req.force_rerender
+                and _is_render_cache_valid(folder, existing_file, item.clips, item.job_id, item.video_index)
+            )
 
-                cache_valid = bool(
-                    existing_file
-                    and not req.force_rerender
-                    and _is_render_cache_valid(folder, existing_file, item.clips, item.job_id, item.video_index)
-                )
-
-                if cache_valid and existing_file:
-                    print(f"⏩ [Colab Render] Timeline sin cambios para {item.output_name}. Reutilizando {existing_file.name} ({existing_file.stat().st_size / (1024*1024):.1f} MB)")
-                    _batch_progress[batch_id]["step"] = f"Timeline sin cambios ({current_num}/{total}): {item.output_name} (reutilizado)"
+            if cache_valid and existing_file:
+                print(f"⏩ [Colab Render] Timeline sin cambios para {item.output_name}. Reutilizando {existing_file.name} ({existing_file.stat().st_size / (1024*1024):.1f} MB)")
+                with completed_lock:
                     results.append((existing_file, zip_name))
-
-                    # Si se solicitó Catbox, subir el existente
-                    if req.upload_to_catbox:
-                        _batch_progress[batch_id]["step"] = f"Subiendo a Catbox ({current_num}/{total}): {item.output_name}"
-                        catbox_url = upload_to_catbox(existing_file)
+                    completed_count += 1
+                    pct = round((completed_count / max(1, total)) * 100)
+                    _batch_progress[batch_id] = {
+                        "status": "rendering",
+                        "current": completed_count,
+                        "total": total,
+                        "percentage": pct,
+                        "current_name": item.output_name,
+                        "step": f"Completado ({completed_count}/{total}): {item.output_name} (reutilizado)",
+                    }
+                if req.upload_to_catbox:
+                    catbox_url = upload_to_catbox(existing_file)
+                    with completed_lock:
                         catbox_urls.append(
                             {
                                 "filename": f"{zip_name}.mp4",
@@ -798,38 +805,39 @@ async def render_batch(req: RenderBatchRequest):
                                 "status": "uploaded" if catbox_url else "upload_failed",
                             }
                         )
-                    continue
+                return
 
-                cmd = _build_ffmpeg_cmd(
-                    item.clips,
-                    folder,
-                    output_path,
-                    item.job_id,
-                    item.video_index,
-                    gpu_id=idx % GPU_COUNT if GPU_COUNT > 0 else 0,
-                )
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode != 0:
-                    errors.append(
-                        f"{item.output_name}: ffmpeg error – {result.stderr[-300:]}"
-                    )
-                    continue
+            cmd = _build_ffmpeg_cmd(
+                item.clips,
+                folder,
+                output_path,
+                item.job_id,
+                item.video_index,
+                gpu_id=gpu_id,
+            )
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                with completed_lock:
+                    errors.append(f"{item.output_name}: ffmpeg error – {result.stderr[-300:]}")
+                return
 
-                _save_render_cache_hash(output_path, item.clips)
-                # Guardar también el zip_name para usarlo como arcname
+            _save_render_cache_hash(output_path, item.clips)
+            with completed_lock:
                 results.append((output_path, zip_name))
+                completed_count += 1
+                pct = round((completed_count / max(1, total)) * 100)
+                _batch_progress[batch_id] = {
+                    "status": "rendering",
+                    "current": completed_count,
+                    "total": total,
+                    "percentage": pct,
+                    "current_name": item.output_name,
+                    "step": f"Renderizado ({completed_count}/{total}): {item.output_name} en GPU {gpu_id}",
+                }
 
-                # Upload individual to Catbox if requested
-                if req.upload_to_catbox:
-                    _batch_progress[batch_id] = {
-                        "status": "uploading_catbox",
-                        "current": current_num,
-                        "total": total,
-                        "percentage": round(((idx + 0.5) / max(1, total)) * 100),
-                        "current_name": item.output_name,
-                        "step": f"Subiendo a Catbox ({current_num}/{total}): {item.output_name}",
-                    }
-                    catbox_url = upload_to_catbox(output_path)
+            if req.upload_to_catbox:
+                catbox_url = upload_to_catbox(output_path)
+                with completed_lock:
                     catbox_urls.append(
                         {
                             "filename": f"{zip_name}.mp4",
@@ -837,10 +845,13 @@ async def render_batch(req: RenderBatchRequest):
                             "status": "uploaded" if catbox_url else "upload_failed",
                         }
                     )
-            except HTTPException as e:
-                errors.append(f"{item.output_name}: {e.detail}")
-            except Exception as e:
+        except Exception as e:
+            with completed_lock:
                 errors.append(f"{item.output_name}: {str(e)}")
+
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            list(executor.map(process_render_item, list(enumerate(req.renders))))
 
         if not results:
             _batch_progress[batch_id] = {
