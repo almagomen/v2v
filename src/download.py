@@ -7,7 +7,7 @@ import io
 import contextlib
 from pathlib import Path
 
-from src.config import BASE_DIR, QUEUE_DIR, DRIVE_DIR, google_drive
+from src.config import BASE_DIR, QUEUE_DIR, DRIVE_DIR, KAGGLE_INPUT_DIR, DEVICE_SECONDARY, google_drive
 from src.models import get_or_load_model
 from src.assets import update_assets
 
@@ -42,10 +42,17 @@ def _load_bs_roformer():
     from bs_roformer.utils import get_model_from_config
     from bs_roformer.inference import SafeLoaderWithTuple
 
-    # Buscar carpeta de BS-RoFormer en Drive o rutas locales
+    # Buscar carpeta de BS-RoFormer en Drive, Kaggle input o rutas locales
     candidates = []
     if ROFORMER_DIR:
         candidates.append(ROFORMER_DIR)
+    if KAGGLE_INPUT_DIR and KAGGLE_INPUT_DIR.exists():
+        candidates.extend([
+            KAGGLE_INPUT_DIR / "bs-roformer-revive3e",
+            KAGGLE_INPUT_DIR / "v2v-models" / "bs-roformer-revive3e",
+            KAGGLE_INPUT_DIR / "bs-roformer" / "bs-roformer-revive3e",
+            KAGGLE_INPUT_DIR / "bs_roformer_revive3e",
+        ])
     candidates.extend([
         BASE_DIR / "bs-roformer-revive3e",
         BASE_DIR / "models" / "bs-roformer-revive3e",
@@ -81,7 +88,7 @@ def _load_bs_roformer():
     state = torch.load(model_path, map_location="cpu")
     model.load_state_dict(state)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(DEVICE_SECONDARY if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
 

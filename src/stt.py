@@ -13,12 +13,21 @@ except ImportError:
     stable_whisper = None
     torchaudio = None
 
-from src.config import DEVICE, DRIVE_DIR
+from src.config import DEVICE, DRIVE_DIR, KAGGLE_INPUT_DIR
 from src.models import get_or_load_model
 from src.diarization import get_diarization_model, speaker_diarization, process_audio
 from src.translation import translate_text_list, generate_tiktok_title
 
 WHISPER_DIR = DRIVE_DIR / "whisper_turbo" if DRIVE_DIR else None
+if not WHISPER_DIR and KAGGLE_INPUT_DIR and KAGGLE_INPUT_DIR.exists():
+    for cand in [
+        KAGGLE_INPUT_DIR / "whisper_turbo",
+        KAGGLE_INPUT_DIR / "whisper-turbo",
+        KAGGLE_INPUT_DIR / "v2v-models" / "whisper_turbo",
+    ]:
+        if cand.exists():
+            WHISPER_DIR = cand
+            break
 
 
 def get_whisper_model():

@@ -11,7 +11,7 @@ try:
 except ImportError:
     torch = None
 
-# Detección Colab
+# Detección de entornos (Colab vs Kaggle vs Local)
 def is_colab() -> bool:
     if "google.colab" in sys.modules:
         return True
@@ -22,11 +22,20 @@ def is_colab() -> bool:
         return False
 
 
-# Rutas
+def is_kaggle() -> bool:
+    return os.path.exists("/kaggle/working") or "KAGGLE_KERNEL_RUN_TYPE" in os.environ
+
+
+# Rutas base
 if is_colab():
     BASE_DIR = Path("/content")
+elif is_kaggle():
+    BASE_DIR = Path("/kaggle/working")
 else:
     BASE_DIR = Path(os.getenv("V2V_BASE_DIR", ".")).resolve()
+
+# Directorio de datasets montados en Kaggle (si aplica)
+KAGGLE_INPUT_DIR = Path("/kaggle/input") if is_kaggle() else None
 
 
 # Google Drive (solo Colab). No montamos aquí: en Colab ejecuta una celda con drive.mount("/content/drive") antes de lanzar el backend.
@@ -42,10 +51,13 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 QUEUE_DIR.mkdir(parents=True, exist_ok=True)
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Dispositivo
-DEVICE = "cuda" if (torch is not None and torch.cuda.is_available()) else "cpu"
+# Dispositivo y soporte Multi-GPU (ej. 2x T4 en Kaggle)
+GPU_COUNT = torch.cuda.device_count() if (torch is not None and torch.cuda.is_available()) else 0
+DEVICE = os.getenv("V2V_DEVICE", "cuda:0" if GPU_COUNT > 0 else "cpu")
+# Segunda GPU para balanceo si existen >= 2 GPUs (ej. RoFormer o Render en cuda:1)
+DEVICE_SECONDARY = os.getenv("V2V_DEVICE_SECONDARY", "cuda:1" if GPU_COUNT > 1 else DEVICE)
 
-# API keys: Colab userdata o env (soporta rotación de múltiples keys)
+# API keys: Colab userdata / Kaggle UserSecretsClient / env (soporta rotación de múltiples keys)
 _current_google_key_idx = 0
 
 
@@ -81,6 +93,29 @@ def get_google_api_keys() -> list[str]:
         for name in candidate_names:
             try:
                 val = userdata.get(name)
+                if val:
+                    for k in str(val).replace(";", ",").split(","):
+                        k = k.strip()
+                        if k and k not in keys:
+                            keys.append(k)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 4. Kaggle secrets (UserSecretsClient)
+    try:
+        from kaggle_secrets import UserSecretsClient
+        user_secrets = UserSecretsClient()
+
+        candidate_names = (
+            ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEYS"]
+            + [f"GOOGLE_API_KEY_{i}" for i in range(1, 10)]
+            + [f"GEMINI_API_KEY_{i}" for i in range(1, 10)]
+        )
+        for name in candidate_names:
+            try:
+                val = user_secrets.get_secret(name)
                 if val:
                     for k in str(val).replace(";", ",").split(","):
                         k = k.strip()
@@ -128,6 +163,16 @@ def get_fish_api_key() -> str | None:
     try:
         from google.colab import userdata
         val = userdata.get("FISH_API_KEY")
+        if val:
+            os.environ["FISH_API_KEY"] = val
+            return val
+    except Exception:
+        pass
+
+    # 3. Kaggle Secrets (UserSecretsClient)
+    try:
+        from kaggle_secrets import UserSecretsClient
+        val = UserSecretsClient().get_secret("FISH_API_KEY")
         if val:
             os.environ["FISH_API_KEY"] = val
             return val

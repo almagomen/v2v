@@ -15,10 +15,19 @@ except ImportError:
     Pipeline = None
     Segment = None
 
-from src.config import DEVICE, DRIVE_DIR
+from src.config import DEVICE, DRIVE_DIR, KAGGLE_INPUT_DIR
 from src.models import get_or_load_model
 
 DIARIZATION_DIR = DRIVE_DIR / "speaker-diarization-community-1" if DRIVE_DIR else None
+if not DIARIZATION_DIR and KAGGLE_INPUT_DIR and KAGGLE_INPUT_DIR.exists():
+    for cand in [
+        KAGGLE_INPUT_DIR / "speaker-diarization-community-1",
+        KAGGLE_INPUT_DIR / "speaker_diarization_community_1",
+        KAGGLE_INPUT_DIR / "v2v-models" / "speaker-diarization-community-1",
+    ]:
+        if cand.exists():
+            DIARIZATION_DIR = cand
+            break
 
 
 def _load_diarization_model() -> Any:
