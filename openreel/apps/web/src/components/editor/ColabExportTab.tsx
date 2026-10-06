@@ -15,8 +15,6 @@ import {
   Sparkles,
   RefreshCw,
   Save,
-  Bot,
-  Settings2,
 } from "lucide-react";
 import { Button, Switch, Label, Input } from "@openreel/ui";
 import {
@@ -215,10 +213,6 @@ export const ColabExportTab: React.FC = () => {
     setCatboxUrl,
     catboxVideos,
     setCatboxVideos,
-    geminiModel,
-    customGeminiModel,
-    setGeminiModel,
-    setCustomGeminiModel,
     getActiveGeminiModel,
   } = useColabExportStore();
 
@@ -226,19 +220,12 @@ export const ColabExportTab: React.FC = () => {
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  // ── Gemini & Viral Title states ──────────────────────────────
-  const [availableModels, setAvailableModels] = useState<string[]>([
-    "gemini-flash-lite-latest",
-    "gemini-flash-latest",
-    "gemma-4-31b-it",
-  ]);
+  // ── Viral Title states ────────────────────────────────────────
   const [customTitleInput, setCustomTitleInput] = useState<string>("");
   const [isRegeneratingTitle, setIsRegeneratingTitle] = useState(false);
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [titleFeedback, setTitleFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [batchRegeneratingId, setBatchRegeneratingId] = useState<string | null>(null);
-  const [showModelConfig, setShowModelConfig] = useState(false);
-  const [savingDefaultModel, setSavingDefaultModel] = useState(false);
 
   // ── Analyze current project ──────────────────────────────────
   const analyzed = React.useMemo(
@@ -325,17 +312,6 @@ export const ColabExportTab: React.FC = () => {
   };
 
   // ── Gemini & Viral Title Effects & Handlers ──────────────────
-  useEffect(() => {
-    v2vApi
-      .getGeminiModels()
-      .then((res) => {
-        if (res && res.models && res.models.length > 0) {
-          setAvailableModels(res.models);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
   useEffect(() => {
     const raw = (jobContext?.longName || project.name || "").replace(/^\d+[._\s]*/, "");
     setCustomTitleInput(raw);
@@ -445,26 +421,6 @@ export const ColabExportTab: React.FC = () => {
       });
     } finally {
       setIsSavingTitle(false);
-    }
-  };
-
-  const handleSetDefaultGeminiModel = async () => {
-    const activeModel = getActiveGeminiModel();
-    setSavingDefaultModel(true);
-    try {
-      await v2vApi.setGeminiDefaultModel(activeModel);
-      setTitleFeedback({
-        type: "success",
-        msg: `Modelo ${activeModel} fijado como default en servidor`,
-      });
-      setTimeout(() => setTitleFeedback(null), 3000);
-    } catch (err: any) {
-      setTitleFeedback({
-        type: "error",
-        msg: err.message || "Error al fijar modelo default",
-      });
-    } finally {
-      setSavingDefaultModel(false);
     }
   };
 
@@ -811,61 +767,6 @@ export const ColabExportTab: React.FC = () => {
           onCheckedChange={setIsBatch}
           disabled={isRunning}
         />
-      </div>
-
-      {/* ── Gemini AI Model Selector (Global) ── */}
-      <div className="p-3 bg-background-tertiary rounded-lg border border-border/60 space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <Bot size={14} className="text-primary" />
-            <span className="text-xs font-medium text-text-primary">Modelo de IA (Gemini)</span>
-          </div>
-          <span className="text-[10px] font-mono bg-primary/10 text-primary px-2 py-0.5 rounded border border-primary/20">
-            {getActiveGeminiModel()}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <select
-            value={geminiModel}
-            onChange={(e) => setGeminiModel(e.target.value)}
-            disabled={isRunning || isRegeneratingTitle}
-            className="flex-1 text-xs bg-background-secondary border border-border rounded px-2 py-1.5 text-text-primary focus:outline-none focus:border-primary"
-          >
-            {availableModels.map((m) => (
-              <option key={m} value={m}>
-                {m} {m === "gemini-flash-lite-latest" ? "⭐ (Default)" : ""}
-              </option>
-            ))}
-            <option value="custom">⚙️ Personalizado / Modelo nuevo…</option>
-          </select>
-
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleSetDefaultGeminiModel}
-            disabled={isRunning || savingDefaultModel}
-            className="h-8 text-[10px] px-2 text-text-muted hover:text-text-primary shrink-0"
-            title="Fijar este modelo como default en el backend de Colab"
-          >
-            {savingDefaultModel ? <Loader2 size={12} className="animate-spin" /> : "Fijar default"}
-          </Button>
-        </div>
-
-        {geminiModel === "custom" && (
-          <div className="pt-1">
-            <Input
-              value={customGeminiModel}
-              onChange={(e) => setCustomGeminiModel(e.target.value)}
-              placeholder="ej: gemini-2.5-pro o gemini-3.0-flash-preview"
-              className="text-xs h-7 bg-background-secondary"
-              disabled={isRunning || isRegeneratingTitle}
-            />
-            <p className="text-[10px] text-text-muted mt-1">
-              Escribe el identificador exacto de la API de Google Gemini para probarlo en caliente.
-            </p>
-          </div>
-        )}
       </div>
 
       {/* ── Single Mode ── */}

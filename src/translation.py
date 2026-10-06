@@ -189,10 +189,17 @@ Requisitos:
 IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones adicionales.
 """
 
-    models_to_try = [model_name.strip()] if (model_name and model_name.strip()) else [DEFAULT_TITLE_MODEL]
-    for m in POPULAR_GEMINI_MODELS:
-        if m not in models_to_try:
-            models_to_try.append(m)
+    selected_model = (model_name.strip() if (model_name and model_name.strip()) else DEFAULT_TITLE_MODEL)
+    models_to_try = [selected_model]
+
+    # Cascada de fallback para títulos:
+    # Si falla el modelo elegido (gemini-flash-lite-latest), probar directamente con gemma-4-31b-it.
+    # Excluimos gemini-flash-latest de los fallbacks de títulos para conservar su cuota de API exclusivamente para traducción.
+    if "gemma-4-31b-it" not in models_to_try:
+        models_to_try.append("gemma-4-31b-it")
+
+    if selected_model != "gemini-flash-latest":
+        models_to_try = [m for m in models_to_try if m != "gemini-flash-latest"]
 
     is_yt_url = bool(
         youtube_url
