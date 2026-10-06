@@ -116,7 +116,12 @@ def run_main(
             print("⚠️ No se pudo traducir, usando texto original")
 
     try:
-        output_name = generate_tiktok_title(url, translate if translate else transcription.language)
+        fallback_summary = " ".join(t["text"] for t in (translated_result or result)[:12]) if (translated_result or result) else (title or "")
+        output_name = generate_tiktok_title(
+            url,
+            translate if translate else transcription.language,
+            fallback_text=fallback_summary,
+        )
     except Exception as e:
         print(f"⚠️ Error al generar título viral (IA): {e}")
         output_name = None

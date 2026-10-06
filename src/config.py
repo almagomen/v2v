@@ -45,24 +45,77 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 # Dispositivo
 DEVICE = "cuda" if (torch is not None and torch.cuda.is_available()) else "cpu"
 
-# API keys: Colab userdata o env
-def get_google_api_key() -> str | None:
-    env_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-    if env_key:
-        return env_key
+# API keys: Colab userdata o env (soporta rotación de múltiples keys)
+_current_google_key_idx = 0
+
+
+def get_google_api_keys() -> list[str]:
+    """Retorna una lista con todas las API Keys de Google/Gemini configuradas."""
+    keys: list[str] = []
+
+    # 1. Variables de entorno principales (soporta múltiples separadas por coma o ;)
+    for env_var in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEYS"):
+        raw = os.getenv(env_var)
+        if raw:
+            for k in raw.replace(";", ",").split(","):
+                k = k.strip()
+                if k and k not in keys:
+                    keys.append(k)
+
+    # 2. Variables numeradas en entorno: GOOGLE_API_KEY_1, GOOGLE_API_KEY_2, etc.
+    for i in range(1, 10):
+        for prefix in ("GOOGLE_API_KEY_", "GEMINI_API_KEY_"):
+            val = os.getenv(f"{prefix}{i}")
+            if val and val.strip() and val.strip() not in keys:
+                keys.append(val.strip())
+
+    # 3. Colab userdata secrets
     try:
         from google.colab import userdata
-        for key_name in ("GOOGLE_API_KEY", "GEMINI_API_KEY"):
+
+        candidate_names = (
+            ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEYS"]
+            + [f"GOOGLE_API_KEY_{i}" for i in range(1, 10)]
+            + [f"GEMINI_API_KEY_{i}" for i in range(1, 10)]
+        )
+        for name in candidate_names:
             try:
-                val = userdata.get(key_name)
+                val = userdata.get(name)
                 if val:
-                    os.environ["GOOGLE_API_KEY"] = val
-                    return val
+                    for k in str(val).replace(";", ",").split(","):
+                        k = k.strip()
+                        if k and k not in keys:
+                            keys.append(k)
             except Exception:
-                continue
+                pass
     except Exception:
         pass
-    return None
+
+    return keys
+
+
+def get_google_api_key() -> str | None:
+    """Retorna la API Key actual o la primera configurada."""
+    global _current_google_key_idx
+    keys = get_google_api_keys()
+    if not keys:
+        return None
+    idx = _current_google_key_idx % len(keys)
+    return keys[idx]
+
+
+def rotate_google_api_key() -> str | None:
+    """Rota a la siguiente API Key disponible y la retorna."""
+    global _current_google_key_idx
+    keys = get_google_api_keys()
+    if not keys:
+        return None
+    _current_google_key_idx = (_current_google_key_idx + 1) % len(keys)
+    next_key = keys[_current_google_key_idx]
+    # Sincronizar en entorno para llamadas directas
+    os.environ["GOOGLE_API_KEY"] = next_key
+    print(f"🔄 [API Rotation] Rotando a Google API Key #{_current_google_key_idx + 1} de {len(keys)} (terminada en ...{next_key[-6:] if len(next_key) >= 6 else '***'})")
+    return next_key
 
 
 def get_fish_api_key() -> str | None:

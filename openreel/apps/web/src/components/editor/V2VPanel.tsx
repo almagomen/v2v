@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings, Eye, EyeOff } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings, Eye, EyeOff, ChevronDown, Terminal } from "lucide-react";
 import {
   ScrollArea,
   Button,
@@ -107,6 +107,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [isSavingTokens, setIsSavingTokens] = React.useState(false);
   const [showFishApiKey, setShowFishApiKey] = React.useState(false);
   const [showGoogleApiKey, setShowGoogleApiKey] = React.useState(false);
+  const [isLogsOpen, setIsLogsOpen] = React.useState(false);
 
   useEffect(() => {
     // Cargar tokens al montar
@@ -633,21 +634,38 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         )}
 
         {log && (
-          <div className="space-y-1">
-            <p className="text-[10px] text-text-muted">Logs</p>
-            <pre className="p-2.5 rounded-lg bg-background-tertiary font-mono text-[10px] min-h-[90px] max-h-[420px] overflow-auto resize-y whitespace-pre border border-border/50 select-text">
-              {(() => {
-                let out = log || "";
+          <div className="space-y-1.5 border border-border/60 rounded-lg p-2 bg-background-tertiary/40">
+            <button
+              type="button"
+              onClick={() => setIsLogsOpen(!isLogsOpen)}
+              className="w-full flex items-center justify-between text-[11px] text-text-muted hover:text-text-primary transition-colors font-medium select-none"
+            >
+              <div className="flex items-center gap-1.5">
+                <Terminal size={12} className="text-text-muted" />
+                <span>Logs del proceso</span>
+              </div>
+              <ChevronDown
+                size={14}
+                className={`transition-transform duration-200 text-text-muted ${
+                  isLogsOpen ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+            {isLogsOpen && (
+              <pre className="mt-1.5 p-2.5 rounded-lg bg-background-tertiary font-mono text-[10px] min-h-[90px] max-h-[360px] overflow-auto resize-y whitespace-pre border border-border/50 select-text">
+                {(() => {
+                  let out = log || "";
 
-                // Import-only: mostramos lo que se registra en `urlLogs` (sin [STATE:...]).
-                const importText = urlItems
-                  .map((it: any) => (it.url ? urlLogs[it.url] || "" : ""))
-                  .filter(Boolean)
-                  .join("\n");
+                  // Import-only: mostramos lo que se registra en `urlLogs` (sin [STATE:...]).
+                  const importText = urlItems
+                    .map((it: any) => (it.url ? urlLogs[it.url] || "" : ""))
+                    .filter(Boolean)
+                    .join("\n");
 
-                return `${out}${importText ? `\n${importText}` : ""}`;
-              })()}
-            </pre>
+                  return `${out}${importText ? `\n${importText}` : ""}`;
+                })()}
+              </pre>
+            )}
           </div>
         )}
 

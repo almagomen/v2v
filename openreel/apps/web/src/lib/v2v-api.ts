@@ -177,6 +177,16 @@ export interface RenderBatchPayload {
   renders: BatchRenderItemPayload[];
   zip_name?: string;
   upload_to_catbox?: boolean;
+  batch_id?: string;
+}
+
+export interface BatchProgressResponse {
+  status: string;
+  current: number;
+  total: number;
+  percentage: number;
+  step: string;
+  current_name: string;
 }
 
 export interface CatboxUploadResult {
@@ -191,6 +201,27 @@ export interface BatchCatboxResult {
   videos: Array<{ filename: string; url: string; status: string }>;
   errors: string[];
   expires_in: string;
+}
+
+export interface GeminiModelsResponse {
+  default_model: string;
+  models: string[];
+}
+
+export interface RegenerateTitlePayload {
+  job_id?: string;
+  video_index?: number;
+  folder_name?: string;
+  model_name?: string;
+  custom_title?: string;
+  target_lang?: string;
+}
+
+export interface RegenerateTitleResponse {
+  status: string;
+  output_name: string;
+  model_used?: string;
+  message?: string;
 }
 
 export const v2vApi = {
@@ -579,6 +610,14 @@ export const v2vApi = {
     return res.blob();
   },
 
+  async getBatchProgress(batchId: string): Promise<BatchProgressResponse> {
+    const res = await fetch(url(`/api/render/batch/progress/${encodeURIComponent(batchId)}`));
+    if (!res.ok) {
+      return { status: "idle", current: 0, total: 0, percentage: 0, step: "", current_name: "" };
+    }
+    return readJsonOrThrow<BatchProgressResponse>(res);
+  },
+
   async poll(jobId: string): Promise<PollResponse> {
     const res = await fetch(url(`/api/job/${jobId}/poll`));
     if (!res.ok) {
@@ -631,4 +670,43 @@ export const v2vApi = {
     }
     return readJsonOrThrow(res);
   },
+
+  async getGeminiModels(): Promise<GeminiModelsResponse> {
+    const res = await fetch(url("/api/render/gemini-models"));
+    if (!res.ok) {
+      return {
+        default_model: "gemini-flash-lite-latest",
+        models: [
+          "gemini-flash-lite-latest",
+          "gemini-flash-latest",
+          "gemma-4-31b-it",
+        ],
+      };
+    }
+    return readJsonOrThrow<GeminiModelsResponse>(res);
+  },
+
+  async setGeminiDefaultModel(modelName: string): Promise<{ status: string; default_model: string }> {
+    const res = await fetch(url("/api/render/gemini-models/default"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_name: modelName }),
+    });
+    if (!res.ok) throw new Error("Error al cambiar modelo de Gemini");
+    return readJsonOrThrow(res);
+  },
+
+  async regenerateTitle(payload: RegenerateTitlePayload): Promise<RegenerateTitleResponse> {
+    const res = await fetch(url("/api/render/regenerate-title"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al generar título viral");
+    }
+    return readJsonOrThrow<RegenerateTitleResponse>(res);
+  },
 };
+

@@ -541,19 +541,35 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
 
         const end = start + (targetDuration ?? selectedClip.duration);
 
-        const regenBlob = await v2vApi.regenerateSegment(
-          jobId,
-          activeVideoIndex,
-          parsedSelectedSegment.segIdx,
-          finalText,
-          start,
-          end,
-          null,
-          selectedVoice,
-          effectiveSpeed,
-          targetDuration,
-          { temperature },
+        // Si ya se presionó "Reproducir" previamente y coincide el texto y voz,
+        // reutilizamos ese resultado exacto para no alterar el audio escuchado.
+        // Si no se reprodujo primero, se genera una nueva versión con la IA.
+        const hasCachedAudio = Boolean(
+          cachedAudio &&
+          cachedAudio.finalText === finalText &&
+          cachedAudio.voice === selectedVoice &&
+          cachedAudio.result?.blob
         );
+
+        let regenBlob: Blob;
+
+        if (hasCachedAudio) {
+          regenBlob = cachedAudio!.result.blob;
+        } else {
+          regenBlob = await v2vApi.regenerateSegment(
+            jobId,
+            activeVideoIndex,
+            parsedSelectedSegment.segIdx,
+            finalText,
+            start,
+            end,
+            null,
+            selectedVoice,
+            effectiveSpeed,
+            targetDuration,
+            { temperature },
+          );
+        }
 
         const result = await applyRegeneratedSegmentToTimeline({
           folder: activeFolder,
@@ -577,6 +593,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         if (result.success) {
           toast.success("Segmento regenerado", result.message);
           setCachedAudio(null);
+          setIsV2VOpen(false);
         } else {
           throw new Error(result.message);
         }
@@ -675,6 +692,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
 
         setText("");
         setCachedAudio(null);
+        setIsV2VOpen(false);
       }
     } catch (err: any) {
       toast.error(
@@ -702,6 +720,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     addTrack,
     addClip,
     syncFolderAssets,
+    setIsV2VOpen,
   ]);
 
   return (

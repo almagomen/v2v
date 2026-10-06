@@ -4,7 +4,9 @@ Renders a timeline (single or batch) using ffmpeg server-side.
 Includes Catbox upload for shareable links.
 """
 
+import hashlib
 import io
+import json
 import re
 import subprocess
 import unicodedata
@@ -293,6 +295,7 @@ class RenderTimelineRequest(BaseModel):
     clips: list[TimelineClip]
     output_name: str = "export"
     upload_to_catbox: bool = False
+    force_rerender: bool = False
 
 
 class BatchRenderItem(BaseModel):
@@ -306,6 +309,11 @@ class RenderBatchRequest(BaseModel):
     renders: list[BatchRenderItem]
     zip_name: str = "batch_export"
     upload_to_catbox: bool = False
+    batch_id: Optional[str] = None
+    force_rerender: bool = False
+
+
+_batch_progress: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +547,87 @@ def _build_ffmpeg_cmd(
     return cmd
 
 
+def _compute_timeline_hash(clips: list[TimelineClip]) -> str:
+    """Calcula un hash único a partir de la composición exacta de los clips del timeline."""
+    data = [
+        {
+            "type": c.type,
+            "media": Path(c.media_name).name,
+            "start": round(float(c.start), 3),
+            "end": round(float(c.end), 3),
+            "track_start": round(float(c.track_start), 3),
+            "vol": round(float(c.volume), 2),
+        }
+        for c in clips
+    ]
+    raw = json.dumps(data, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _is_render_cache_valid(
+    folder: Path,
+    output_path: Path,
+    clips: list[TimelineClip],
+    job_id: str = None,
+    video_index: int = None,
+) -> bool:
+    """
+    Verifica si un render previo existente sigue siendo 100% fiel al timeline actual.
+    Retorna False (requiere re-render) si:
+    1. El archivo MP4 no existe o pesa menos de 50 KB.
+    2. Si existe un archivo .hash, y no coincide con la configuración actual de clips (timeline editado).
+    3. Si alguno de los archivos de audio/video involucrados fue modificado DESPUÉS del MP4.
+    """
+    if not output_path.exists() or output_path.stat().st_size < 50000:
+        return False
+
+    current_hash = _compute_timeline_hash(clips)
+    hash_file = output_path.with_suffix(".hash")
+
+    if hash_file.exists():
+        try:
+            saved_hash = hash_file.read_text(encoding="utf-8").strip()
+            if saved_hash != current_hash:
+                print(
+                    f"🔄 [Render Cache] Timeline modificado para {output_path.name} (hash mismatch). Re-renderizando..."
+                )
+                return False
+        except Exception:
+            return False
+
+    # Comprobar si algún clip de entrada fue modificado después que el video exportado
+    mp4_mtime = output_path.stat().st_mtime
+    for clip in clips:
+        try:
+            resolved = _resolve_media_path(folder, clip.media_name, job_id, video_index)
+            if resolved.exists() and resolved.is_file():
+                if resolved.stat().st_mtime > mp4_mtime:
+                    print(
+                        f"🔄 [Render Cache] Clip '{resolved.name}' fue modificado después del render previo. Re-renderizando..."
+                    )
+                    return False
+        except Exception:
+            pass
+
+    # Si llegó aquí y no tenía archivo .hash (render previo de sesión anterior de Colab), se lo creamos
+    if not hash_file.exists():
+        try:
+            hash_file.write_text(current_hash, encoding="utf-8")
+        except Exception:
+            pass
+
+    return True
+
+
+def _save_render_cache_hash(output_path: Path, clips: list[TimelineClip]) -> None:
+    """Guarda el hash del timeline tras un render exitoso."""
+    try:
+        h = _compute_timeline_hash(clips)
+        output_path.with_suffix(".hash").write_text(h, encoding="utf-8")
+    except Exception as e:
+        print(f"⚠️ Error guardando hash de render: {e}")
+
+
 @router.post("/render/timeline")
 async def render_timeline(req: RenderTimelineRequest):
     """Render a single project timeline server-side with ffmpeg.
@@ -558,14 +647,31 @@ async def render_timeline(req: RenderTimelineRequest):
     safe_name = to_safe_name(req.output_name)
     output_path = folder / f"_export_{safe_name}.mp4"
 
-    cmd = _build_ffmpeg_cmd(req.clips, folder, output_path, req.job_id, req.video_index)
+    # Verificar si ya existe un render previo válido para el timeline actual
+    candidate: Optional[Path] = None
+    for cand in [output_path, folder / f"_render_{safe_name}.mp4"]:
+        if cand.exists() and cand.stat().st_size > 50000:
+            candidate = cand
+            break
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error en ffmpeg: {result.stderr[-500:]}",
-        )
+    cache_valid = bool(
+        candidate
+        and not req.force_rerender
+        and _is_render_cache_valid(folder, candidate, req.clips, req.job_id, req.video_index)
+    )
+
+    if cache_valid and candidate:
+        print(f"⏩ [Colab Render] Timeline sin cambios para {req.output_name}. Reutilizando {candidate.name} ({candidate.stat().st_size / (1024*1024):.1f} MB)...")
+        output_path = candidate
+    else:
+        cmd = _build_ffmpeg_cmd(req.clips, folder, output_path, req.job_id, req.video_index)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error en ffmpeg: {result.stderr[-500:]}",
+            )
+        _save_render_cache_hash(output_path, req.clips)
 
     # Si se solicitó upload a Catbox, subir y retornar URL
     if req.upload_to_catbox:
@@ -595,6 +701,15 @@ async def render_timeline(req: RenderTimelineRequest):
 # ---------------------------------------------------------------------------
 
 
+@router.get("/render/batch/progress/{batch_id}")
+async def get_batch_progress(batch_id: str):
+    """Devuelve el progreso actual de un render por lotes."""
+    return _batch_progress.get(
+        batch_id,
+        {"status": "idle", "current": 0, "total": 0, "percentage": 0, "step": "", "current_name": ""},
+    )
+
+
 @router.post("/render/batch")
 async def render_batch(req: RenderBatchRequest):
     """Render multiple project timelines and return them as a ZIP.
@@ -602,71 +717,369 @@ async def render_batch(req: RenderBatchRequest):
     If upload_to_catbox is True, uploads each video individually and returns a list of URLs.
     Otherwise, returns a ZIP file for direct download.
     """
+    batch_id = req.batch_id or "default"
+    total = len(req.renders)
+
+    _batch_progress[batch_id] = {
+        "status": "rendering",
+        "current": 0,
+        "total": total,
+        "percentage": 0,
+        "current_name": "",
+        "step": f"Iniciando render de {total} proyectos...",
+    }
+
     results: list[Path] = []
     errors: list[str] = []
     catbox_urls: list[dict] = []
 
-    for item in req.renders:
-        try:
-            folder = _job_folder(item.job_id, item.video_index)
-            safe_name = to_safe_name(item.output_name)  # para nombre de archivo en disco
-            zip_name = to_zip_name(item.output_name)     # para arcname en ZIP (preserva emojis y hashtags)
-            output_path = folder / f"_render_{safe_name}.mp4"
+    try:
+        for idx, item in enumerate(req.renders):
+            current_num = idx + 1
+            pct = round((idx / max(1, total)) * 100)
+            _batch_progress[batch_id] = {
+                "status": "rendering",
+                "current": current_num,
+                "total": total,
+                "percentage": pct,
+                "current_name": item.output_name,
+                "step": f"Renderizando ({current_num}/{total}): {item.output_name}",
+            }
 
-            cmd = _build_ffmpeg_cmd(
-                item.clips, folder, output_path, item.job_id, item.video_index
-            )
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                errors.append(
-                    f"{item.output_name}: ffmpeg error – {result.stderr[-300:]}"
+            try:
+                folder = _job_folder(item.job_id, item.video_index)
+                safe_name = to_safe_name(item.output_name)  # para nombre de archivo en disco
+                zip_name = to_zip_name(item.output_name)     # para arcname en ZIP (preserva emojis y hashtags)
+                output_path = folder / f"_render_{safe_name}.mp4"
+
+                # Comprobar si ya existe un render previo completado para este video
+                existing_file: Optional[Path] = None
+                for cand in [output_path, folder / f"_export_{safe_name}.mp4"]:
+                    if cand.exists() and cand.stat().st_size > 50000:
+                        existing_file = cand
+                        break
+
+                if not existing_file:
+                    # Búsqueda fallback en la carpeta por si el safe_name varió ligeramente
+                    for cand in list(folder.glob("_render_*.mp4")) + list(folder.glob("_export_*.mp4")):
+                        if cand.exists() and cand.stat().st_size > 50000:
+                            existing_file = cand
+                            break
+
+                cache_valid = bool(
+                    existing_file
+                    and not req.force_rerender
+                    and _is_render_cache_valid(folder, existing_file, item.clips, item.job_id, item.video_index)
                 )
-                continue
-            # Guardar también el zip_name para usarlo como arcname
-            results.append((output_path, zip_name))
 
-            # Upload individual to Catbox if requested
-            if req.upload_to_catbox:
-                catbox_url = upload_to_catbox(output_path)
-                catbox_urls.append(
-                    {
-                        "filename": f"{zip_name}.mp4",
-                        "url": catbox_url or "",
-                        "status": "uploaded" if catbox_url else "upload_failed",
+                if cache_valid and existing_file:
+                    print(f"⏩ [Colab Render] Timeline sin cambios para {item.output_name}. Reutilizando {existing_file.name} ({existing_file.stat().st_size / (1024*1024):.1f} MB)")
+                    _batch_progress[batch_id]["step"] = f"Timeline sin cambios ({current_num}/{total}): {item.output_name} (reutilizado)"
+                    results.append((existing_file, zip_name))
+
+                    # Si se solicitó Catbox, subir el existente
+                    if req.upload_to_catbox:
+                        _batch_progress[batch_id]["step"] = f"Subiendo a Catbox ({current_num}/{total}): {item.output_name}"
+                        catbox_url = upload_to_catbox(existing_file)
+                        catbox_urls.append(
+                            {
+                                "filename": f"{zip_name}.mp4",
+                                "url": catbox_url or "",
+                                "status": "uploaded" if catbox_url else "upload_failed",
+                            }
+                        )
+                    continue
+
+                cmd = _build_ffmpeg_cmd(
+                    item.clips, folder, output_path, item.job_id, item.video_index
+                )
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    errors.append(
+                        f"{item.output_name}: ffmpeg error – {result.stderr[-300:]}"
+                    )
+                    continue
+
+                _save_render_cache_hash(output_path, item.clips)
+                # Guardar también el zip_name para usarlo como arcname
+                results.append((output_path, zip_name))
+
+                # Upload individual to Catbox if requested
+                if req.upload_to_catbox:
+                    _batch_progress[batch_id] = {
+                        "status": "uploading_catbox",
+                        "current": current_num,
+                        "total": total,
+                        "percentage": round(((idx + 0.5) / max(1, total)) * 100),
+                        "current_name": item.output_name,
+                        "step": f"Subiendo a Catbox ({current_num}/{total}): {item.output_name}",
                     }
-                )
-        except HTTPException as e:
-            errors.append(f"{item.output_name}: {e.detail}")
-        except Exception as e:
-            errors.append(f"{item.output_name}: {str(e)}")
+                    catbox_url = upload_to_catbox(output_path)
+                    catbox_urls.append(
+                        {
+                            "filename": f"{zip_name}.mp4",
+                            "url": catbox_url or "",
+                            "status": "uploaded" if catbox_url else "upload_failed",
+                        }
+                    )
+            except HTTPException as e:
+                errors.append(f"{item.output_name}: {e.detail}")
+            except Exception as e:
+                errors.append(f"{item.output_name}: {str(e)}")
 
-    if not results:
-        raise HTTPException(
-            status_code=500,
-            detail=f"No se pudo renderizar ningún video. Errores: {'; '.join(errors)}",
-        )
+        if not results:
+            _batch_progress[batch_id] = {
+                "status": "error",
+                "current": total,
+                "total": total,
+                "percentage": 100,
+                "current_name": "",
+                "step": "Error al renderizar videos",
+            }
+            raise HTTPException(
+                status_code=500,
+                detail=f"No se pudo renderizar ningún video. Errores: {'; '.join(errors)}",
+            )
 
-    # Si se solicitó upload a Catbox, retornar lista de URLs
-    if req.upload_to_catbox:
-        return {
-            "status": "completed",
-            "videos": catbox_urls,
-            "errors": errors,
-            "expires_in": "24h",
+        # Si se solicitó upload a Catbox, retornar lista de URLs
+        if req.upload_to_catbox:
+            _batch_progress[batch_id] = {
+                "status": "done",
+                "current": total,
+                "total": total,
+                "percentage": 100,
+                "current_name": "",
+                "step": f"¡{len(catbox_urls)} video(s) subido(s) a Catbox!",
+            }
+            return {
+                "status": "completed",
+                "videos": catbox_urls,
+                "errors": errors,
+                "expires_in": "24h",
+            }
+
+        _batch_progress[batch_id] = {
+            "status": "packaging",
+            "current": total,
+            "total": total,
+            "percentage": 95,
+            "current_name": "",
+            "step": "Empaquetando archivo ZIP final...",
         }
 
-    # Build ZIP in memory
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for output_path, zip_display_name in results:
-            zf.write(output_path, arcname=f"{zip_display_name}.mp4")
-        if errors:
-            zf.writestr("_errors.txt", "\n".join(errors))
+        # Build ZIP in memory
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for output_path, zip_display_name in results:
+                zf.write(output_path, arcname=f"{zip_display_name}.mp4")
+            if errors:
+                zf.writestr("_errors.txt", "\n".join(errors))
 
-    zip_buffer.seek(0)
-    zip_name = to_zip_name(req.zip_name) or "batch_export"
-    return StreamingResponse(
-        zip_buffer,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{zip_name}.zip"'},
+        zip_buffer.seek(0)
+        zip_name = to_zip_name(req.zip_name) or "batch_export"
+
+        _batch_progress[batch_id] = {
+            "status": "done",
+            "current": total,
+            "total": total,
+            "percentage": 100,
+            "current_name": "",
+            "step": f"¡{len(results)} videos exportados con éxito!",
+        }
+
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{zip_name}.zip"'},
+        )
+    finally:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Gemini Models & Viral Title Regeneration Endpoints
+# ---------------------------------------------------------------------------
+from api.schemas import (
+    RegenerateTitleRequest,
+    RegenerateTitleResponse,
+    GeminiModelsResponse,
+    SetDefaultGeminiModelRequest,
+)
+
+
+@router.get("/render/gemini-models", response_model=GeminiModelsResponse)
+async def get_gemini_models():
+    """Obtiene la lista de modelos de Gemini y el modelo por defecto activo."""
+    from src.translation import POPULAR_GEMINI_MODELS, get_default_gemini_model
+
+    return GeminiModelsResponse(
+        default_model=get_default_gemini_model(),
+        models=POPULAR_GEMINI_MODELS,
     )
+
+
+@router.post("/render/gemini-models/default")
+async def set_gemini_default_model(req: SetDefaultGeminiModelRequest):
+    """Establece el modelo de Gemini por defecto para la sesión."""
+    from src.translation import set_default_gemini_model
+
+    set_default_gemini_model(req.model_name)
+    return {"status": "ok", "default_model": req.model_name}
+
+
+@router.post("/render/regenerate-title", response_model=RegenerateTitleResponse)
+async def regenerate_title(req: RegenerateTitleRequest):
+    """
+    Regenera el título viral usando Gemini o aplica un nombre manual.
+    Actualiza v2v_assets.json, result.pkl (si existe), y el estado del job en memoria.
+    """
+    import pickle
+    import re
+    from src.assets import update_assets, load_assets
+    from src.translation import generate_tiktok_title, get_default_gemini_model
+
+    folder: Optional[Path] = None
+    if req.job_id:
+        try:
+            folder = _job_folder(req.job_id, req.video_index)
+        except Exception:
+            pass
+
+    if not folder and req.folder_name:
+        cand_folder = (QUEUE_DIR / req.folder_name).resolve()
+        if cand_folder.exists() and cand_folder.is_dir():
+            folder = cand_folder
+        else:
+            # Búsqueda fallback dentro de QUEUE_DIR
+            for sub in QUEUE_DIR.glob("*"):
+                if sub.is_dir() and (sub.name == req.folder_name or req.folder_name in sub.name):
+                    folder = sub
+                    break
+
+    if not folder:
+        raise HTTPException(
+            status_code=404,
+            detail="No se encontró la carpeta del video especificado.",
+        )
+
+    # Caso 1: Título manual definido por el usuario
+    if req.custom_title and req.custom_title.strip():
+        clean_name = re.sub(r'[/\\:*?"<>|\n]', " ", req.custom_title).strip()
+        clean_name = re.sub(r" {2,}", " ", clean_name)
+        if not clean_name:
+            clean_name = "video_export"
+
+        # Guardar en v2v_assets.json
+        update_assets(folder, output_name=clean_name, viral_title=clean_name)
+
+        # Actualizar result.pkl si existe
+        pkl_file = folder / "result.pkl"
+        if pkl_file.exists():
+            try:
+                with open(pkl_file, "rb") as f:
+                    data = list(pickle.load(f))
+                if len(data) >= 2:
+                    data[1] = clean_name  # output_name es el 2do elemento
+                    with open(pkl_file, "wb") as f:
+                        pickle.dump(tuple(data), f)
+            except Exception as e:
+                print(f"⚠️ Error actualizando result.pkl con título manual: {e}")
+
+        # Actualizar job en memoria si existe
+        if req.job_id:
+            try:
+                job = get_job(req.job_id)
+                if job and "videos" in job and req.video_index < len(job["videos"]):
+                    job["videos"][req.video_index]["output_name"] = clean_name
+            except Exception:
+                pass
+
+        return RegenerateTitleResponse(
+            status="ok",
+            output_name=clean_name,
+            model_used=None,
+            message="Título manual actualizado con éxito",
+        )
+
+    # Caso 2: Regenerar con Gemini (IA)
+    cached_url = ""
+    fallback_text = ""
+    original_title = ""
+
+    # Primero intentar leer result.pkl
+    pkl_file = folder / "result.pkl"
+    if pkl_file.exists():
+        try:
+            with open(pkl_file, "rb") as f:
+                data = pickle.load(f)
+                if len(data) >= 3 and isinstance(data[2], str):
+                    cached_url = data[2]
+                if len(data) >= 1 and isinstance(data[0], list):
+                    fallback_text = " ".join(t.get("text", "") for t in data[0][:15])
+                if len(data) >= 7 and isinstance(data[6], dict):
+                    original_title = data[6].get("title", "")
+        except Exception as e:
+            print(f"⚠️ No se pudo leer result.pkl para contexto de título: {e}")
+
+    # Fallback a v2v_assets.json si falta info
+    assets = load_assets(folder)
+    if not cached_url:
+        cached_url = assets.get("url", "")
+    if not fallback_text:
+        fallback_text = assets.get("transcript_summary", "") or original_title
+
+    model_to_use = req.model_name or get_default_gemini_model()
+    try:
+        new_title = generate_tiktok_title(
+            youtube_url=cached_url or None,
+            target_lang=req.target_lang or "es",
+            model_name=model_to_use,
+            fallback_text=fallback_text or original_title,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error generando título con IA: {str(e)}",
+        )
+
+    if not new_title:
+        raise HTTPException(
+            status_code=500,
+            detail="La IA no pudo generar un título. Intenta con otro modelo de Gemini o define el título manualmente.",
+        )
+
+    # Limpiar título
+    clean_title = re.sub(r'[/\\:*?"<>|\n]', " ", new_title).strip()
+    clean_title = re.sub(r" {2,}", " ", clean_title)
+
+    # Guardar en assets
+    update_assets(folder, output_name=clean_title, viral_title=clean_title)
+
+    # Guardar en result.pkl
+    if pkl_file.exists():
+        try:
+            with open(pkl_file, "rb") as f:
+                data = list(pickle.load(f))
+            if len(data) >= 2:
+                data[1] = clean_title
+                with open(pkl_file, "wb") as f:
+                    pickle.dump(tuple(data), f)
+        except Exception as e:
+            print(f"⚠️ Error actualizando result.pkl: {e}")
+
+    # Actualizar job en memoria
+    if req.job_id:
+        try:
+            job = get_job(req.job_id)
+            if job and "videos" in job and req.video_index < len(job["videos"]):
+                job["videos"][req.video_index]["output_name"] = clean_title
+        except Exception:
+            pass
+
+    return RegenerateTitleResponse(
+        status="ok",
+        output_name=clean_title,
+        model_used=model_to_use,
+        message="Título viral generado exitosamente",
+    )
+

@@ -197,3 +197,29 @@ class TokenSettingsResponse(BaseModel):
     fish_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
     message: str = "Configuración actualizada exitosamente"
+
+
+class RegenerateTitleRequest(BaseModel):
+    job_id: Optional[str] = None
+    video_index: int = 0
+    folder_name: Optional[str] = None
+    model_name: Optional[str] = None
+    custom_title: Optional[str] = None
+    target_lang: Optional[str] = "es"
+
+
+class RegenerateTitleResponse(BaseModel):
+    status: str
+    output_name: str
+    model_used: Optional[str] = None
+    message: Optional[str] = None
+
+
+class GeminiModelsResponse(BaseModel):
+    default_model: str
+    models: list[str]
+
+
+class SetDefaultGeminiModelRequest(BaseModel):
+    model_name: str
+

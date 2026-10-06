@@ -1,7 +1,8 @@
 import React from "react";
-import { Youtube, ListChecks, X } from "lucide-react";
+import { Youtube, ListChecks, X, Loader2 } from "lucide-react";
 import { useProjectStore } from "../../../stores/project-store";
 import { useV2VStore } from "../../../stores/v2v-store";
+import { useColabExportStore } from "../../../stores/colab-export-store";
 import { folderNameFromTitle } from "../../../utils/v2v-utils";
 import { V2VPanel } from "../V2VPanel";
 import { V2VSegmentBulkEditor } from "./V2VSegmentBulkEditor";
@@ -44,6 +45,9 @@ export const V2VToolbarEntry: React.FC = () => {
     };
   }, [jobId, selectedVideoIndex, effectiveDropdownValue, videos, getFolderRef, translateLang]);
 
+  const exportStatus = useColabExportStore((s) => s.status);
+  const isExporting = exportStatus === "uploading" || exportStatus === "rendering";
+
   return (
     <>
       {/* Botón en el Toolbar */}
@@ -55,10 +59,13 @@ export const V2VToolbarEntry: React.FC = () => {
             ? "bg-red-500/15 text-red-500 hover:bg-red-500/20"
             : "bg-bg-2 text-fg-2 hover:text-fg hover:bg-bg-3"
         }`}
-        title="Video2Video – Traducción y doblaje"
+        title={isExporting ? "Video2Video – Exportación en progreso…" : "Video2Video – Traducción y doblaje"}
       >
         <Youtube size={15} className="text-red-500" />
         <span className="hidden sm:inline">Video2Video</span>
+        {isExporting && (
+          <Loader2 size={12} className="animate-spin text-primary ml-0.5" />
+        )}
       </button>
 
       {/* Drawer lateral de Video2Video */}
