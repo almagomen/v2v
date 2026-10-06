@@ -193,6 +193,7 @@ export interface V2VState {
   startPolling: (jobId: string) => void;
   stopPolling: () => void;
 
+  updateVideoOutputName: (videoIndex: number, newOutputName: string, targetJobId?: string) => Promise<void>;
   syncFolderAssets: (jobId: string, videoIndex: number, folder: string) => Promise<void>;
   reset: () => void;
 }
@@ -333,6 +334,117 @@ export const useV2VStore = create<V2VState>((set, get) => {
         saveFolderRefsToStorage(next);
         return { folderRefs: next };
       }),
+
+    updateVideoOutputName: async (videoIndex: number, newOutputName: string, targetJobId?: string) => {
+      const state = get();
+      const newFolder = folderNameFromTitle(newOutputName);
+
+      // 1. Actualizar array de videos
+      const updatedVideos = (state.videos || []).map((v, i) => {
+        if (v.index === videoIndex || i === videoIndex) {
+          return { ...v, output_name: newOutputName };
+        }
+        return v;
+      });
+
+      // 2. Actualizar array de urlItems
+      const updatedUrlItems = (state.urlItems || []).map((it, i) => {
+        if (it.index === videoIndex || i === videoIndex) {
+          return { ...it, output_name: newOutputName };
+        }
+        return it;
+      });
+
+      // 3. Localizar y actualizar folderRefs
+      let matchedOldFolderKey: string | null = null;
+      let matchedRef: SerializedFolderData | null = null;
+
+      for (const [fKey, ref] of Object.entries(state.folderRefs || {})) {
+        if (ref.videoIndex === videoIndex && (!targetJobId || ref.jobId === targetJobId)) {
+          matchedOldFolderKey = fKey;
+          matchedRef = ref;
+          break;
+        }
+      }
+
+      if (!matchedOldFolderKey && updatedVideos[videoIndex]) {
+        const oldTitle = updatedVideos[videoIndex]?.output_name;
+        if (oldTitle) {
+          const oldFold = folderNameFromTitle(oldTitle);
+          if (state.folderRefs[oldFold]) {
+            matchedOldFolderKey = oldFold;
+            matchedRef = state.folderRefs[oldFold];
+          }
+        }
+      }
+
+      const updatedFolderRefs = { ...state.folderRefs };
+      if (matchedOldFolderKey && matchedRef) {
+        const targetRef: SerializedFolderData = {
+          ...matchedRef,
+          outputName: newOutputName,
+          folderId: generateFolderId(newFolder, matchedRef.jobId),
+          updatedAt: Date.now(),
+        };
+
+        if (matchedOldFolderKey !== newFolder) {
+          delete updatedFolderRefs[matchedOldFolderKey];
+          updatedFolderRefs[newFolder] = targetRef;
+        } else {
+          updatedFolderRefs[matchedOldFolderKey] = targetRef;
+        }
+      }
+
+      set({
+        videos: updatedVideos,
+        urlItems: updatedUrlItems,
+        folderRefs: updatedFolderRefs,
+      });
+      saveJobStateToStorage({ videos: updatedVideos, urlItems: updatedUrlItems });
+      saveFolderRefsToStorage(updatedFolderRefs);
+
+      // 4. Renombrar en project-store si el proyecto activo corresponde
+      try {
+        const projectStore = useProjectStore.getState();
+        const activeProj = projectStore.project;
+        const isActive =
+          (matchedOldFolderKey && activeProj.name === matchedOldFolderKey) ||
+          (matchedRef?.projectId && activeProj.id === matchedRef.projectId) ||
+          (matchedRef?.nativeFiles &&
+            activeProj.timeline.tracks.some((t) =>
+              t.clips.some((c) => {
+                const base = c.mediaName?.split("/").pop() || "";
+                return matchedRef!.nativeFiles.includes(base);
+              }),
+            )) ||
+          activeProj.name === folderNameFromTitle(matchedRef?.outputName || "");
+
+        if (isActive) {
+          await projectStore.renameProject(newFolder);
+          await autoSaveManager.initialize();
+          const curr = useProjectStore.getState().project;
+          await autoSaveManager.forceSave(curr);
+        }
+
+        // 5. Actualizar en IndexedDB autosaves guardados
+        await autoSaveManager.initialize();
+        const saves = await autoSaveManager.checkForRecovery();
+        for (const s of saves) {
+          if (
+            (matchedRef?.projectId && s.projectId === matchedRef.projectId) ||
+            (matchedOldFolderKey && s.projectName === matchedOldFolderKey)
+          ) {
+            const p = await autoSaveManager.loadProject(s.id);
+            if (p) {
+              p.name = newFolder;
+              await autoSaveManager.saveProject(p);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[V2V] Error actualizando proyecto tras regenerar título:", err);
+      }
+    },
 
     setSegmentInfo: (folder: string, segment: V2VSegmentInfo) =>
       set((state) => {

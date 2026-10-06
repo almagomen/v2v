@@ -348,18 +348,7 @@ export const ColabExportTab: React.FC = () => {
 
       if (res && res.output_name) {
         setCustomTitleInput(res.output_name);
-        await useProjectStore.getState().renameProject(res.output_name);
-
-        if (jobContext) {
-          const parts = (jobContext.longName || "").split("/");
-          const fKey = parts[0] || "";
-          if (fKey) {
-            useV2VStore.getState().setFolderRef(fKey, {
-              ...jobContext,
-              outputName: res.output_name,
-            });
-          }
-        }
+        await useV2VStore.getState().updateVideoOutputName(vIdx ?? 0, res.output_name, jId);
 
         setTitleFeedback({
           type: "success",
@@ -395,18 +384,7 @@ export const ColabExportTab: React.FC = () => {
 
       if (res && res.output_name) {
         setCustomTitleInput(res.output_name);
-        await useProjectStore.getState().renameProject(res.output_name);
-
-        if (jobContext) {
-          const parts = (jobContext.longName || "").split("/");
-          const fKey = parts[0] || "";
-          if (fKey) {
-            useV2VStore.getState().setFolderRef(fKey, {
-              ...jobContext,
-              outputName: res.output_name,
-            });
-          }
-        }
+        await useV2VStore.getState().updateVideoOutputName(vIdx ?? 0, res.output_name, jId);
 
         setTitleFeedback({
           type: "success",
@@ -463,8 +441,11 @@ export const ColabExportTab: React.FC = () => {
       });
 
       if (res && res.output_name && fullProj) {
-        fullProj.name = res.output_name;
-        await autoSaveManager.saveProject(fullProj);
+        await useV2VStore.getState().updateVideoOutputName(
+          targetVideoIndex ?? 0,
+          res.output_name,
+          targetJobId,
+        );
         // refrescar lista
         const metas = await autoSaveManager.checkForRecovery();
         const unique = new Map<string, AutoSaveMetadata>();
