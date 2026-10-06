@@ -16,20 +16,20 @@ import {
 } from "lucide-react";
 import { Button } from "@openreel/ui";
 
-import { v2vApi, type GeneratedAudioResult } from "../../../lib/v2v-api";
-import { useV2VStore } from "../../../stores/v2v-store";
-import { useProjectStore } from "../../../stores/project-store";
-import { useTimelineStore } from "../../../stores/timeline-store";
-import { useUIStore } from "../../../stores/ui-store";
-import { toast } from "../../../stores/notification-store";
-import { folderNameFromTitle, parseV2VSegmentFromName, toSafeToken } from "../../../utils/v2v-utils";
-import { applyRegeneratedSegmentToTimeline } from "../../../utils/v2v-segment-regen";
+import { v2vApi, type GeneratedAudioResult } from "../api/v2v-api";
+import { useV2VStore } from "../stores/v2v-store";
+import { useProjectStore } from "@/stores/project-store";
+import { useTimelineStore } from "@/stores/timeline-store";
+import { useUIStore } from "@/stores/ui-store";
+import { toast } from "@/stores/notification-store";
+import { folderNameFromTitle, parseV2VSegmentFromName, toSafeToken } from "../utils/v2v-utils";
+import { applyRegeneratedSegmentToTimeline } from "../utils/v2v-segment-regen";
 import {
   V2V_EMOTIONS,
   EMOTION_CATEGORIES,
   getEmotionsByCategory,
   formatEmotionLabel,
-} from "../../../utils/v2v-emotions";
+} from "../utils/v2v-emotions";
 
 export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
   inDrawer = false,

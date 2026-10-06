@@ -4,25 +4,25 @@ import {
   ScrollArea,
   Button,
 } from "@openreel/ui";
-import { toast } from "../../stores/notification-store";
-import { v2vApi } from "../../lib/v2v-api";
-import { useProjectStore } from "../../stores/project-store";
-import { useV2VStore } from "../../stores/v2v-store";
-import { autoSaveManager } from "../../services/auto-save";
+import { toast } from "@/stores/notification-store";
+import { v2vApi } from "../api/v2v-api";
+import { useProjectStore } from "@/stores/project-store";
+import { useV2VStore } from "../stores/v2v-store";
+import { autoSaveManager } from "@/services/auto-save";
 import {
   folderNameFromTitle,
   importKeyFor,
-} from "../../utils/v2v-utils";
+} from "../utils/v2v-utils";
 import { ColabExportTab } from "./ColabExportTab";
-import { useColabExportStore } from "../../stores/colab-export-store";
-import { V2VGenerateTTSSection } from "./v2v/V2VGenerateTTSSection";
+import { useColabExportStore } from "../stores/colab-export-store";
+import { V2VGenerateTTSSection } from "./V2VGenerateTTSSection";
 import {
   V2V_EMOTIONS,
   DEFAULT_EMOTION_TAG,
   EMOTION_CATEGORIES,
   getEmotionsByCategory,
   formatEmotionLabel,
-} from "../../utils/v2v-emotions";
+} from "../utils/v2v-emotions";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },

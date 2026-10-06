@@ -1,10 +1,10 @@
 import React from "react";
 import { Youtube, ListChecks, X, Loader2 } from "lucide-react";
-import { useProjectStore } from "../../../stores/project-store";
-import { useV2VStore } from "../../../stores/v2v-store";
-import { useColabExportStore } from "../../../stores/colab-export-store";
-import { folderNameFromTitle } from "../../../utils/v2v-utils";
-import { V2VPanel } from "../V2VPanel";
+import { useProjectStore } from "@/stores/project-store";
+import { useV2VStore } from "../stores/v2v-store";
+import { useColabExportStore } from "../stores/colab-export-store";
+import { folderNameFromTitle } from "../utils/v2v-utils";
+import { V2VPanel } from "./V2VPanel";
 import { V2VSegmentBulkEditor } from "./V2VSegmentBulkEditor";
 
 export const V2VToolbarEntry: React.FC = () => {

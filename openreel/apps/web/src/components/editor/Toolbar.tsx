@@ -7,7 +7,7 @@ import {
 } from "@/icons/lucide-compat";
 import { useProjectStore } from "../../stores/project-store";
 import { useUIStore } from "../../stores/ui-store";
-import { V2VToolbarEntry } from "./v2v/V2VToolbarEntry";
+import { V2VToolbarEntry } from "@/v2v";
 import { useRouter } from "../../hooks/use-router";
 import {
   getExportEngine,

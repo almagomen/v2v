@@ -1,5 +1,5 @@
 import type { MediaItem } from "@openreel/core";
-import { useProjectStore } from "../../stores/project-store";
+import { useProjectStore } from "@/stores/project-store";
 
 export function getFolderName(name: string): string | null {
   const idx = name.indexOf("/");

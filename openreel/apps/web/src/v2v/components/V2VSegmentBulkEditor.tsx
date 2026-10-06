@@ -15,19 +15,19 @@ import {
 } from "lucide-react";
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
-import { v2vApi, type SegmentEditorRow } from "../../../lib/v2v-api";
-import { useV2VStore } from "../../../stores/v2v-store";
-import { useProjectStore } from "../../../stores/project-store";
-import { toast } from "../../../stores/notification-store";
-import { generateSegmentId } from "../../../utils/v2v-segment-ids";
+import { v2vApi, type SegmentEditorRow } from "../api/v2v-api";
+import { useV2VStore } from "../stores/v2v-store";
+import { useProjectStore } from "@/stores/project-store";
+import { toast } from "@/stores/notification-store";
+import { generateSegmentId } from "../utils/v2v-segment-ids";
 import {
   applyRegeneratedSegmentToTimeline,
   findClipIdForSegment,
   parsedSpeakerTokenFromMediaName,
   resolveMediaIdForSegment,
-} from "../../../utils/v2v-segment-regen";
-import { toSafeToken } from "../../../utils/v2v-utils";
-import { autoSaveManager } from "../../../services/auto-save";
+} from "../utils/v2v-segment-regen";
+import { toSafeToken } from "../utils/v2v-utils";
+import { autoSaveManager } from "@/services/auto-save";
 import {
   V2V_EMOTIONS,
   DEFAULT_EMOTION_TAG,
@@ -36,7 +36,7 @@ import {
   formatEmotionLabel,
   applyEmotionToText,
   extractEmotionFromText,
-} from "../../../utils/v2v-emotions";
+} from "../utils/v2v-emotions";
 
 export type BulkSegmentRow = {
   seg: number;

@@ -1,9 +1,9 @@
-import { v2vApi } from "../lib/v2v-api";
-import { useProjectStore } from "../stores/project-store";
+import { v2vApi } from "../api/v2v-api";
+import { useProjectStore } from "@/stores/project-store";
 import { useV2VStore } from "../stores/v2v-store";
 import { generateSegmentId } from "./v2v-segment-ids";
 import { toSafeToken, parseV2VSegmentFromName, findSegmentMediaInLibrary } from "./v2v-utils";
-import { moveClipToTrack } from "./detached-project-actions";
+import { moveClipToTrack } from "@/utils/detached-project-actions";
 
 export async function getAudioDuration(blob: Blob): Promise<number> {
   const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;

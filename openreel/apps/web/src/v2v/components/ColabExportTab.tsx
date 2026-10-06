@@ -21,13 +21,13 @@ import {
   v2vApi,
   type TimelineClipPayload,
   type BatchRenderItemPayload,
-} from "../../lib/v2v-api";
-import { useProjectStore } from "../../stores/project-store";
-import { useV2VStore } from "../../stores/v2v-store";
-import { autoSaveManager } from "../../services/auto-save";
-import type { AutoSaveMetadata } from "../../services/auto-save";
+} from "../api/v2v-api";
+import { useProjectStore } from "@/stores/project-store";
+import { useV2VStore } from "../stores/v2v-store";
+import { autoSaveManager } from "@/services/auto-save";
+import type { AutoSaveMetadata } from "@/services/auto-save";
 import type { Project, MediaItem } from "@openreel/core";
-import { useColabExportStore, type CatboxVideoResult } from "../../stores/colab-export-store";
+import { useColabExportStore, type CatboxVideoResult } from "../stores/colab-export-store";
 
 // ----------------------------------------------------------------
 // Types

@@ -2,16 +2,16 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
-import { v2vApi, type SpeakerOption } from "../../../lib/v2v-api";
-import { useProjectStore } from "../../../stores/project-store";
-import { useV2VStore } from "../../../stores/v2v-store";
-import { invalidateAudioCache } from "../../../stores/audio-cache-store";
-import { generateSegmentId } from "../../../utils/v2v-segment-ids";
-import { parseV2VSegmentFromName } from "../../../utils/v2v-utils";
+import { v2vApi, type SpeakerOption } from "../api/v2v-api";
+import { useProjectStore } from "@/stores/project-store";
+import { useV2VStore } from "../stores/v2v-store";
+import { invalidateAudioCache } from "@/stores/audio-cache-store";
+import { generateSegmentId } from "../utils/v2v-segment-ids";
+import { parseV2VSegmentFromName } from "../utils/v2v-utils";
 import {
   applyRegeneratedSegmentToTimeline,
   getAudioDuration,
-} from "../../../utils/v2v-segment-regen";
+} from "../utils/v2v-segment-regen";
 
 function joinNonEmpty(parts: string[]): string {
   return parts

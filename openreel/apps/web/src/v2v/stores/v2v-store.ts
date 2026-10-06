@@ -1,10 +1,10 @@
 import { create } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import type { MediaItem } from "@openreel/core";
-import { v2vApi, type Segment, type VideoResult, type JobUrlItem, type AudioSegmentItem } from "../lib/v2v-api";
-import { useProjectStore } from "./project-store";
-import { createEmptyProject } from "./project";
-import { importMultipleMediaIntoProject } from "../utils/import-media-into-project";
+import { v2vApi, type Segment, type VideoResult, type JobUrlItem, type AudioSegmentItem } from "../api/v2v-api";
+import { useProjectStore } from "@/stores/project-store";
+import { createEmptyProject } from "@/stores/project";
+import { importMultipleMediaIntoProject } from "@/utils/import-media-into-project";
 import {
   folderNameFromTitle,
   importKeyFor,
@@ -12,21 +12,21 @@ import {
   findSegmentMediaInLibrary,
   toSafeToken,
 } from "../utils/v2v-utils";
-import { toast } from "./notification-store";
+import { toast } from "@/stores/notification-store";
 import {
   addClipToDetachedProject,
   addTrackAndGetId,
   renameTrackInProject,
   muteTrackInProject,
-} from "../utils/detached-project-actions";
-import { autoSaveManager } from "../services/auto-save";
+} from "@/utils/detached-project-actions";
+import { autoSaveManager } from "@/services/auto-save";
 import {
   type V2VSegmentInfo,
   type V2VFolderData,
   generateFolderId,
   createSegmentInfo,
 } from "../utils/v2v-segment-ids";
-import { getMediaBridge, initializeMediaBridge } from "../bridges/media-bridge";
+import { getMediaBridge, initializeMediaBridge } from "@/bridges/media-bridge";
 
 const FOLDER_REFS_STORAGE_KEY = "openreel.v2v.folderRefs";
 const JOB_STATE_STORAGE_KEY = "openreel.v2v.jobState";
