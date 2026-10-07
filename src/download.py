@@ -267,35 +267,7 @@ def download_video(
 
     update_assets(folder, **asset_update)
     return media_path, info
-
-def _load_audio_mix(video_path: Path | str):
-    """
-    Carga el audio de un archivo de video o audio.
-    Intenta torchaudio.load; si falla (por torchcodec o falta de decodificador en torchaudio),
-    extrae el audio a un WAV PCM 16-bit temporal con FFmpeg y lo carga.
-    """
-    import os, tempfile, subprocess
-    import torchaudio
-    try:
-        return torchaudio.load(str(video_path))
-    except Exception as e:
-        print(f"ℹ️ Decodificando stream de audio vía FFmpeg...")
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp_path = tmp.name
-        try:
-            cmd = [
-                "ffmpeg", "-y", "-i", str(video_path),
-                "-vn", "-acodec", "pcm_s16le", "-ar", "44100", tmp_path
-            ]
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            return torchaudio.load(tmp_path)
-        finally:
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
-
+    
 
 def separate_vocals(
     video_path: Path, output_dir: Path | None = None
@@ -329,7 +301,7 @@ def separate_vocals(
     config, model, device = get_roformer_model()
 
     # 2) Leer audio directamente del video (con fallback robusto a FFmpeg)
-    mix, sr = _load_audio_mix(video_path)
+    mix, sr = torchaudio.load(str(video_path))
     original_channels = mix.shape[0]
     if original_channels == 1:
         mix = torch.cat([mix, mix], dim=0)
