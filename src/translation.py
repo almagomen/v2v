@@ -58,26 +58,20 @@ def get_default_gemini_model() -> str:
     return get_default_title_model()
 
 
-def _create_genai_client(api_key: str, timeout_seconds: float = 30.0):
-    """Crea un cliente genai.Client con timeout explícito a nivel de socket/HTTP y
-    desactiva los reintentos ocultos internos de tenacity para reportar fallos de
-    inmediato y permitir rotar de modelo sin quedarse colgado.
+def _create_genai_client(api_key: str):
+    """Crea un cliente genai.Client configurado con attempts=1 para desactivar
+    los reintentos ocultos internos de tenacity, permitiendo que las llamadas
+    tomen el tiempo natural que requiera el contenido sin cortes artificiales.
     """
     from google import genai
-    timeout_ms = int(timeout_seconds * 1000)
     try:
         from google.genai import types
         http_options = types.HttpOptions(
-            timeout=timeout_ms,
             retry_options=types.HttpRetryOptions(attempts=1),
         )
         return genai.Client(api_key=api_key, http_options=http_options)
     except Exception:
-        try:
-            from google.genai import types
-            return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=timeout_ms))
-        except Exception:
-            return genai.Client(api_key=api_key)
+        return genai.Client(api_key=api_key)
 
 
 def set_default_gemini_model(model_name: str) -> None:
@@ -167,35 +161,75 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
             t_call_start = time.perf_counter()
             try:
                 t0_init = time.perf_counter()
-                client = _create_genai_client(api_key=key, timeout_seconds=30.0)
+                client = _create_genai_client(api_key=key)
                 t_init_dur = time.perf_counter() - t0_init
 
                 is_gemma = "gemma" in model.lower()
-                config = {"response_mime_type": "application/json"} if not is_gemma else None
+                config = {
+                    "response_mime_type": "application/json",
+                    "max_output_tokens": 65536,
+                } if not is_gemma else {
+                    "max_output_tokens": 65536,
+                }
 
                 t0_api = time.perf_counter()
-                response = client.models.generate_content(
-                    model=model,
-                    contents=[prompt],
-                    config=config,
-                )
+                interaction_kwargs = {
+                    "model": model,
+                    "input": prompt,
+                    "generation_config": {
+                        "max_output_tokens": 65536,
+                    },
+                }
+                if not is_gemma:
+                    interaction_kwargs["response_format"] = [
+                        {"type": "text", "mime_type": "application/json"}
+                    ]
+
+                try:
+                    interaction = client.interactions.create(**interaction_kwargs)
+                except Exception as e_rf:
+                    # Si el modelo específico o versión no acepta response_format, reintentar solo con input y generation_config
+                    if not is_gemma and "response_format" in str(e_rf).lower():
+                        interaction = client.interactions.create(
+                            model=model,
+                            input=prompt,
+                            generation_config={
+                                "max_output_tokens": 65536,
+                            },
+                        )
+                    else:
+                        raise e_rf
+
+                raw_text = getattr(interaction, "output_text", None)
+                if not raw_text and hasattr(interaction, "steps") and interaction.steps:
+                    for step in reversed(interaction.steps):
+                        if getattr(step, "type", None) == "model_output" and getattr(step, "content", None):
+                            for c in step.content:
+                                txt = getattr(c, "text", None)
+                                if txt and txt.strip():
+                                    raw_text = txt.strip()
+                                    break
+                        if raw_text:
+                            break
+
                 t_api_dur = time.perf_counter() - t0_api
                 call_dur = time.perf_counter() - t_call_start
 
-                if response and response.text:
+                if raw_text and raw_text.strip():
                     t0_parse = time.perf_counter()
-                    raw_text = response.text.strip()
-                    match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw_text, re.DOTALL)
-                    clean_json = match.group(1) if match else raw_text
+                    raw_text_clean = raw_text.strip()
+                    match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw_text_clean, re.DOTALL)
+                    clean_json = match.group(1) if match else raw_text_clean
                     parsed = json.loads(clean_json)
                     t_parse_dur = time.perf_counter() - t0_parse
 
                     if isinstance(parsed, list):
                         t_total_func = time.perf_counter() - t_debug_start
-                        print(f"⏱️ [Debug Tiempos]: Cliente: {t_init_dur:.2f}s | Generación API: {t_api_dur:.2f}s | Parseo JSON: {t_parse_dur:.3f}s | Total función: {t_total_func:.2f}s", flush=True)
-                        print(f"✅ [Traducción] Éxito con '{model}' en {call_dur:.1f}s ({len(parsed)} segmentos adaptados)\n", flush=True)
+                        print(f"⏱️ [Debug Tiempos]: Cliente: {t_init_dur:.2f}s | Generación API (Interactions): {t_api_dur:.2f}s | Parseo JSON: {t_parse_dur:.3f}s | Total función: {t_total_func:.2f}s", flush=True)
+                        print(f"✅ [Traducción] Éxito con '{model}' [Interactions API] en {call_dur:.1f}s ({len(parsed)} segmentos adaptados)\n", flush=True)
                         return parsed
             except Exception as e:
+                last_error = e
                 call_dur = time.perf_counter() - t_call_start
                 err_str = str(e)
                 print(f"⚠️ [Traducción] Error en {call_dur:.1f}s con '{model}' (key {key_tag}): {e}", flush=True)
@@ -273,21 +307,36 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
 
         for k_idx, key in enumerate(keys_to_attempt):
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
-            client = _create_genai_client(api_key=key, timeout_seconds=25.0)
+            client = _create_genai_client(api_key=key)
 
             # PRIORIDAD 1: Texto transcrito (extremadamente rápido: ~1-2s vs ~200s de video)
             if fallback_text and fallback_text.strip():
                 t_call_start = time.perf_counter()
                 try:
                     text_prompt = f"{base_prompt}\n\nTranscripción / Diálogos del video:\n{fallback_text.strip()[:3500]}"
-                    response = client.models.generate_content(
+                    interaction = client.interactions.create(
                         model=model,
-                        contents=[text_prompt],
+                        input=text_prompt,
+                        generation_config={
+                            "max_output_tokens": 2048,
+                        },
                     )
+                    raw_title = getattr(interaction, "output_text", None)
+                    if not raw_title and hasattr(interaction, "steps") and interaction.steps:
+                        for step in reversed(interaction.steps):
+                            if getattr(step, "type", None) == "model_output" and getattr(step, "content", None):
+                                for c in step.content:
+                                    txt = getattr(c, "text", None)
+                                    if txt and txt.strip():
+                                        raw_title = txt.strip()
+                                        break
+                            if raw_title:
+                                break
+
                     call_dur = time.perf_counter() - t_call_start
-                    if response and response.text and response.text.strip():
-                        title = response.text.strip().replace("\n", " ").strip("\"'")
-                        print(f"✅ [Título Viral] Generado con '{model}' en {call_dur:.1f}s", flush=True)
+                    if raw_title and raw_title.strip():
+                        title = raw_title.strip().replace("\n", " ").strip("\"'")
+                        print(f"✅ [Título Viral] Generado con '{model}' [Interactions API] en {call_dur:.1f}s", flush=True)
                         return title
                 except Exception as e:
                     last_error = e
