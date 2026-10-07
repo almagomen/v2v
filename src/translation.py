@@ -58,6 +58,28 @@ def get_default_gemini_model() -> str:
     return get_default_title_model()
 
 
+def _create_genai_client(api_key: str, timeout_seconds: float = 30.0):
+    """Crea un cliente genai.Client con timeout explícito a nivel de socket/HTTP y
+    desactiva los reintentos ocultos internos de tenacity para reportar fallos de
+    inmediato y permitir rotar de modelo sin quedarse colgado.
+    """
+    from google import genai
+    timeout_ms = int(timeout_seconds * 1000)
+    try:
+        from google.genai import types
+        http_options = types.HttpOptions(
+            timeout=timeout_ms,
+            retry_options=types.HttpRetryOptions(attempts=1),
+        )
+        return genai.Client(api_key=api_key, http_options=http_options)
+    except Exception:
+        try:
+            from google.genai import types
+            return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=timeout_ms))
+        except Exception:
+            return genai.Client(api_key=api_key)
+
+
 def set_default_gemini_model(model_name: str) -> None:
     """Permite cambiar el modelo por defecto para títulos en caliente (compatibilidad)."""
     set_default_title_model(model_name)
@@ -121,13 +143,11 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
 
     t_prompt_dur = time.perf_counter() - t0_prompt
 
-    # --- MUESTRA DEL PROMPT ENVIADO (DEBUG) ---
+    # --- PROMPT COMPLETO ENVIADO A GEMINI ---
     print("\n" + "=" * 60, flush=True)
-    print(f"📄 [PROMPT ENVIADO A GEMINI] ({len(list_sentences)} frases empaquetadas):", flush=True)
+    print(f"📄 [PROMPT COMPLETO ENVIADO A GEMINI] ({len(list_sentences)} frases):", flush=True)
     print("-" * 60, flush=True)
-    # Mostramos las instrucciones y una muestra representativa para no saturar 10 páginas
-    sample_preview = json.dumps(list_sentences[:3], indent=2, ensure_ascii=False)
-    print(f"{prompt[:550]}...\n\n[Muestra frases a traducir (primeras 3 de {len(list_sentences)})]:\n{sample_preview}\n...", flush=True)
+    print(prompt, flush=True)
     print("=" * 60 + "\n", flush=True)
 
     models_to_try = [model_name.strip()] if (model_name and model_name.strip()) else [DEFAULT_TRANSLATION_MODEL]
@@ -147,7 +167,7 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
             t_call_start = time.perf_counter()
             try:
                 t0_init = time.perf_counter()
-                client = genai.Client(api_key=key)
+                client = _create_genai_client(api_key=key, timeout_seconds=30.0)
                 t_init_dur = time.perf_counter() - t0_init
 
                 is_gemma = "gemma" in model.lower()
@@ -253,7 +273,7 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
 
         for k_idx, key in enumerate(keys_to_attempt):
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
-            client = genai.Client(api_key=key)
+            client = _create_genai_client(api_key=key, timeout_seconds=25.0)
 
             # PRIORIDAD 1: Texto transcrito (extremadamente rápido: ~1-2s vs ~200s de video)
             if fallback_text and fallback_text.strip():
