@@ -170,7 +170,7 @@ def reconcile_jobs():
 
 @router.get("/settings/tokens", response_model=TokenSettingsResponse)
 def get_tokens():
-    from src.config import get_google_api_key, get_fish_api_key
+    from src.config import get_raw_google_api_keys, get_fish_api_key
     from src.translation import (
         get_default_title_model,
         get_default_translation_model,
@@ -178,7 +178,7 @@ def get_tokens():
     )
     return TokenSettingsResponse(
         fish_api_key=get_fish_api_key() or "",
-        google_api_key=get_google_api_key() or "",
+        google_api_key=get_raw_google_api_keys() or "",
         title_model=get_default_title_model(),
         translation_model=get_default_translation_model(),
         available_models=POPULAR_GEMINI_MODELS,
@@ -189,6 +189,7 @@ def get_tokens():
 def post_tokens(req: TokenSettingsRequest):
     import os
     from pathlib import Path
+    from src.config import set_google_api_keys, set_fish_api_key
     from src.translation import (
         set_default_title_model,
         set_default_translation_model,
@@ -198,13 +199,12 @@ def post_tokens(req: TokenSettingsRequest):
     )
 
     fish_api_val = (req.fish_api_key or "").strip()
-    if fish_api_val:
-        os.environ["FISH_API_KEY"] = fish_api_val
+    if req.fish_api_key is not None:
+        set_fish_api_key(fish_api_val)
 
-    google_api_val = ""
-    if req.google_api_key:
-        google_api_val = req.google_api_key.strip()
-        os.environ["GOOGLE_API_KEY"] = google_api_val
+    google_api_val = (req.google_api_key or "").strip()
+    if req.google_api_key is not None:
+        set_google_api_keys(google_api_val)
 
     if req.title_model and req.title_model.strip():
         set_default_title_model(req.title_model.strip())

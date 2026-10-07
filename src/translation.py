@@ -77,18 +77,31 @@ def translate_text_list(
     if not list_sentences:
         return []
 
+    t_debug_start = time.perf_counter()
+
+    # --- SUB-PASO 1: BÚSQUEDA DE API KEYS ---
+    t0_keys = time.perf_counter()
     available_keys = get_google_api_keys()
+    t_keys_dur = time.perf_counter() - t0_keys
+    print(f"⏱️ [Debug 1/4] Búsqueda de API Keys completada en {t_keys_dur:.3f}s ({len(available_keys)} clave(s) disponible(s))", flush=True)
+
     if not available_keys:
         print("❌ [Traducción] Error: No hay ninguna API Key de Google configurada.", flush=True)
         return None
 
+    # --- SUB-PASO 2: IMPORT DE GOOGLE GENAI ---
+    t0_import = time.perf_counter()
     from google import genai
+    t_import_dur = time.perf_counter() - t0_import
+    if t_import_dur > 0.1:
+        print(f"⏱️ [Debug 2/4] Import 'google.genai': {t_import_dur:.2f}s", flush=True)
 
     source_lang_name = LANGUAGE_NAMES.get(source_lang, "español")
     target_lang_name = LANGUAGE_NAMES.get(target_lang, "ingles")
 
-    prompt = f"""
-Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
+    # --- SUB-PASO 3: CONSTRUCCIÓN DEL PROMPT ---
+    t0_prompt = time.perf_counter()
+    prompt = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
 Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo.
 
 Directrices obligatorias:
@@ -104,8 +117,18 @@ Texto original ({source_lang_name}):
 ---
 
 Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea la frase reescrita en el mismo orden:
-["frase 1 reescrita", "frase 2 reescrita", ...]
-"""
+["frase 1 reescrita", "frase 2 reescrita", ...]"""
+
+    t_prompt_dur = time.perf_counter() - t0_prompt
+
+    # --- MUESTRA DEL PROMPT ENVIADO (DEBUG) ---
+    print("\n" + "=" * 60, flush=True)
+    print(f"📄 [PROMPT ENVIADO A GEMINI] ({len(list_sentences)} frases empaquetadas):", flush=True)
+    print("-" * 60, flush=True)
+    # Mostramos las instrucciones y una muestra representativa para no saturar 10 páginas
+    sample_preview = json.dumps(list_sentences[:3], indent=2, ensure_ascii=False)
+    print(f"{prompt[:550]}...\n\n[Muestra frases a traducir (primeras 3 de {len(list_sentences)})]:\n{sample_preview}\n...", flush=True)
+    print("=" * 60 + "\n", flush=True)
 
     models_to_try = [model_name.strip()] if (model_name and model_name.strip()) else [DEFAULT_TRANSLATION_MODEL]
     for fallback in POPULAR_GEMINI_MODELS:
@@ -114,6 +137,7 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
 
     last_error = None
 
+    # --- SUB-PASO 4: LLAMADA A LA API ---
     for m_idx, model in enumerate(models_to_try):
         keys_to_attempt = list(available_keys)
 
@@ -122,24 +146,34 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
             print(f"🌐 [Traducción] Probando '{model}' (API Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag})...", flush=True)
             t_call_start = time.perf_counter()
             try:
+                t0_init = time.perf_counter()
                 client = genai.Client(api_key=key)
+                t_init_dur = time.perf_counter() - t0_init
+
                 is_gemma = "gemma" in model.lower()
                 config = {"response_mime_type": "application/json"} if not is_gemma else None
 
+                t0_api = time.perf_counter()
                 response = client.models.generate_content(
                     model=model,
                     contents=[prompt],
                     config=config,
                 )
+                t_api_dur = time.perf_counter() - t0_api
                 call_dur = time.perf_counter() - t_call_start
 
                 if response and response.text:
+                    t0_parse = time.perf_counter()
                     raw_text = response.text.strip()
                     match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw_text, re.DOTALL)
                     clean_json = match.group(1) if match else raw_text
                     parsed = json.loads(clean_json)
+                    t_parse_dur = time.perf_counter() - t0_parse
+
                     if isinstance(parsed, list):
-                        print(f"✅ [Traducción] Éxito con '{model}' en {call_dur:.1f}s ({len(parsed)} segmentos adaptados)", flush=True)
+                        t_total_func = time.perf_counter() - t_debug_start
+                        print(f"⏱️ [Debug Tiempos]: Cliente: {t_init_dur:.2f}s | Generación API: {t_api_dur:.2f}s | Parseo JSON: {t_parse_dur:.3f}s | Total función: {t_total_func:.2f}s", flush=True)
+                        print(f"✅ [Traducción] Éxito con '{model}' en {call_dur:.1f}s ({len(parsed)} segmentos adaptados)\n", flush=True)
                         return parsed
             except Exception as e:
                 call_dur = time.perf_counter() - t_call_start

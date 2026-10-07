@@ -60,74 +60,63 @@ DEVICE_SECONDARY = os.getenv("V2V_DEVICE_SECONDARY", "cuda:1" if GPU_COUNT > 1 e
 
 # API keys: Colab userdata / Kaggle UserSecretsClient / env (soporta rotación de múltiples keys)
 _current_google_key_idx = 0
+_cached_google_keys: list[str] | None = None
 
 
 def get_google_api_keys() -> list[str]:
-    """Retorna una lista con todas las API Keys de Google/Gemini configuradas."""
+    """Retorna una lista con todas las API Keys de Google configuradas (con caché en memoria).
+    Lee directamente de os.environ['GOOGLE_API_KEY'] (soporta una o varias separadas por coma).
+    """
+    global _cached_google_keys
+    if _cached_google_keys is not None and len(_cached_google_keys) > 0:
+        return _cached_google_keys
+
     keys: list[str] = []
 
-    # 1. Variables de entorno principales (soporta múltiples separadas por coma o ;)
-    for env_var in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEYS"):
-        raw = os.getenv(env_var)
-        if raw:
-            for k in raw.replace(";", ",").split(","):
-                k = k.strip()
-                if k and k not in keys:
-                    keys.append(k)
+    # 1. Variable de entorno principal (soporta una o varias separadas por coma o ;)
+    raw = os.getenv("GOOGLE_API_KEY")
+    if raw:
+        for k in raw.replace(";", ",").split(","):
+            k = k.strip()
+            if k and k not in keys:
+                keys.append(k)
 
-    # 2. Variables numeradas en entorno: GOOGLE_API_KEY_1, GOOGLE_API_KEY_2, etc.
-    for i in range(1, 10):
-        for prefix in ("GOOGLE_API_KEY_", "GEMINI_API_KEY_"):
-            val = os.getenv(f"{prefix}{i}")
-            if val and val.strip() and val.strip() not in keys:
-                keys.append(val.strip())
+    # 2. Colab userdata secrets (solo si no se encontró en env)
+    if not keys:
+        try:
+            from google.colab import userdata
+            val = userdata.get("GOOGLE_API_KEY")
+            if val:
+                for k in str(val).replace(";", ",").split(","):
+                    k = k.strip()
+                    if k and k not in keys:
+                        keys.append(k)
+        except Exception:
+            pass
 
-    # 3. Colab userdata secrets
-    try:
-        from google.colab import userdata
+    _cached_google_keys = keys
+    return _cached_google_keys
 
-        candidate_names = (
-            ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEYS"]
-            + [f"GOOGLE_API_KEY_{i}" for i in range(1, 10)]
-            + [f"GEMINI_API_KEY_{i}" for i in range(1, 10)]
-        )
-        for name in candidate_names:
-            try:
-                val = userdata.get(name)
-                if val:
-                    for k in str(val).replace(";", ",").split(","):
-                        k = k.strip()
-                        if k and k not in keys:
-                            keys.append(k)
-            except Exception:
-                pass
-    except Exception:
-        pass
 
-    # 4. Kaggle secrets (UserSecretsClient)
-    try:
-        from kaggle_secrets import UserSecretsClient
-        user_secrets = UserSecretsClient()
+def get_raw_google_api_keys() -> str:
+    """Retorna el string crudo de GOOGLE_API_KEY tal como fue configurado (ideal para inputs del frontend)."""
+    raw = os.getenv("GOOGLE_API_KEY")
+    if raw and raw.strip():
+        return raw.strip()
+    keys = get_google_api_keys()
+    return ", ".join(keys) if keys else ""
 
-        candidate_names = (
-            ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEYS"]
-            + [f"GOOGLE_API_KEY_{i}" for i in range(1, 10)]
-            + [f"GEMINI_API_KEY_{i}" for i in range(1, 10)]
-        )
-        for name in candidate_names:
-            try:
-                val = user_secrets.get_secret(name)
-                if val:
-                    for k in str(val).replace(";", ",").split(","):
-                        k = k.strip()
-                        if k and k not in keys:
-                            keys.append(k)
-            except Exception:
-                pass
-    except Exception:
-        pass
 
-    return keys
+def set_google_api_keys(keys_str: str | None) -> None:
+    """Actualiza la clave o lista de claves en os.environ e invalida la caché interna."""
+    global _cached_google_keys, _current_google_key_idx
+    val = (keys_str or "").strip()
+    if val:
+        os.environ["GOOGLE_API_KEY"] = val
+    else:
+        os.environ.pop("GOOGLE_API_KEY", None)
+    _cached_google_keys = None
+    _current_google_key_idx = 0
 
 
 def get_google_api_key() -> str | None:
@@ -155,67 +144,48 @@ def rotate_google_api_key() -> str | None:
 
 
 def get_fish_api_key() -> str | None:
-    # 1. Variable de entorno (env o cargada previamente)
+    """Retorna la API Key de Fish Audio desde variables de entorno o Colab."""
+    # 1. Variable de entorno (env o cargada previamente en la celda inicial)
     env_key = os.getenv("FISH_API_KEY")
-    if env_key:
-        return env_key
+    if env_key and env_key.strip():
+        return env_key.strip()
 
     # 2. Colab Secrets (userdata)
     try:
         from google.colab import userdata
         val = userdata.get("FISH_API_KEY")
-        if val:
-            os.environ["FISH_API_KEY"] = val
-            return val
+        if val and str(val).strip():
+            os.environ["FISH_API_KEY"] = str(val).strip()
+            return str(val).strip()
     except Exception:
         pass
 
-    # 3. Kaggle Secrets (UserSecretsClient)
-    try:
-        from kaggle_secrets import UserSecretsClient
-        val = UserSecretsClient().get_secret("FISH_API_KEY")
-        if val:
-            os.environ["FISH_API_KEY"] = val
-            return val
-    except Exception:
-        pass
+    return None
+
+
+def set_fish_api_key(key_str: str | None) -> None:
+    """Actualiza la API Key de Fish Audio en os.environ."""
+    val = (key_str or "").strip()
+    if val:
+        os.environ["FISH_API_KEY"] = val
+    else:
+        os.environ.pop("FISH_API_KEY", None)
+
 
 def get_hf_token() -> str | None:
-    """Retorna el token de Hugging Face desde env, Colab userdata o Kaggle secrets."""
-    # 1. Variables de entorno
-    for env_var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
-        val = os.getenv(env_var)
-        if val:
-            return val
+    """Retorna el token de Hugging Face desde env o Colab userdata."""
+    # 1. Variable de entorno (cargada al inicio de Kaggle o Colab)
+    val = os.getenv("HF_TOKEN")
+    if val and val.strip():
+        return val.strip()
 
     # 2. Colab Secrets (userdata)
     try:
         from google.colab import userdata
-        for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
-            try:
-                val = userdata.get(key)
-                if val:
-                    os.environ["HF_TOKEN"] = str(val)
-                    os.environ["HUGGING_FACE_HUB_TOKEN"] = str(val)
-                    return str(val)
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # 3. Kaggle Secrets (UserSecretsClient)
-    try:
-        from kaggle_secrets import UserSecretsClient
-        user_secrets = UserSecretsClient()
-        for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
-            try:
-                val = user_secrets.get_secret(key)
-                if val:
-                    os.environ["HF_TOKEN"] = str(val)
-                    os.environ["HUGGING_FACE_HUB_TOKEN"] = str(val)
-                    return str(val)
-            except Exception:
-                pass
+        val = userdata.get("HF_TOKEN")
+        if val and str(val).strip():
+            os.environ["HF_TOKEN"] = str(val).strip()
+            return str(val).strip()
     except Exception:
         pass
 

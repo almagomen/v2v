@@ -125,39 +125,54 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     });
   };
 
+  const loadTokensAndModels = useCallback(async () => {
+    try {
+      const res = await v2vApi.getTokens();
+      if (res.fish_api_key !== undefined) setFishApiKey(res.fish_api_key || "");
+      if (res.google_api_key !== undefined) setGoogleApiKey(res.google_api_key || "");
+
+      const knownModels = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemma-4-31b-it"];
+
+      if (res.title_model) {
+        if (knownModels.includes(res.title_model)) {
+          setTitleModel(res.title_model);
+        } else {
+          setTitleModel("custom");
+          setCustomTitleModel(res.title_model);
+        }
+      }
+
+      if (res.translation_model) {
+        if (knownModels.includes(res.translation_model)) {
+          setTranslationModel(res.translation_model);
+        } else {
+          setTranslationModel("custom");
+          setCustomTranslationModel(res.translation_model);
+        }
+      }
+      return true;
+    } catch (err) {
+      console.error("Error cargando configuración de tokens/modelos:", err);
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
-    // Cargar tokens y modelos al montar
-    const loadTokensAndModels = async () => {
-      try {
-        const res = await v2vApi.getTokens();
-        setFishApiKey(res.fish_api_key || "");
-        setGoogleApiKey(res.google_api_key || "");
-
-        const knownModels = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemma-4-31b-it"];
-
-        if (res.title_model) {
-          if (knownModels.includes(res.title_model)) {
-            setTitleModel(res.title_model);
-          } else {
-            setTitleModel("custom");
-            setCustomTitleModel(res.title_model);
-          }
-        }
-
-        if (res.translation_model) {
-          if (knownModels.includes(res.translation_model)) {
-            setTranslationModel(res.translation_model);
-          } else {
-            setTranslationModel("custom");
-            setCustomTranslationModel(res.translation_model);
-          }
-        }
-      } catch (err) {
-        console.error("Error cargando configuración:", err);
+    let mounted = true;
+    const init = async () => {
+      const ok = await loadTokensAndModels();
+      if (!ok && mounted) {
+        // Reintentar una vez tras 2 segundos si el backend o túnel aún estaban sincronizando
+        setTimeout(() => {
+          if (mounted) loadTokensAndModels();
+        }, 2000);
       }
     };
-    loadTokensAndModels();
-  }, []);
+    init();
+    return () => {
+      mounted = false;
+    };
+  }, [loadTokensAndModels]);
 
   const handleSaveTokens = useCallback(async () => {
     setIsSavingTokens(true);
@@ -375,7 +390,13 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             </h2>
           </div>
           <button
-            onClick={() => setShowTokenSettings(!showTokenSettings)}
+            onClick={() => {
+              const next = !showTokenSettings;
+              setShowTokenSettings(next);
+              if (next) {
+                loadTokensAndModels();
+              }
+            }}
             className={`p-1.5 rounded-lg border transition-all flex items-center gap-1.5 text-xs font-medium ${
               showTokenSettings 
                 ? "bg-primary/10 border-primary/20 text-primary shadow-sm" 
