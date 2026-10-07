@@ -5,6 +5,14 @@ Serves the API and optionally static files (OpenReel build).
 import os
 from pathlib import Path
 
+# Parche de compatibilidad para anyio/typing_extensions en entornos como Kaggle/Colab
+try:
+    import typing_extensions
+    if not hasattr(typing_extensions, "sentinel"):
+        typing_extensions.sentinel = getattr(typing_extensions, "Sentinel", object())
+except Exception:
+    pass
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles

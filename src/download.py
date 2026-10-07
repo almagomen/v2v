@@ -16,11 +16,39 @@ from src.config import (
     DEVICE_SECONDARY,
     google_drive,
     get_hf_token,
+    is_kaggle,
 )
 from src.models import get_or_load_model
 from src.assets import update_assets
 
 ROFORMER_DIR = DRIVE_DIR / "bs-roformer-revive3e" if DRIVE_DIR else None
+
+
+def find_youtube_cookies_file() -> Path | None:
+    """Busca cookies.txt en datasets de Kaggle o en Google Drive (Colab)."""
+    # 1. Dataset en Kaggle
+    kaggle_specific = Path("/kaggle/input/datasets/manuelarvelaez/upload/cookies.txt")
+    if kaggle_specific.is_file() and kaggle_specific.stat().st_size > 0:
+        return kaggle_specific
+
+    if is_kaggle() and Path("/kaggle/input").exists():
+        try:
+            for cand in Path("/kaggle/input").glob("**/cookies.txt"):
+                if cand.is_file() and cand.stat().st_size > 0:
+                    return cand
+        except Exception:
+            pass
+
+    # 2. Google Drive (Colab)
+    if DRIVE_DIR:
+        cand = DRIVE_DIR / "cookies.txt"
+        if cand.is_file() and cand.stat().st_size > 0:
+            return cand
+    cand_drive = Path("/content/drive/MyDrive/cookies.txt")
+    if cand_drive.is_file() and cand_drive.stat().st_size > 0:
+        return cand_drive
+
+    return None
 
 
 def to_safe_name(text: str) -> str:
@@ -190,7 +218,7 @@ def download_video(
 
     from yt_dlp import YoutubeDL
 
-    cookies_file = (DRIVE_DIR / "cookies.txt") if DRIVE_DIR else None
+    cookies_file = find_youtube_cookies_file()
 
     # Configuración de video/audio única
     video = "bv[vcodec^=avc1]"
@@ -207,7 +235,15 @@ def download_video(
         "referer": "https://www.google.com/",
     }
     if cookies_file and cookies_file.exists():
+        print(f"🍪 [yt-dlp] Usando cookies de YouTube: {cookies_file}", flush=True)
         opts["cookiefile"] = str(cookies_file)
+    else:
+        # Fallback sin cookies: cliente android/mweb para evitar bloqueo de bot ("Sign in to confirm you’re not a bot")
+        opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["android", "mweb", "web"],
+            }
+        }
 
     t_start_dl = time.perf_counter()
     with YoutubeDL(opts) as ydl:
