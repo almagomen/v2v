@@ -1118,7 +1118,7 @@ async def regenerate_title(req: RegenerateTitleRequest):
                 if len(data) >= 3 and isinstance(data[2], str):
                     cached_url = data[2]
                 if len(data) >= 1 and isinstance(data[0], list):
-                    fallback_text = " ".join(t.get("text", "") for t in data[0][:15])
+                    fallback_text = " ".join(t.get("text", "") for t in data[0])
                 if len(data) >= 7 and isinstance(data[6], dict):
                     original_title = data[6].get("title", "")
         except Exception as e:

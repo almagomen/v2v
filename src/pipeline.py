@@ -182,6 +182,9 @@ def process_video_queue(
                     f,
                 )
 
+            from src.assets import update_assets
+            update_assets(path.parent, output_name=output_name)
+
             timings = {
                 "download": info.get("_download_time", 0.0) if isinstance(info, dict) else 0.0,
                 "stems": info.get("_stems_time", 0.0) if isinstance(info, dict) else 0.0,

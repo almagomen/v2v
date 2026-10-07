@@ -93,6 +93,56 @@ def write_subtitle_file(segments: Any, output_path: Path, word_level: bool = Fal
     print("✅ Subtítulos guardados")
 
 
+_TITLE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="v2v_title")
+
+
+def launch_async_title_generation(
+    url: str,
+    target_lang: str,
+    fallback_text: Optional[str] = None,
+    use_search_grounding: bool = False,
+) -> concurrent.futures.Future:
+    """Lanza la inferencia de título viral en segundo plano sin congelar el hilo principal."""
+    return _TITLE_EXECUTOR.submit(
+        generate_tiktok_title,
+        youtube_url=url,
+        target_lang=target_lang,
+        fallback_text=fallback_text,
+        use_search_grounding=use_search_grounding,
+    )
+
+
+def resolve_final_title(
+    title_future: Optional[concurrent.futures.Future],
+    fallback_title: str,
+    timeout: float = 30.0,
+) -> tuple[str, float]:
+    """
+    Espera la resolución del título viral de forma segura.
+    Garantiza que el título definitivo (sea el inferido por IA o el fallback original)
+    esté siempre definido antes de que el tag de la URL pase a completado.
+    """
+    t0 = time.perf_counter()
+    if not title_future:
+        return fallback_title, 0.0
+
+    try:
+        raw_title = title_future.result(timeout=timeout)
+        elapsed = time.perf_counter() - t0
+        if raw_title and str(raw_title).strip():
+            clean = "".join(c for c in str(raw_title) if c not in r'\/:*?"<>|').replace('\n', ' ').strip()
+            if clean:
+                print(f"⏱️ [Etapa: Título Viral (Gemini)] Generado en {elapsed:.1f}s: {clean}", flush=True)
+                return clean, elapsed
+    except concurrent.futures.TimeoutError:
+        print(f"⚠️ [Título Viral] Tiempo límite de espera agotado ({timeout}s). Usando título original: '{fallback_title}'", flush=True)
+    except Exception as e:
+        print(f"⚠️ [Título Viral] Error en generación: {e}. Usando título original: '{fallback_title}'", flush=True)
+
+    elapsed = time.perf_counter() - t0
+    return fallback_title, elapsed
+
+
 def run_main(
     media: Union[str, Path],
     url: str,
@@ -145,30 +195,16 @@ def run_main(
         else:
             print("⚠️ No se pudo traducir, usando texto original")
 
-    t_title = 0.0
-    try:
-        t0_title = time.perf_counter()
-        fallback_summary = " ".join(t["text"] for t in (translated_result or result)[:12]) if (translated_result or result) else (title or "")
-        output_name = generate_tiktok_title(
-            url,
-            translate if translate else transcription.language,
-            fallback_text=fallback_summary,
-            use_search_grounding=use_search_grounding,
-        )
-        t_title = time.perf_counter() - t0_title
-        if output_name:
-            print(f"⏱️ [Etapa: Título Viral (Gemini)] Generado en {t_title:.1f}s: {output_name}")
-    except Exception as e:
-        print(f"⚠️ Error al generar título viral (IA): {e}")
-        output_name = None
-
-    if output_name:
-        # Limpiar solo si es un nombre autogenerado para seguridad básica, 
-        # pero para el título original de YT lo dejamos tal cual.
-        output_name = "".join(c for c in output_name if c not in r'\/:*?"<>|').replace('\n', ' ').strip() or "output"
-    else: 
-        # Fallback al título original de YouTube proporcionado por pipeline.py
-        output_name = title or media_path.stem
+    # Inferencia asíncrona con resolución garantizada antes de retornar al pipeline
+    fallback_summary = " ".join(t["text"] for t in (translated_result or result)) if (translated_result or result) else (title or "")
+    default_title = title or media_path.stem
+    title_fut = launch_async_title_generation(
+        url=url,
+        target_lang=translate if translate else transcription.language,
+        fallback_text=fallback_summary,
+        use_search_grounding=use_search_grounding,
+    )
+    output_name, t_title = resolve_final_title(title_fut, fallback_title=default_title, timeout=30.0)
 
     stt_timings = {
         "whisper": t_whisper,
