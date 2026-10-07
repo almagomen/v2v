@@ -1,9 +1,7 @@
-"""
-Traducción y generación de títulos con Gemini y modelos de lenguaje (Gemma).
-Soporta rotación de API keys, cascada de modelos y fallback robusto a texto.
-"""
 import json
 import re
+import time
+import sys
 from typing import Optional
 
 from src.config import get_google_api_key, get_google_api_keys, rotate_google_api_key
@@ -20,7 +18,7 @@ LANGUAGE_NAMES = {
 }
 
 # Modelos oficiales: gemini-flash-latest por defecto para traducción de máxima calidad,
-# con fallback automático a gemini-flash-lite-latest ante 503/429/timeout.
+# con fallback automático a gemini-flash-lite-latest ante 503/429.
 DEFAULT_TITLE_MODEL = "gemini-flash-lite-latest"
 DEFAULT_TRANSLATION_MODEL = "gemini-flash-latest"
 
@@ -81,11 +79,10 @@ def translate_text_list(
 
     available_keys = get_google_api_keys()
     if not available_keys:
-        print("❌ [Traducción] Error: No hay ninguna API Key de Google configurada.")
+        print("❌ [Traducción] Error: No hay ninguna API Key de Google configurada.", flush=True)
         return None
 
     from google import genai
-    from google.genai import types
 
     source_lang_name = LANGUAGE_NAMES.get(source_lang, "español")
     target_lang_name = LANGUAGE_NAMES.get(target_lang, "ingles")
@@ -119,20 +116,22 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
 
     for m_idx, model in enumerate(models_to_try):
         keys_to_attempt = list(available_keys)
+
         for k_idx, key in enumerate(keys_to_attempt):
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
-            print(f"🌐 [Traducción] Probando modelo '{model}' (API Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag})...")
+            print(f"🌐 [Traducción] Probando '{model}' (API Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag})...", flush=True)
+            t_call_start = time.perf_counter()
             try:
-                # Timeout de 40s para no congelar la llamada en picos de demanda
-                client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=40000))
+                client = genai.Client(api_key=key)
                 is_gemma = "gemma" in model.lower()
-
                 config = {"response_mime_type": "application/json"} if not is_gemma else None
+
                 response = client.models.generate_content(
                     model=model,
                     contents=[prompt],
                     config=config,
                 )
+                call_dur = time.perf_counter() - t_call_start
 
                 if response and response.text:
                     raw_text = response.text.strip()
@@ -140,25 +139,25 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
                     clean_json = match.group(1) if match else raw_text
                     parsed = json.loads(clean_json)
                     if isinstance(parsed, list):
-                        print(f"✅ [Traducción] Éxito con '{model}' ({len(parsed)} segmentos adaptados)")
+                        print(f"✅ [Traducción] Éxito con '{model}' en {call_dur:.1f}s ({len(parsed)} segmentos adaptados)", flush=True)
                         return parsed
             except Exception as e:
-                last_error = e
+                call_dur = time.perf_counter() - t_call_start
                 err_str = str(e)
-                print(f"⚠️ [Traducción] Error con '{model}' (key {key_tag}): {e}")
+                print(f"⚠️ [Traducción] Error en {call_dur:.1f}s con '{model}' (key {key_tag}): {e}", flush=True)
                 if len(available_keys) > 1 and any(code in err_str for code in ("429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "quota", "timeout")):
                     rotate_google_api_key()
                     if k_idx + 1 < len(keys_to_attempt):
                         next_key_tag = f"...{keys_to_attempt[k_idx + 1][-4:]}" if len(keys_to_attempt[k_idx + 1]) >= 4 else "***"
-                        print(f"🔄 [Traducción] Rotando a siguiente API Key ({next_key_tag}) para reintentar con '{model}'...")
+                        print(f"🔄 [Traducción] Rotando a siguiente API Key ({next_key_tag}) para reintentar con '{model}'...", flush=True)
                 continue
 
         # Si el modelo falló con todas las claves disponibles, rotar al siguiente modelo de la cascada
         if m_idx + 1 < len(models_to_try):
             next_model = models_to_try[m_idx + 1]
-            print(f"🔄 [Traducción] Modelo principal '{model}' no disponible. Rotando automáticamente al modelo de respaldo: '{next_model}'...")
+            print(f"🔄 [Traducción] Modelo '{model}' no disponible. Rotando de inmediato al modelo de respaldo: '{next_model}'...", flush=True)
 
-    print(f"❌ [Traducción] Fallaron todos los modelos y claves. Último error: {last_error}")
+    print(f"❌ [Traducción] Fallaron todos los modelos y claves. Último error: {last_error}", flush=True)
     return None
 
 
@@ -177,11 +176,10 @@ def generate_tiktok_title(
     """
     available_keys = get_google_api_keys()
     if not available_keys:
-        print("⚠️ [Título Viral] No hay ninguna GOOGLE_API_KEY configurada.")
+        print("⚠️ [Título Viral] No hay ninguna GOOGLE_API_KEY configurada.", flush=True)
         return None
 
     from google import genai
-    from google.genai import types
 
     target_lang_name = LANGUAGE_NAMES.get(target_lang, "español")
 
@@ -221,51 +219,68 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
 
         for k_idx, key in enumerate(keys_to_attempt):
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
-            client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=25000))
+            client = genai.Client(api_key=key)
 
             # PRIORIDAD 1: Texto transcrito (extremadamente rápido: ~1-2s vs ~200s de video)
             if fallback_text and fallback_text.strip():
+                t_call_start = time.perf_counter()
                 try:
                     text_prompt = f"{base_prompt}\n\nTranscripción / Diálogos del video:\n{fallback_text.strip()[:3500]}"
-                    response = client.models.generate_content(model=model, contents=[text_prompt])
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=[text_prompt],
+                    )
+                    call_dur = time.perf_counter() - t_call_start
                     if response and response.text and response.text.strip():
-                        return response.text.strip().replace("\n", " ").strip("\"'")
+                        title = response.text.strip().replace("\n", " ").strip("\"'")
+                        print(f"✅ [Título Viral] Generado con '{model}' en {call_dur:.1f}s", flush=True)
+                        return title
                 except Exception as e:
                     last_error = e
                     err_str = str(e)
-                    print(f"⚠️ [Título Viral] Error con '{model}' vía texto (key {key_tag}): {e}")
+                    print(f"⚠️ [Título Viral] Error con '{model}' vía texto (key {key_tag}): {e}", flush=True)
                     if len(available_keys) > 1 and any(code in err_str for code in ("429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "timeout")):
                         rotate_google_api_key()
                         if k_idx + 1 < len(keys_to_attempt):
                             next_key_tag = f"...{keys_to_attempt[k_idx + 1][-4:]}" if len(keys_to_attempt[k_idx + 1]) >= 4 else "***"
-                            print(f"🔄 [Título Viral] Rotando a siguiente API Key ({next_key_tag}) para '{model}'...")
+                            print(f"🔄 [Título Viral] Rotando a siguiente API Key ({next_key_tag}) para '{model}'...", flush=True)
+                    continue
 
             # PRIORIDAD 2 (Fallback si no hay texto transcrito): Video multimodal YouTube
             if is_yt_url and "gemma" not in model.lower():
+                t_call_start = time.perf_counter()
                 try:
-                    print(f"🌐 [Título Viral] Intentando generación multimodal con '{model}' vía YouTube URI (key {key_tag})...")
+                    from google.genai import types
+                    print(f"🌐 [Título Viral] Intentando multimodal con '{model}' vía YouTube URI (key {key_tag})...", flush=True)
                     contents = types.Content(
                         parts=[
                             types.Part(file_data=types.FileData(file_uri=youtube_url)),
                             types.Part(text=base_prompt),
                         ]
                     )
-                    response = client.models.generate_content(model=model, contents=contents)
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=contents,
+                    )
+                    call_dur = time.perf_counter() - t_call_start
                     if response and response.text and response.text.strip():
-                        return response.text.strip().replace("\n", " ").strip("\"'")
+                        title = response.text.strip().replace("\n", " ").strip("\"'")
+                        print(f"✅ [Título Viral] Generado multimodal con '{model}' en {call_dur:.1f}s", flush=True)
+                        return title
                 except Exception as e:
                     last_error = e
                     err_str = str(e)
-                    print(f"⚠️ [Título Viral] Error con '{model}' vía YouTube URI (key {key_tag}): {e}")
+                    print(f"⚠️ [Título Viral] Error con '{model}' vía YouTube URI (key {key_tag}): {e}", flush=True)
                     if len(available_keys) > 1 and any(code in err_str for code in ("429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "timeout")):
                         rotate_google_api_key()
                         if k_idx + 1 < len(keys_to_attempt):
                             next_key_tag = f"...{keys_to_attempt[k_idx + 1][-4:]}" if len(keys_to_attempt[k_idx + 1]) >= 4 else "***"
-                            print(f"🔄 [Título Viral] Rotando a siguiente API Key ({next_key_tag}) para '{model}'...")
+                            print(f"🔄 [Título Viral] Rotando a siguiente API Key ({next_key_tag}) para '{model}'...", flush=True)
+                    continue
 
         if m_idx + 1 < len(models_to_try):
             next_model = models_to_try[m_idx + 1]
-            print(f"🔄 [Título Viral] Modelo '{model}' agotado. Rotando automáticamente a: '{next_model}'...")
+            print(f"🔄 [Título Viral] Modelo '{model}' no disponible. Rotando automáticamente a: '{next_model}'...", flush=True)
 
-    print(f"❌ [Título Viral] No se pudo generar título viral con ninguno de los modelos. Último error: {last_error}")
+    print(f"❌ [Título Viral] No se pudo generar título viral con ninguno de los modelos. Último error: {last_error}", flush=True)
     return None
