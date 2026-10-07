@@ -214,7 +214,7 @@ export async function applyRegeneratedSegmentToTimeline(
       modifiedAt: Date.now(),
     };
     try {
-      const { deleteMediaBlob } = await import("../services/media-storage");
+      const { deleteMediaBlob } = await import("@/services/media-storage");
       await deleteMediaBlob(oldMediaId);
     } catch {
       // Ignorar si el blob anterior ya no existía

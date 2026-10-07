@@ -11,8 +11,13 @@ try:
 except ImportError:
     torch = None
 
-# Detección de entornos (Colab vs Kaggle vs Local)
+def is_kaggle() -> bool:
+    return os.path.exists("/kaggle/working") or "KAGGLE_KERNEL_RUN_TYPE" in os.environ
+
+
 def is_colab() -> bool:
+    if is_kaggle():
+        return False
     if "google.colab" in sys.modules:
         return True
     try:
@@ -22,15 +27,11 @@ def is_colab() -> bool:
         return False
 
 
-def is_kaggle() -> bool:
-    return os.path.exists("/kaggle/working") or "KAGGLE_KERNEL_RUN_TYPE" in os.environ
-
-
 # Rutas base
-if is_colab():
-    BASE_DIR = Path("/content")
-elif is_kaggle():
+if is_kaggle():
     BASE_DIR = Path("/kaggle/working")
+elif is_colab():
+    BASE_DIR = Path("/content")
 else:
     BASE_DIR = Path(os.getenv("V2V_BASE_DIR", ".")).resolve()
 
