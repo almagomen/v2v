@@ -27,17 +27,30 @@ ROFORMER_DIR = DRIVE_DIR / "bs-roformer-revive3e" if DRIVE_DIR else None
 def find_youtube_cookies_file() -> Path | None:
     """Busca cookies.txt en datasets de Kaggle o en Google Drive (Colab)."""
     # 1. Dataset en Kaggle
+    cand_found = None
     kaggle_specific = Path("/kaggle/input/datasets/manuelarvelaez/upload/cookies.txt")
     if kaggle_specific.is_file() and kaggle_specific.stat().st_size > 0:
-        return kaggle_specific
-
-    if is_kaggle() and Path("/kaggle/input").exists():
+        cand_found = kaggle_specific
+    elif is_kaggle() and Path("/kaggle/input").exists():
         try:
             for cand in Path("/kaggle/input").glob("**/cookies.txt"):
                 if cand.is_file() and cand.stat().st_size > 0:
-                    return cand
+                    cand_found = cand
+                    break
         except Exception:
             pass
+
+    if cand_found:
+        # En Kaggle, /kaggle/input es Read-Only. Al cerrar, yt-dlp intenta guardar
+        # la sesión actualizada de cookies con save_cookies() (open 'w'), fallando si es solo lectura.
+        # Copiamos a BASE_DIR (directorio escribible) para evitar el error.
+        import shutil
+        writable_cookies = BASE_DIR / "cookies.txt"
+        try:
+            shutil.copyfile(cand_found, writable_cookies)
+            return writable_cookies
+        except Exception:
+            return cand_found
 
     # 2. Google Drive (Colab)
     if DRIVE_DIR:
