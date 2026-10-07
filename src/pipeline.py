@@ -25,7 +25,6 @@ def process_video_queue(
     on_stage: Optional[callable] = None,
     current_idx: Optional[int] = None,
     total_count: Optional[int] = None,
-    thinking_level: Optional[str] = None,
     use_search_grounding: bool = False,
     force_reprocess: bool = False,
 ) -> list[dict]:
@@ -160,7 +159,6 @@ def process_video_queue(
                 u,
                 translate=translate_lang,
                 title=safe_title,
-                thinking_level=thinking_level,
                 use_search_grounding=use_search_grounding,
             )
             translated_result = run_res[0]

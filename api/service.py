@@ -55,7 +55,6 @@ def _run_pipeline(
     translate_lang: str | None,
     speaker_name: str,
     emotion: str | None = None,
-    thinking_level: str | None = None,
     use_search_grounding: bool = False,
     force_reprocess: bool = False,
 ) -> None:
@@ -120,7 +119,6 @@ def _run_pipeline(
                 on_stage=lambda u, st, msg: set_url_state(u, st, msg),
                 current_idx=idx + 1,
                 total_count=len(urls),
-                thinking_level=thinking_level,
                 use_search_grounding=use_search_grounding,
                 force_reprocess=force_reprocess,
             )
@@ -299,7 +297,6 @@ def start_process(
     translate_lang: str | None,
     speaker_name: str,
     emotion: str | None = None,
-    thinking_level: str | None = None,
     use_search_grounding: bool = False,
     force_reprocess: bool = False,
 ) -> str:
@@ -313,7 +310,6 @@ def start_process(
             translate_lang,
             speaker_name,
             emotion,
-            thinking_level,
             use_search_grounding,
             force_reprocess,
         ),

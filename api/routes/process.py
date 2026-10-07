@@ -33,7 +33,6 @@ def process_urls(req: ProcessUrlsRequest):
         translate,
         req.speaker,
         emotion=req.emotion,
-        thinking_level=req.thinking_level,
         use_search_grounding=bool(req.use_search_grounding),
         force_reprocess=bool(req.force_reprocess),
     )

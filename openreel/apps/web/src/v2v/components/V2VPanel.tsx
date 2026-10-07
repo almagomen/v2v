@@ -105,10 +105,9 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [googleApiKey, setGoogleApiKey] = React.useState("");
   const [titleModel, setTitleModel] = React.useState<string>("gemini-flash-lite-latest");
   const [customTitleModel, setCustomTitleModel] = React.useState<string>("");
-  const [translationModel, setTranslationModel] = React.useState<string>("gemini-flash-latest");
+  const [translationModel, setTranslationModel] = React.useState<string>("gemini-flash-lite-latest");
   const [customTranslationModel, setCustomTranslationModel] = React.useState<string>("");
   const [initialEmotion, setInitialEmotion] = React.useState<string>(DEFAULT_EMOTION_TAG);
-  const [thinkingMinimal, setThinkingMinimal] = React.useState<boolean>(true);
   const [useSearchGrounding, setUseSearchGrounding] = React.useState<boolean>(false);
   const [forceReprocess, setForceReprocess] = React.useState<boolean>(false);
   const [showTokenSettings, setShowTokenSettings] = React.useState(false);
@@ -295,7 +294,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         speaker,
         initialEmotion === "none" ? null : initialEmotion,
         {
-          thinkingLevel: thinkingMinimal ? "minimal" : null,
           useSearchGrounding: useSearchGrounding,
           forceReprocess: forceReprocess,
         }
@@ -312,7 +310,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     translateLang,
     speaker,
     initialEmotion,
-    thinkingMinimal,
     useSearchGrounding,
     forceReprocess,
     startPolling,
@@ -669,29 +666,11 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         {/* Opciones modulares de inferencia */}
         <div className="bg-background-tertiary/60 border border-border/80 rounded-lg p-2.5 space-y-2">
           <div className="text-[10px] font-semibold text-text-muted flex items-center justify-between">
-            <span>Opciones de Inferencia (Gemini 2026)</span>
-            <span className="text-[9px] text-primary/80 font-mono">Combinables</span>
+            <span>Opciones de Inferencia</span>
+            <span className="text-[9px] text-primary/80 font-mono">Configuración</span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 pt-0.5">
-            {/* Thinking Minimal */}
-            <label
-              className="flex items-center gap-2 p-1 rounded-md hover:bg-background/50 cursor-pointer select-none text-[11px] text-text-secondary transition-colors"
-              title="Traduce de inmediato sin pausas de razonamiento interno extenso de Gemini (latencia mínima)."
-            >
-              <input
-                type="checkbox"
-                checked={thinkingMinimal}
-                onChange={(e) => setThinkingMinimal(e.target.checked)}
-                disabled={isProcessing}
-                className="rounded border-border text-primary focus:ring-0 focus:ring-offset-0 cursor-pointer w-3.5 h-3.5 accent-primary"
-              />
-              <span className="flex items-center gap-1 truncate">
-                <Zap size={12} className="text-yellow-400 shrink-0" />
-                <span>Thinking Minimal</span>
-              </span>
-            </label>
-
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
             {/* Google Search Grounding */}
             <label
               className="flex items-center gap-2 p-1 rounded-md hover:bg-background/50 cursor-pointer select-none text-[11px] text-text-secondary transition-colors"

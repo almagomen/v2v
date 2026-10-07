@@ -249,7 +249,6 @@ export const v2vApi = {
     speaker: string,
     emotion?: string | null,
     options?: {
-      thinkingLevel?: string | null;
       useSearchGrounding?: boolean;
       forceReprocess?: boolean;
     }
@@ -262,7 +261,6 @@ export const v2vApi = {
         translate_lang: translateLang,
         speaker,
         emotion: emotion || null,
-        thinking_level: options?.thinkingLevel ?? null,
         use_search_grounding: options?.useSearchGrounding ?? false,
         force_reprocess: options?.forceReprocess ?? false,
       }),
