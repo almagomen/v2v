@@ -3,6 +3,7 @@ Transcripción STT con Whisper y procesamiento con diarización.
 """
 import contextlib
 import io
+import time
 from pathlib import Path
 from typing import Union, Tuple, Any, Optional
 
@@ -53,14 +54,21 @@ def transcribe_and_process(
     if segments is None:
         if media_path is None:
             raise ValueError("Se requiere media_path o segments.")
+        t0_whisper = time.perf_counter()
         whisper_model = get_whisper_model()
         segments = whisper_model.transcribe(str(media_path), verbose=None)
+        t_whisper = time.perf_counter() - t0_whisper
+        print(f"⏱️ [Etapa: Transcripción (Whisper)] Completada en {t_whisper:.1f}s")
 
+        t0_diarize = time.perf_counter()
         diarization_model = get_diarization_model()
         f_err = io.StringIO()
         with contextlib.redirect_stderr(f_err):
             diarize_segments = speaker_diarization(diarization_model, str(media_path))
+        t_diarize = time.perf_counter() - t0_diarize
+        print(f"⏱️ [Etapa: Diarización (Pyannote)] Completada en {t_diarize:.1f}s")
 
+        t0_group = time.perf_counter()
         result = process_audio(
             segments,
             diarize_segments,
@@ -68,6 +76,9 @@ def transcribe_and_process(
             max_duration=duration,
             max_gap=gap,
         )
+        t_group = time.perf_counter() - t0_group
+        total_stt = t_whisper + t_diarize + t_group
+        print(f"⏱️ [Etapa: STT + Diarización Total] {total_stt:.1f}s ({len(result)} segmentos generados)")
         return result, segments, diarize_segments
 
     raise ValueError("Pasando segments sin media_path no soportado aquí.")
@@ -108,11 +119,13 @@ def run_main(
 
     translated_result = result
     if translate:
+        t0_trans = time.perf_counter()
         translated_texts = translate_text_list(
             texts,
             target_lang=translate,
             source_lang=transcription.language,
         )
+        t_trans = time.perf_counter() - t0_trans
         if translated_texts:
             translated_result = []
             for (s, e), txt, orig in zip(times, translated_texts, result):
@@ -121,16 +134,21 @@ def run_main(
                 seg_dict["end"] = e
                 seg_dict["text"] = txt
                 translated_result.append(seg_dict)
+            print(f"⏱️ [Etapa: Traducción (Gemini)] Completada en {t_trans:.1f}s ({len(translated_texts)} segmentos)")
         else:
             print("⚠️ No se pudo traducir, usando texto original")
 
     try:
+        t0_title = time.perf_counter()
         fallback_summary = " ".join(t["text"] for t in (translated_result or result)[:12]) if (translated_result or result) else (title or "")
         output_name = generate_tiktok_title(
             url,
             translate if translate else transcription.language,
             fallback_text=fallback_summary,
         )
+        t_title = time.perf_counter() - t0_title
+        if output_name:
+            print(f"⏱️ [Etapa: Título Viral (Gemini)] Generado en {t_title:.1f}s: {output_name}")
     except Exception as e:
         print(f"⚠️ Error al generar título viral (IA): {e}")
         output_name = None

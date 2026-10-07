@@ -15,6 +15,9 @@ import {
   Sparkles,
   RefreshCw,
   Save,
+  Terminal,
+  ChevronDown,
+  Check,
 } from "lucide-react";
 import { Button, Switch, Label, Input } from "@openreel/ui";
 import {
@@ -214,11 +217,23 @@ export const ColabExportTab: React.FC = () => {
     catboxVideos,
     setCatboxVideos,
     getActiveGeminiModel,
+    exportLogs,
+    appendExportLog,
+    clearExportLogs,
   } = useColabExportStore();
 
   const [savedMetas, setSavedMetas] = useState<AutoSaveMetadata[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [isLogsOpen, setIsLogsOpen] = useState(false);
+  const [copiedLogs, setCopiedLogs] = useState(false);
+  const logsEndRef = React.useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (isLogsOpen && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [exportLogs, isLogsOpen]);
 
   // ── Viral Title states ────────────────────────────────────────
   const [customTitleInput, setCustomTitleInput] = useState<string>("");
@@ -470,6 +485,13 @@ export const ColabExportTab: React.FC = () => {
       return;
     }
 
+    clearExportLogs();
+    setIsLogsOpen(true);
+    const tExportStart = performance.now();
+    const rawName = jobContext.longName || project.name || "export";
+    const outName = rawName.replace(/^\d+[._\s]*/, "");
+
+    appendExportLog(`🎬 [Export Single] Iniciando exportación de "${outName}"...`);
     setStatus("uploading");
     setErrorMsg("");
     setCatboxUrl(null);
@@ -484,6 +506,8 @@ export const ColabExportTab: React.FC = () => {
     });
 
     try {
+      const tPrepStart = performance.now();
+      const tUploadStart = performance.now();
       const uploadedMap = await uploadPendingClips(
         analyzed,
         jobContext.jobId,
@@ -496,11 +520,14 @@ export const ColabExportTab: React.FC = () => {
           });
         },
       );
+      const tUploadSec = ((performance.now() - tUploadStart) / 1000).toFixed(1);
+      if (needUpload.length > 0) {
+        appendExportLog(`⏱️ [Etapa: Subida de Medios] ${needUpload.length} archivo(s) subidos en ${tUploadSec}s`);
+      } else {
+        appendExportLog(`⚡ [Medios] Activos listos en Colab (sin subida requerida)`);
+      }
 
       setStatus("rendering");
-      const rawName = jobContext.longName || project.name || "export";
-      const outName = rawName.replace(/^\d+[._\s]*/, "");
-
       setProgressData({
         progress: 60,
         currentStep: uploadToCatbox
@@ -511,7 +538,11 @@ export const ColabExportTab: React.FC = () => {
       });
 
       const clips = buildPayloadClips(analyzed, uploadedMap);
+      const tPrepSec = ((performance.now() - tPrepStart) / 1000).toFixed(1);
+      appendExportLog(`⏱️ [Etapa: Preparación] ${clips.length} clip(s) analizados en ${tPrepSec}s`);
 
+      appendExportLog(`🚀 [Etapa: Render Colab] Renderizando en Colab (GPU FFmpeg)...`);
+      const tRenderColabStart = performance.now();
       const result = await v2vApi.renderTimeline({
         job_id: jobContext.jobId,
         video_index: jobContext.videoIndex,
@@ -519,10 +550,11 @@ export const ColabExportTab: React.FC = () => {
         output_name: outName,
         upload_to_catbox: uploadToCatbox,
       });
+      const tRenderColabSec = ((performance.now() - tRenderColabStart) / 1000).toFixed(1);
 
       // Check if result is Catbox upload response
       if (uploadToCatbox && result && typeof result === "object" && "url" in result) {
-        const catboxResult = result as { url: string; filename: string };
+        const catboxResult = result as any;
         setCatboxUrl(catboxResult.url);
         setStatus("done");
         setProgressData({
@@ -530,6 +562,11 @@ export const ColabExportTab: React.FC = () => {
           currentStep: "¡Completado!",
           statusMsg: "¡Video subido a Catbox!",
         });
+        if (catboxResult.timings) {
+          appendExportLog(`⏱️ [Colab Backend] FFmpeg: ${catboxResult.timings.ffmpeg}s | Catbox: ${catboxResult.timings.catbox}s`);
+        }
+        appendExportLog(`⏱️ [Etapa: Render + Catbox] Completado en ${tRenderColabSec}s`);
+        appendExportLog(`🔗 Enlace Catbox: ${catboxResult.url}`);
       } else {
         downloadBlob(result as Blob, `${outName}.mp4`);
         setStatus("done");
@@ -538,12 +575,25 @@ export const ColabExportTab: React.FC = () => {
           currentStep: "¡Completado!",
           statusMsg: "¡Exportación completada!",
         });
+        const bTimings = (result as any)?.timings;
+        if (bTimings?.ffmpeg !== undefined) {
+          appendExportLog(`⏱️ [Colab Backend] FFmpeg: ${bTimings.ffmpeg}s ${bTimings.cached ? '(Caché)' : ''}`);
+        }
+        appendExportLog(`⏱️ [Etapa: Render Colab] Descarga MP4 completada en ${tRenderColabSec}s`);
       }
+
+      const tTotalSec = ((performance.now() - tExportStart) / 1000).toFixed(1);
+      appendExportLog("=".repeat(50));
+      appendExportLog(`🏁 RESUMEN EXPORTACIÓN VIDEO: ${outName}`);
+      appendExportLog(`• Tiempo total: ${tTotalSec}s`);
+      appendExportLog("=".repeat(50));
     } catch (e) {
       setStatus("error");
-      setErrorMsg(e instanceof Error ? e.message : "Error desconocido");
+      const err = e instanceof Error ? e.message : "Error desconocido";
+      setErrorMsg(err);
+      appendExportLog(`❌ Error en exportación: ${err}`);
     }
-  }, [analyzed, jobContext, project.name, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData]);
+  }, [analyzed, jobContext, project.name, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData, appendExportLog, clearExportLogs, needUpload.length]);
 
   // ── Batch export ─────────────────────────────────────────────
   const handleBatchExport = useCallback(async () => {
@@ -554,7 +604,12 @@ export const ColabExportTab: React.FC = () => {
       return;
     }
 
+    clearExportLogs();
+    setIsLogsOpen(true);
+    const tBatchStart = performance.now();
+
     const totalSelected = selected.length;
+    appendExportLog(`🚀 [Batch Export] Iniciando exportación de ${totalSelected} proyectos...`);
     setStatus("uploading");
     setErrorMsg("");
     setCatboxUrl(null);
@@ -577,6 +632,7 @@ export const ColabExportTab: React.FC = () => {
         const sp = selected[i];
         const currentNum = i + 1;
         const prepPct = Math.round((i / totalSelected) * 20);
+        const tProjStart = performance.now();
 
         setProgressData({
           progress: prepPct,
@@ -620,11 +676,15 @@ export const ColabExportTab: React.FC = () => {
           },
         );
 
+        const outName = ((ctx as any).longName || fullProject.name || sp.meta.projectName || "export").replace(/^\d+[._\s]*/, "");
+        const tProjSec = ((performance.now() - tProjStart) / 1000).toFixed(1);
+        appendExportLog(`📁 [${currentNum}/${totalSelected}] Preparado: "${outName}" (${tProjSec}s)`);
+
         renders.push({
           job_id: ctx.jobId,
           video_index: ctx.videoIndex,
           clips: buildPayloadClips(clips, uploadedMap),
-          output_name: ((ctx as any).longName || fullProject.name || sp.meta.projectName || "export").replace(/^\d+[._\s]*/, ""),
+          output_name: outName,
         });
       }
 
@@ -646,20 +706,34 @@ export const ColabExportTab: React.FC = () => {
           : `Renderizando ${renders.length} proyectos en Colab…`,
       });
 
-      // Polling activo de progreso al backend
+      appendExportLog(`🚀 [Batch Colab] Iniciando render paralelo de ${renders.length} videos en Colab...`);
+
+      // Polling activo de progreso y logs al backend
+      const seenBackendLogs = new Set<string>();
       progressInterval = setInterval(async () => {
         try {
           const p = await v2vApi.getBatchProgress(batchId);
-          if (p && p.total > 0) {
-            const scaled = Math.min(95, Math.max(20, Math.round(20 + (p.percentage * 0.75))));
-            useColabExportStore.getState().setProgressData({
-              progress: scaled,
-              currentStep: p.step || `Renderizando (${p.current}/${p.total})`,
-              currentVideoName: p.current_name || "",
-              currentIdx: p.current,
-              totalVideos: p.total,
-              statusMsg: p.step || `Renderizando ${p.current} de ${p.total}`,
-            });
+          if (p) {
+            if (p.logs && Array.isArray(p.logs)) {
+              for (const line of p.logs) {
+                if (!seenBackendLogs.has(line)) {
+                  seenBackendLogs.add(line);
+                  appendExportLog(line);
+                }
+              }
+            }
+
+            if (p.total > 0) {
+              const scaled = Math.min(95, Math.max(20, Math.round(20 + (p.percentage * 0.75))));
+              useColabExportStore.getState().setProgressData({
+                progress: scaled,
+                currentStep: p.step || `Renderizando (${p.current}/${p.total})`,
+                currentVideoName: p.current_name || "",
+                currentIdx: p.current,
+                totalVideos: p.total,
+                statusMsg: p.step || `Renderizando ${p.current} de ${p.total}`,
+              });
+            }
           }
         } catch {
           // ignore polling errors
@@ -680,7 +754,7 @@ export const ColabExportTab: React.FC = () => {
 
       // Check if result is Catbox upload response
       if (uploadToCatbox && result && typeof result === "object" && "videos" in result) {
-        const batchResult = result as { videos: CatboxVideoResult[] };
+        const batchResult = result as { videos: CatboxVideoResult[]; logs?: string[]; total_time?: number };
         setCatboxVideos(batchResult.videos);
         setStatus("done");
         setProgressData({
@@ -698,14 +772,26 @@ export const ColabExportTab: React.FC = () => {
           statusMsg: `¡${renders.length} videos exportados!`,
         });
       }
+
+      const tBatchTotalSec = ((performance.now() - tBatchStart) / 1000).toFixed(1);
+      const mins = Math.floor(parseFloat(tBatchTotalSec) / 60);
+      const secs = Math.floor(parseFloat(tBatchTotalSec) % 60);
+      const fmt = mins > 0 ? `${tBatchTotalSec}s (${mins}m ${secs}s)` : `${tBatchTotalSec}s`;
+      appendExportLog("=".repeat(50));
+      appendExportLog(`🏁 RESUMEN LOTE COMPLETO: ${renders.length} videos exportados`);
+      appendExportLog(`• Tiempo total del lote: ${fmt}`);
+      appendExportLog(`• Promedio por video: ${(parseFloat(tBatchTotalSec) / Math.max(1, renders.length)).toFixed(1)}s`);
+      appendExportLog("=".repeat(50));
     } catch (e) {
       if (progressInterval) {
         clearInterval(progressInterval);
       }
       setStatus("error");
-      setErrorMsg(e instanceof Error ? e.message : "Error desconocido");
+      const err = e instanceof Error ? e.message : "Error desconocido";
+      setErrorMsg(err);
+      appendExportLog(`❌ Error en exportación por lotes: ${err}`);
     }
-  }, [savedProjects, folderRefs, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData]);
+  }, [savedProjects, folderRefs, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData, appendExportLog, clearExportLogs]);
 
   const isRunning = status === "uploading" || status === "rendering";
 
@@ -1059,6 +1145,55 @@ export const ColabExportTab: React.FC = () => {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Visor de Logs de Exportación */}
+      {exportLogs.length > 0 && (
+        <div className="space-y-1.5 border border-border/60 rounded-lg p-2.5 bg-background-tertiary/40">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setIsLogsOpen(!isLogsOpen)}
+              className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors font-medium select-none"
+            >
+              <Terminal size={13} className="text-primary" />
+              <span>Logs de exportación</span>
+              <span className="text-[10px] text-text-muted font-mono bg-background-secondary px-1.5 py-0.5 rounded border border-border/40">
+                {exportLogs.length}
+              </span>
+              <ChevronDown
+                size={14}
+                className={`transition-transform duration-200 text-text-muted ${
+                  isLogsOpen ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+
+            <button
+              type="button"
+              className="text-text-muted hover:text-text-primary transition-colors p-1 rounded hover:bg-background-tertiary"
+              title="Copiar logs de exportación"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(exportLogs.join("\n"));
+                  setCopiedLogs(true);
+                  setTimeout(() => setCopiedLogs(false), 2000);
+                } catch {
+                  // ignore
+                }
+              }}
+            >
+              {copiedLogs ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+            </button>
+          </div>
+
+          {isLogsOpen && (
+            <pre className="mt-2 p-2.5 rounded-lg bg-background-tertiary font-mono text-[10px] min-h-[90px] max-h-[280px] overflow-auto whitespace-pre border border-border/50 select-text leading-relaxed">
+              {exportLogs.join("\n")}
+              <div ref={logsEndRef} />
+            </pre>
+          )}
         </div>
       )}
 

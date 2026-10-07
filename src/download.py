@@ -4,6 +4,7 @@ Los activos generados se registran en v2v_assets.json de la carpeta del job.
 """
 
 import io
+import time
 import contextlib
 from pathlib import Path
 
@@ -207,6 +208,7 @@ def download_video(
     if cookies_file and cookies_file.exists():
         opts["cookiefile"] = str(cookies_file)
 
+    t_start_dl = time.perf_counter()
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
         title = info.get("title", "video")
@@ -220,6 +222,10 @@ def download_video(
         print_codecs(info)
         ydl.download([url])
         media_path = Path(media)
+
+    dl_elapsed = time.perf_counter() - t_start_dl
+    info["_download_time"] = dl_elapsed
+    print(f"⏱️ [Etapa: Descarga] Completada en {dl_elapsed:.1f}s")
 
     # --- Registro determinista en manifiesto ---
     folder = media_path.parent
@@ -291,8 +297,10 @@ def separate_vocals(
     vocals_path = output_dir / "vocals.wav"
     no_vocals_path = output_dir / "no_vocals.wav"
 
+    t_start_sep = time.perf_counter()
     if vocals_path.exists() and no_vocals_path.exists():
-        print("✅ Audio de voz ya existe.")
+        sep_elapsed = time.perf_counter() - t_start_sep
+        print(f"♻️ Audio de voz ya existe en caché ({sep_elapsed:.2f}s).")
         # Registrar aunque ya existan (recuperación de caché)
         update_assets(output_dir, vocals=str(vocals_path), no_vocals=str(no_vocals_path))
         return vocals_path, no_vocals_path
@@ -335,7 +343,8 @@ def separate_vocals(
 
         torchaudio.save(str(no_vocals_path), instrumental, sr)
 
-    print("🎧 Audio separado correctamente")
+    sep_elapsed = time.perf_counter() - t_start_sep
+    print(f"⏱️ [Etapa: Separación Stems (BS-RoFormer)] Completada en {sep_elapsed:.1f}s")
 
     # --- Registro determinista en manifiesto ---
     update_assets(

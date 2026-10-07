@@ -187,6 +187,8 @@ export interface BatchProgressResponse {
   percentage: number;
   step: string;
   current_name: string;
+  logs?: string[];
+  total_time?: number;
 }
 
 export interface CatboxUploadResult {
@@ -194,6 +196,13 @@ export interface CatboxUploadResult {
   url: string;
   filename: string;
   expires_in: string;
+  timings?: {
+    ffmpeg?: number;
+    catbox?: number;
+    total?: number;
+  };
+  log?: string;
+  logs?: string[];
 }
 
 export interface BatchCatboxResult {
@@ -593,7 +602,18 @@ export const v2vApi = {
       return readJsonOrThrow<CatboxUploadResult>(res);
     }
     
-    return res.blob();
+    const blob = await res.blob();
+    const ffTime = res.headers.get("X-Render-Time-Ffmpeg");
+    const totTime = res.headers.get("X-Render-Time-Total");
+    const isCached = res.headers.get("X-Render-Cached") === "1";
+    if (ffTime || totTime) {
+      (blob as any).timings = {
+        ffmpeg: ffTime ? parseFloat(ffTime) : undefined,
+        total: totTime ? parseFloat(totTime) : undefined,
+        cached: isCached,
+      };
+    }
+    return blob;
   },
 
   /**

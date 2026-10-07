@@ -113,6 +113,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [showFishApiKey, setShowFishApiKey] = React.useState(false);
   const [showGoogleApiKey, setShowGoogleApiKey] = React.useState(false);
   const [isLogsOpen, setIsLogsOpen] = React.useState(false);
+  const [logsTab, setLogsTab] = React.useState<"process" | "export">("process");
+  const exportLogs = useColabExportStore((s) => s.exportLogs);
   const [titleDisplayModes, setTitleDisplayModes] = React.useState<Record<string, number>>({});
   const [copiedUrlKey, setCopiedUrlKey] = React.useState<string | null>(null);
 
@@ -820,36 +822,95 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           </div>
         )}
 
-        {log && (
+        {(log || Object.keys(urlLogs).length > 0 || (exportLogs && exportLogs.length > 0)) && (
           <div className="space-y-1.5 border border-border/60 rounded-lg p-2 bg-background-tertiary/40">
-            <button
-              type="button"
-              onClick={() => setIsLogsOpen(!isLogsOpen)}
-              className="w-full flex items-center justify-between text-[11px] text-text-muted hover:text-text-primary transition-colors font-medium select-none"
-            >
-              <div className="flex items-center gap-1.5">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setIsLogsOpen(!isLogsOpen)}
+                className="flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text-primary transition-colors font-medium select-none"
+              >
                 <Terminal size={12} className="text-text-muted" />
-                <span>Logs del proceso</span>
-              </div>
-              <ChevronDown
-                size={14}
-                className={`transition-transform duration-200 text-text-muted ${
-                  isLogsOpen ? "rotate-180" : ""
-                }`}
-              />
-            </button>
-            {isLogsOpen && (
-              <pre className="mt-1.5 p-2.5 rounded-lg bg-background-tertiary font-mono text-[10px] min-h-[90px] max-h-[360px] overflow-auto resize-y whitespace-pre border border-border/50 select-text">
-                {(() => {
-                  let out = log || "";
+                <span>Logs {logsTab === "process" ? "del proceso" : "de exportación"}</span>
+                <ChevronDown
+                  size={14}
+                  className={`transition-transform duration-200 text-text-muted ${
+                    isLogsOpen ? "rotate-180" : ""
+                  }`}
+                />
+              </button>
 
-                  // Import-only: mostramos lo que se registra en `urlLogs` (sin [STATE:...]).
+              {isLogsOpen && (
+                <div className="flex items-center gap-1">
+                  {exportLogs && exportLogs.length > 0 && (
+                    <div className="flex items-center rounded border border-border bg-background-secondary p-0.5 text-[9px]">
+                      <button
+                        type="button"
+                        onClick={() => setLogsTab("process")}
+                        className={`px-1.5 py-0.5 rounded transition-colors ${
+                          logsTab === "process"
+                            ? "bg-primary text-primary-foreground font-semibold"
+                            : "text-text-muted hover:text-text-primary"
+                        }`}
+                      >
+                        Inferencia
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLogsTab("export")}
+                        className={`px-1.5 py-0.5 rounded transition-colors ${
+                          logsTab === "export"
+                            ? "bg-primary text-primary-foreground font-semibold"
+                            : "text-text-muted hover:text-text-primary"
+                        }`}
+                      >
+                        Exportación ({exportLogs.length})
+                      </button>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    className="text-text-muted hover:text-text-primary transition-colors p-1 rounded hover:bg-background-tertiary"
+                    title="Copiar logs al portapapeles"
+                    onClick={async () => {
+                      const textToCopy =
+                        logsTab === "export"
+                          ? exportLogs.join("\n")
+                          : `${log || ""}${urlItems
+                              .map((it: any) => (it.url ? urlLogs[it.url] || "" : ""))
+                              .filter(Boolean)
+                              .join("\n")}`;
+                      try {
+                        await navigator.clipboard.writeText(textToCopy);
+                        toast.success("Logs copiados", "El contenido de los logs se copió al portapapeles.");
+                      } catch {
+                        toast.error("Error", "No se pudo copiar los logs.");
+                      }
+                    }}
+                  >
+                    <Copy size={12} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {isLogsOpen && (
+              <pre className="mt-1.5 p-2.5 rounded-lg bg-background-tertiary font-mono text-[10px] min-h-[90px] max-h-[360px] overflow-auto resize-y whitespace-pre border border-border/50 select-text leading-relaxed">
+                {(() => {
+                  if (logsTab === "export") {
+                    return exportLogs && exportLogs.length > 0
+                      ? exportLogs.join("\n")
+                      : "Sin logs de exportación aún.";
+                  }
+
+                  let out = log || "";
                   const importText = urlItems
                     .map((it: any) => (it.url ? urlLogs[it.url] || "" : ""))
                     .filter(Boolean)
                     .join("\n");
 
-                  return `${out}${importText ? `\n${importText}` : ""}`;
+                  return `${out}${importText ? `\n${importText}` : ""}` || "Sin logs aún.";
                 })()}
               </pre>
             )}

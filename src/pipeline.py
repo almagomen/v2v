@@ -4,6 +4,7 @@ Pipeline: cola de videos, transcripción, división en secuencias.
 
 import contextlib
 import io
+import time
 import pickle
 from pathlib import Path
 from typing import Union, Optional
@@ -31,6 +32,7 @@ def process_video_queue(
     """
     results = []
     for idx, u in enumerate(urls, 1):
+        t_url_pipeline_start = time.perf_counter()
         display_idx = current_idx if current_idx is not None else idx
         display_total = total_count if total_count is not None else len(urls)
         print(f"⚙️ Procesando: {u}  [{display_idx}/{display_total}]")
@@ -90,7 +92,8 @@ def process_video_queue(
                                 }
                             )
                             found_in_cache = True
-                            print(f"♻️ Caché detectada por URL: {output_name}")
+                            t_cache = time.perf_counter() - t_url_pipeline_start
+                            print(f"♻️ Caché detectada por URL: {output_name} ({t_cache:.2f}s)")
                             break
                     except Exception:
                         continue
@@ -120,6 +123,7 @@ def process_video_queue(
                     if not isinstance(info, dict):
                         info = {}
 
+                t_cache = time.perf_counter() - t_url_pipeline_start
                 results.append(
                     {
                         "path": path,
@@ -134,7 +138,7 @@ def process_video_queue(
                         "cached": True,
                     }
                 )
-                print(f"✅ {output_name}")
+                print(f"✅ {output_name} (cargado de caché en {t_cache:.2f}s)")
                 continue
             # -----------------------
 
@@ -153,8 +157,6 @@ def process_video_queue(
             translated_result, output_name, result, transcription, diarization = (
                 run_main(path, u, translate=translate_lang, title=safe_title)
             )
-            if translate_lang:
-                print("🔤 Traduciendo texto con Gemini...")
 
             with open(output_file, "wb") as f:
                 pickle.dump(
@@ -170,7 +172,8 @@ def process_video_queue(
                     f,
                 )
 
-            print(f"✅ {output_name}  🚩  {len(translated_result)} segmentos")
+            t_pipeline_part = time.perf_counter() - t_url_pipeline_start
+            print(f"✅ {output_name}  🚩  {len(translated_result)} segmentos (Pre-TTS: {t_pipeline_part:.1f}s)")
 
             if on_stage:
                 try:

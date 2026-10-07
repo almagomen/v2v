@@ -1,6 +1,7 @@
 """Pipeline service - runs v2v pipeline and reports progress."""
 import io
 import sys
+import time
 import threading
 from pathlib import Path
 
@@ -106,7 +107,10 @@ def _run_pipeline(
                 "url": url,
             }
 
+        t_all_start = time.perf_counter()
         for idx, u in enumerate(urls):
+            t_link_start = time.perf_counter()
+            print(f"\n🚀 [Link {idx + 1}/{len(urls)}] Iniciando procesamiento: {u}")
             res_list = process_video_queue(
                 [u],
                 translate_lang=translate_lang,
@@ -157,11 +161,22 @@ def _run_pipeline(
                 videos_data.append(build_entry(idx, path, output_name, segments, assets, r.get("url", "")))
                 update_job(job_id, videos=videos_data, progress=(idx + 0.5) / len(urls))
                 set_url_state(r.get("url", ""), "done", f"Listo (cache): {output_name}", index=idx, output_name=output_name, original_title=orig_title)
+                
+                t_link_total = time.perf_counter() - t_link_start
+                print("=" * 60)
+                print(f"⏱️ RESUMEN DE TIEMPOS [Link {idx + 1}/{len(urls)}]: {output_name}")
+                print(f"• Estado: ♻️ Cargado completamente de caché")
+                print(f"🏁 TIEMPO TOTAL LINK: {t_link_total:.2f}s")
+                print("=" * 60)
                 continue
 
             # ── Nuevo proceso ─────────────────────────────────────────────────────
             update_job(job_id, status="tts", message=f"Clonando voz: {path.stem} [{idx + 1}/{len(urls)}]")
+            
+            t0_split = time.perf_counter()
             split_all_sequences([path])
+            t_split = time.perf_counter() - t0_split
+            print(f"⏱️ [Etapa: Corte de Secuencias] Completado en {t_split:.1f}s")
 
             # ESTANDARIZACIÓN: Sobre-escribimos el tag 'speaker' devuelto por la diarizacion 
             # (ej: SPEAKER_00) con el nombre standard del diccionario preasignado para el pipeline.
@@ -190,11 +205,13 @@ def _run_pipeline(
                         print(f"⚠️ No se pudo actualizar result.pkl con emoción: {pkl_err}")
 
             print("⚡ TTS:")
+            t0_tts = time.perf_counter()
             paths_es, _times, _freq = clone_voice_segments(
                 path, texts, lang, speaker_audio, model_tts,
                 slowdown_range=(0.5, 0.8), stretch_target_ratio=0.85,
             )
-            print("\n")
+            t_tts = time.perf_counter() - t0_tts
+            print(f"⏱️ [Etapa: Síntesis TTS (Fish Audio)] Completada en {t_tts:.1f}s ({len(paths_es)} audios generados)\n")
 
             if not paths_es:
                 set_url_state(r.get("url", ""), "error", "Error en TTS")
@@ -207,6 +224,27 @@ def _run_pipeline(
             videos_data.append(build_entry(idx, path, output_name, segments, assets, r.get("url", "")))
             update_job(job_id, videos=videos_data, progress=(idx + 1.0) / len(urls))
             set_url_state(r.get("url", ""), "done", f"Listo: {output_name}", index=idx, output_name=output_name, original_title=orig_title)
+
+            t_link_total = time.perf_counter() - t_link_start
+            mins = int(t_link_total // 60)
+            secs = int(t_link_total % 60)
+            fmt_total = f"{t_link_total:.1f}s ({mins}m {secs:02d}s)" if mins > 0 else f"{t_link_total:.1f}s"
+            print("=" * 60)
+            print(f"⏱️ RESUMEN DE TIEMPOS [Link {idx + 1}/{len(urls)}]: {output_name}")
+            print(f"• ✂️ Corte de secuencias: {t_split:.1f}s")
+            print(f"• 🗣️ Síntesis TTS: {t_tts:.1f}s")
+            print(f"🏁 TIEMPO TOTAL LINK: {fmt_total}")
+            print("=" * 60 + "\n")
+
+        if len(urls) > 1 and videos_data:
+            t_total_all = time.perf_counter() - t_all_start
+            mins_all = int(t_total_all // 60)
+            secs_all = int(t_total_all % 60)
+            fmt_all = f"{t_total_all:.1f}s ({mins_all}m {secs_all:02d}s)" if mins_all > 0 else f"{t_total_all:.1f}s"
+            print("=" * 60)
+            print(f"🏁 RESUMEN TOTAL DE LA COLA: {len(videos_data)} de {len(urls)} videos completados")
+            print(f"🏁 TIEMPO TOTAL ACUMULADO: {fmt_all}")
+            print("=" * 60 + "\n")
 
         if not videos_data:
             update_job(job_id, status="error", message="No se pudo procesar ningún video.", error="No results")

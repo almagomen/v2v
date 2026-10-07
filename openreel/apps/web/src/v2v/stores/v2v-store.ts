@@ -683,6 +683,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                   // v.output_name: título completo CON hashtags (para el render final en Colab)
                   const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
                   const urlForLog = v.url || "";
+                  const importStartTime = performance.now();
                   let workingProject = createEmptyProject(folder, {
                     width: baseProjectSettings.width,
                     height: baseProjectSettings.height,
@@ -972,7 +973,11 @@ export const useV2VStore = create<V2VState>((set, get) => {
                     }
                     
                     get().setImportStatus(key, "done");
-                    if (urlForLog) get().appendUrlLog(urlForLog, `✅ Importación completada por activos.`);
+                    const importElapsedSec = ((performance.now() - importStartTime) / 1000).toFixed(1);
+                    if (urlForLog) {
+                      get().appendUrlLog(urlForLog, `⏱️ [Etapa: Importación Timeline] Completada en ${importElapsedSec}s (${filesToImport.length} archivos).`);
+                      get().appendUrlLog(urlForLog, `✅ Proyecto "${folder}" listo para editar en OpenReel.`);
+                    }
 
                     const activeProject = useProjectStore.getState().project;
                     if (activeProject.name === folder) {

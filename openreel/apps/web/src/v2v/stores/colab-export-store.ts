@@ -61,6 +61,10 @@ export interface ColabExportState {
   catboxUrl: string | null;
   catboxVideos: CatboxVideoResult[];
 
+  exportLogs: string[];
+  appendExportLog: (msg: string) => void;
+  clearExportLogs: () => void;
+
   setIsBatch: (isBatch: boolean) => void;
   setUploadToCatbox: (upload: boolean) => void;
   toggleProjectId: (id: string) => void;
@@ -105,6 +109,13 @@ export const useColabExportStore = create<ColabExportState>((set, get) => ({
   totalVideos: 0,
   catboxUrl: null,
   catboxVideos: [],
+  exportLogs: [],
+
+  appendExportLog: (msg) =>
+    set((state) => ({
+      exportLogs: [...state.exportLogs, msg],
+    })),
+  clearExportLogs: () => set({ exportLogs: [] }),
 
   setIsBatch: (isBatch) => {
     savePersistedSettings({ isBatch });
