@@ -194,6 +194,7 @@ def generate_tiktok_title(
     model_name: Optional[str] = None,
     fallback_text: Optional[str] = None,
     use_search_grounding: bool = False,
+    print_full_prompt: bool = False,
 ) -> str | None:
     """
     Genera un título viral para TikTok con emojis y hashtags.
@@ -218,6 +219,35 @@ Requisitos:
 
 IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones adicionales."""
 
+    if fallback_text and fallback_text.strip():
+        call_input = f"{base_prompt}\n\nTranscripción / Diálogos del video:\n{fallback_text.strip()}"
+        source_label = "Diálogos / Transcripción"
+    else:
+        # Entrada multimedia nativa para Interactions API con URI de video de YouTube
+        call_input = [
+            {
+                "type": "text",
+                "text": base_prompt,
+            },
+            {
+                "type": "video",
+                "mime_type": "video/mp4",
+                "uri": youtube_url or "",
+            },
+        ]
+        source_label = f"Video Multimodal YouTube ({youtube_url})"
+
+    if print_full_prompt:
+        print("\n" + "=" * 60, flush=True)
+        print(f"📄 [PROMPT COMPLETO PARA TÍTULO VIRAL] (Fuente: {source_label}):", flush=True)
+        print("-" * 60, flush=True)
+        if isinstance(call_input, list):
+            import json
+            print(json.dumps(call_input, indent=2, ensure_ascii=False), flush=True)
+        else:
+            print(call_input, flush=True)
+        print("=" * 60 + "\n", flush=True)
+
     models_to_try = [model_name.strip()] if (model_name and model_name.strip()) else [DEFAULT_TITLE_MODEL]
     for m in POPULAR_GEMINI_MODELS:
         if m not in models_to_try:
@@ -233,20 +263,31 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
             client = genai.Client(api_key=key)
 
-            # Generación de título usando exclusivamente la nueva Interactions API
-            input_text = f"{base_prompt}\n\nTranscripción / Diálogos del video:\n{fallback_text.strip()}" if (fallback_text and fallback_text.strip()) else f"{base_prompt}\n\nURL del video: {youtube_url or ''}"
-
             t_start = time.perf_counter()
             try:
+                # Si el modelo es Gemma (solo texto) y call_input es lista multimedia, convertir a texto simple
+                actual_input = call_input
+                if is_gemma and isinstance(call_input, list):
+                    actual_input = f"{base_prompt}\n\nURL del video: {youtube_url or ''}"
+
                 call_kwargs = {
                     "model": model,
-                    "input": input_text,
+                    "input": actual_input,
                 }
                 if use_search_grounding and not is_gemma:
                     call_kwargs["tools"] = [{"type": "google_search"}]
 
                 interaction = client.interactions.create(**call_kwargs)
+
+                # Extraer texto directo o recorrer steps si no viene en output_text
                 raw_title = getattr(interaction, "output_text", None) or ""
+                if not raw_title and hasattr(interaction, "steps"):
+                    for step in getattr(interaction, "steps", []):
+                        if getattr(step, "type", None) == "model_output" and getattr(step, "content", None):
+                            for part in step.content:
+                                if getattr(part, "type", None) == "text":
+                                    raw_title += getattr(part, "text", "")
+
                 duration = time.perf_counter() - t_start
 
                 if raw_title:
