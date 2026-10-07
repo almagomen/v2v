@@ -100,7 +100,6 @@ def launch_async_title_generation(
     url: str,
     target_lang: str,
     fallback_text: Optional[str] = None,
-    use_search_grounding: bool = False,
 ) -> concurrent.futures.Future:
     """Lanza la inferencia de título viral en segundo plano sin congelar el hilo principal."""
     return _TITLE_EXECUTOR.submit(
@@ -108,7 +107,6 @@ def launch_async_title_generation(
         youtube_url=url,
         target_lang=target_lang,
         fallback_text=fallback_text,
-        use_search_grounding=use_search_grounding,
     )
 
 
@@ -145,7 +143,6 @@ def run_main(
     url: str,
     translate: Union[bool, str] = False,
     title: Optional[str] = None,
-    use_search_grounding: bool = False,
 ) -> Tuple[list[dict], str, list[dict], Any, Any, dict]:
     """
     Pipeline principal: transcribe, opcionalmente traduce, genera título.
@@ -177,7 +174,6 @@ def run_main(
             texts,
             target_lang=translate,
             source_lang=transcription.language,
-            use_search_grounding=use_search_grounding,
         )
         t_trans = time.perf_counter() - t0_trans
         if translated_texts:
@@ -199,7 +195,6 @@ def run_main(
         url=url,
         target_lang=translate if translate else transcription.language,
         fallback_text=fallback_summary,
-        use_search_grounding=use_search_grounding,
     )
     output_name, t_title = resolve_final_title(title_fut, fallback_title=default_title)
 

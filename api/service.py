@@ -119,7 +119,6 @@ def _run_pipeline(
                 on_stage=lambda u, st, msg: set_url_state(u, st, msg),
                 current_idx=idx + 1,
                 total_count=len(urls),
-                use_search_grounding=use_search_grounding,
                 force_reprocess=force_reprocess,
             )
 

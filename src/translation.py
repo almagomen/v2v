@@ -62,7 +62,6 @@ def translate_text_list(
     target_lang: str,
     source_lang: str = "en",
     model_name: Optional[str] = None,
-    use_search_grounding: bool = False,
     print_full_prompt: bool = False,
 ) -> list[str] | None:
     """
@@ -122,9 +121,8 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
         keys_to_attempt = list(available_keys)
         for k_idx, key in enumerate(keys_to_attempt):
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
-            opt_tag = " [google_search]" if use_search_grounding else ""
 
-            print(f"🌐 [Traducción] Probando '{model}'{opt_tag} (Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag})...", flush=True)
+            print(f"🌐 [Traducción] Probando '{model}' (Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag})...", flush=True)
             t_start = time.perf_counter()
 
             try:
@@ -135,8 +133,6 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
                     "model": model,
                     "input": prompt,
                 }
-                if use_search_grounding and not is_gemma:
-                    call_kwargs["tools"] = [{"type": "google_search"}]
                 if not is_gemma:
                     call_kwargs["response_format"] = [{"type": "text", "mime_type": "application/json"}]
 
@@ -193,12 +189,11 @@ def generate_tiktok_title(
     target_lang: str = "es",
     model_name: Optional[str] = None,
     fallback_text: Optional[str] = None,
-    use_search_grounding: bool = False,
     print_full_prompt: bool = False,
 ) -> str | None:
     """
     Genera un título viral para TikTok con emojis y hashtags.
-    Prioriza el diálogo transcrito directo (latencia ~1s). Soporta búsqueda web.
+    Usa exclusivamente el conocimiento del modelo a partir del diálogo transcrito o video.
     """
     available_keys = get_google_api_keys()
     if not available_keys:
@@ -274,20 +269,9 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
                     "model": model,
                     "input": actual_input,
                 }
-                if use_search_grounding and not is_gemma:
-                    call_kwargs["tools"] = [{"type": "google_search"}]
 
                 interaction = client.interactions.create(**call_kwargs)
-
-                # Extraer texto directo o recorrer steps si no viene en output_text
                 raw_title = getattr(interaction, "output_text", None) or ""
-                if not raw_title and hasattr(interaction, "steps"):
-                    for step in getattr(interaction, "steps", []):
-                        if getattr(step, "type", None) == "model_output" and getattr(step, "content", None):
-                            for part in step.content:
-                                if getattr(part, "type", None) == "text":
-                                    raw_title += getattr(part, "text", "")
-
                 duration = time.perf_counter() - t_start
 
                 if raw_title:
