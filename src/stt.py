@@ -98,6 +98,8 @@ def run_main(
     url: str,
     translate: Union[bool, str] = False,
     title: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    use_search_grounding: bool = False,
 ) -> Tuple[list[dict], str, list[dict], Any, Any, dict]:
     """
     Pipeline principal: transcribe, opcionalmente traduce, genera título.
@@ -129,6 +131,8 @@ def run_main(
             texts,
             target_lang=translate,
             source_lang=transcription.language,
+            thinking_level=thinking_level,
+            use_search_grounding=use_search_grounding,
         )
         t_trans = time.perf_counter() - t0_trans
         if translated_texts:
@@ -151,6 +155,8 @@ def run_main(
             url,
             translate if translate else transcription.language,
             fallback_text=fallback_summary,
+            thinking_level=thinking_level,
+            use_search_grounding=use_search_grounding,
         )
         t_title = time.perf_counter() - t0_title
         if output_name:

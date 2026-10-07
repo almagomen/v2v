@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings, Eye, EyeOff, ChevronDown, Terminal, Copy, Check } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings, Eye, EyeOff, ChevronDown, Terminal, Copy, Check, Zap, Search, RefreshCw } from "lucide-react";
 import {
   ScrollArea,
   Button,
@@ -108,6 +108,9 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [translationModel, setTranslationModel] = React.useState<string>("gemini-flash-latest");
   const [customTranslationModel, setCustomTranslationModel] = React.useState<string>("");
   const [initialEmotion, setInitialEmotion] = React.useState<string>(DEFAULT_EMOTION_TAG);
+  const [thinkingMinimal, setThinkingMinimal] = React.useState<boolean>(true);
+  const [useSearchGrounding, setUseSearchGrounding] = React.useState<boolean>(false);
+  const [forceReprocess, setForceReprocess] = React.useState<boolean>(false);
   const [showTokenSettings, setShowTokenSettings] = React.useState(false);
   const [isSavingTokens, setIsSavingTokens] = React.useState(false);
   const [showFishApiKey, setShowFishApiKey] = React.useState(false);
@@ -261,17 +264,22 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       return;
     }
 
-    // Identificar URLs nuevas que no estén ya en urlItems
-    const currentUrls = new Set(urlItems.map(it => it.url));
-    const newUrls = normalized.filter(u => !currentUrls.has(u));
-
-    if (newUrls.length === 0) {
-      toast.info("Sin URLs nuevas", "Todas las URLs ya han sido procesadas o están en cola.");
-      return;
+    let urlsToProcess = normalized;
+    if (!forceReprocess) {
+      const currentUrls = new Set(urlItems.map((it) => it.url));
+      const newUrls = normalized.filter((u) => !currentUrls.has(u));
+      if (newUrls.length > 0) {
+        urlsToProcess = newUrls;
+      } else {
+        toast.info(
+          "URL ya procesada",
+          "Esta URL ya fue procesada previamente. Marca la casilla 'Re-inferir (nueva versión)' para procesarla de nuevo creando un proyecto nuevo (_v2, _v3) sin sobrescribir el original."
+        );
+        return;
+      }
     }
 
     const signature = normalized.map((u: string) => encodeURIComponent(u)).join("|");
-    // Si la firma es igual, es probable que solo estemos re-arrancando o recuperando
     const keepItems = true; 
 
     useV2VStore.getState().clearJobRunState({ keepImports: true, keepItems });
@@ -282,10 +290,15 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     setJobPhase("downloading");
     try {
       const res = await v2vApi.processUrls(
-        newUrls,
+        urlsToProcess,
         translateLang === "None" ? null : translateLang,
         speaker,
-        initialEmotion === "none" ? null : initialEmotion
+        initialEmotion === "none" ? null : initialEmotion,
+        {
+          thinkingLevel: thinkingMinimal ? "minimal" : null,
+          useSearchGrounding: useSearchGrounding,
+          forceReprocess: forceReprocess,
+        }
       );
       setJobId(res.job_id);
       startPolling(res.job_id);
@@ -293,7 +306,22 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       setError(e instanceof Error ? e.message : "Error al iniciar");
       setIsProcessing(false);
     }
-  }, [urls, translateLang, speaker, initialEmotion, urlItems, startPolling, setJobId, setError, setLog, setIsProcessing, setJobPhase]);
+  }, [
+    urls,
+    urlItems,
+    translateLang,
+    speaker,
+    initialEmotion,
+    thinkingMinimal,
+    useSearchGrounding,
+    forceReprocess,
+    startPolling,
+    setJobId,
+    setError,
+    setLog,
+    setIsProcessing,
+    setJobPhase,
+  ]);
 
   const handleVideoSelect = useCallback(
     async (idx: number) => {
@@ -635,6 +663,70 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 </optgroup>
               ))}
             </select>
+          </div>
+        </div>
+
+        {/* Opciones modulares de inferencia */}
+        <div className="bg-background-tertiary/60 border border-border/80 rounded-lg p-2.5 space-y-2">
+          <div className="text-[10px] font-semibold text-text-muted flex items-center justify-between">
+            <span>Opciones de Inferencia (Gemini 2026)</span>
+            <span className="text-[9px] text-primary/80 font-mono">Combinables</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 pt-0.5">
+            {/* Thinking Minimal */}
+            <label
+              className="flex items-center gap-2 p-1 rounded-md hover:bg-background/50 cursor-pointer select-none text-[11px] text-text-secondary transition-colors"
+              title="Traduce de inmediato sin pausas de razonamiento interno extenso de Gemini (latencia mínima)."
+            >
+              <input
+                type="checkbox"
+                checked={thinkingMinimal}
+                onChange={(e) => setThinkingMinimal(e.target.checked)}
+                disabled={isProcessing}
+                className="rounded border-border text-primary focus:ring-0 focus:ring-offset-0 cursor-pointer w-3.5 h-3.5 accent-primary"
+              />
+              <span className="flex items-center gap-1 truncate">
+                <Zap size={12} className="text-yellow-400 shrink-0" />
+                <span>Thinking Minimal</span>
+              </span>
+            </label>
+
+            {/* Google Search Grounding */}
+            <label
+              className="flex items-center gap-2 p-1 rounded-md hover:bg-background/50 cursor-pointer select-none text-[11px] text-text-secondary transition-colors"
+              title="Permite que Gemini consulte Google Search en vivo para nombres propios, términos técnicos o referencias culturales."
+            >
+              <input
+                type="checkbox"
+                checked={useSearchGrounding}
+                onChange={(e) => setUseSearchGrounding(e.target.checked)}
+                disabled={isProcessing}
+                className="rounded border-border text-primary focus:ring-0 focus:ring-offset-0 cursor-pointer w-3.5 h-3.5 accent-primary"
+              />
+              <span className="flex items-center gap-1 truncate">
+                <Search size={12} className="text-blue-400 shrink-0" />
+                <span>Search Grounding</span>
+              </span>
+            </label>
+
+            {/* Re-inferir sin sobrescribir */}
+            <label
+              className="flex items-center gap-2 p-1 rounded-md hover:bg-background/50 cursor-pointer select-none text-[11px] text-text-secondary transition-colors"
+              title="Permite volver a inferir una URL ya procesada creando una carpeta/proyecto nuevo (_v2, _v3) sin alterar el original."
+            >
+              <input
+                type="checkbox"
+                checked={forceReprocess}
+                onChange={(e) => setForceReprocess(e.target.checked)}
+                disabled={isProcessing}
+                className="rounded border-border text-primary focus:ring-0 focus:ring-offset-0 cursor-pointer w-3.5 h-3.5 accent-primary"
+              />
+              <span className="flex items-center gap-1 truncate">
+                <RefreshCw size={12} className="text-emerald-400 shrink-0" />
+                <span>Re-inferir (+Versión)</span>
+              </span>
+            </label>
           </div>
         </div>
 

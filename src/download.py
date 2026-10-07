@@ -173,6 +173,7 @@ def download_video(
     output_dir: Path | None = None,
     resolution: int | None = None,
     language: str | None = None,
+    force_new: bool = False,
 ) -> tuple[Path, dict]:
     """
     Descarga un video de YouTube con yt-dlp (keepvideo=True).
@@ -212,11 +213,24 @@ def download_video(
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
         title = info.get("title", "video")
-        safe_name = to_safe_name(title)
-        
+        base_name = to_safe_name(title)
+
+        target_name = base_name
+        if force_new and (output_dir / base_name).exists():
+            counter = 2
+            candidate = f"{base_name}_v{counter}"
+            while (output_dir / candidate).exists():
+                counter += 1
+                candidate = f"{base_name}_v{counter}"
+            target_name = candidate
+            print(f"📁 [Versión Nueva] Creando carpeta no destructiva: {target_name} (proyecto original protegido)")
+
+        info["safe_name"] = target_name
+        info["output_name"] = target_name
+
         # Ajustar outtmpl de forma compatible con yt-dlp (espera un dict o objeto con .get)
-        ydl.params["outtmpl"] = {"default": str(output_dir / safe_name / f"{safe_name}.%(ext)s")}
-        
+        ydl.params["outtmpl"] = {"default": str(output_dir / target_name / f"{target_name}.%(ext)s")}
+
         media = ydl.prepare_filename(info)
         print(f"✅ {title}") # Mostramos título real en log
         print_codecs(info)
@@ -356,9 +370,9 @@ def separate_vocals(
     return vocals_path, no_vocals_path
 
 
-def yt(url: str, vocals_separation: bool = True) -> tuple[Path, dict]:
+def yt(url: str, vocals_separation: bool = True, force_new: bool = False) -> tuple[Path, dict]:
     """Descarga video y opcionalmente separa voces. Returns (path, info)."""
-    path, info = download_video(url)
+    path, info = download_video(url, force_new=force_new)
     if vocals_separation:
         t0_sep = time.perf_counter()
         separate_vocals(path)

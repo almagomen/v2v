@@ -13,6 +13,15 @@ class ProcessUrlsRequest(BaseModel):
     emotion: Optional[str] = Field(
         None, description="Emoción inicial opcional para anteponer a los segmentos (ej: [excited])"
     )
+    thinking_level: Optional[str] = Field(
+        None, description="Nivel de razonamiento Gemini: minimal, low, medium, high o null"
+    )
+    use_search_grounding: Optional[bool] = Field(
+        False, description="Activa búsqueda de Google para grounding de términos"
+    )
+    force_reprocess: Optional[bool] = Field(
+        False, description="Forzar re-inferencia sin usar caché existente creando nueva versión de proyecto"
+    )
 
 
 class ProcessUrlsResponse(BaseModel):

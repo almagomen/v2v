@@ -25,10 +25,13 @@ def process_video_queue(
     on_stage: Optional[callable] = None,
     current_idx: Optional[int] = None,
     total_count: Optional[int] = None,
+    thinking_level: Optional[str] = None,
+    use_search_grounding: bool = False,
+    force_reprocess: bool = False,
 ) -> list[dict]:
     """
     Procesa una cola de videos: descarga, transcribe y traduce.
-    Si ya existe un procesamiento previo completo, lo carga de caché.
+    Si ya existe un procesamiento previo completo, lo carga de caché a menos que force_reprocess=True.
     """
     results = []
     for idx, u in enumerate(urls, 1):
@@ -48,65 +51,63 @@ def process_video_queue(
         try:
             # --- Pre-verificación de Caché por URL ---
             found_in_cache = False
-            # Escanear carpetas en Queue para ver si alguna tiene este link
-            for folder in QUEUE_DIR.glob("*"):
-                pkl_file = folder / "result.pkl"
-                if pkl_file.exists() and pkl_file.is_file():
-                    try:
-                        with open(pkl_file, "rb") as f:
-                            # Carga de datos procesados (Estructura: translated_result, output_name, url, result, transcription, diarization, info)
-                            (
-                                translated_result,
-                                output_name,
-                                cached_url,
-                                result,
-                                transcription,
-                                diarization,
-                                info,
-                                *extra,
-                            ) = pickle.load(f)
+            if not force_reprocess:
+                # Escanear carpetas en Queue para ver si alguna tiene este link
+                for folder in QUEUE_DIR.glob("*"):
+                    pkl_file = folder / "result.pkl"
+                    if pkl_file.exists() and pkl_file.is_file():
+                        try:
+                            with open(pkl_file, "rb") as f:
+                                (
+                                    translated_result,
+                                    output_name,
+                                    cached_url,
+                                    result,
+                                    transcription,
+                                    diarization,
+                                    info,
+                                    *extra,
+                                ) = pickle.load(f)
 
-                        # Solo adoptar si la URL coincide exactamente
-                        if cached_url != u:
+                            if cached_url != u:
+                                continue
+
+                            if not isinstance(info, dict):
+                                info = {}
+
+                            video_files = [p for p in folder.glob("*.mp4") if not p.name.startswith("_")]
+                            if video_files:
+                                path = video_files[0]
+                                results.append(
+                                    {
+                                        "path": path,
+                                        "output_name": output_name,
+                                        "url": u,
+                                        "info": info,
+                                        "texts": translated_result,
+                                        "src_lang": getattr(transcription, "language", "es") if transcription else "es",
+                                        "result": result,
+                                        "transcription": transcription,
+                                        "diarization": diarization,
+                                        "cached": True,
+                                    }
+                                )
+                                found_in_cache = True
+                                t_cache = time.perf_counter() - t_url_pipeline_start
+                                print(f"♻️ Caché detectada por URL: {output_name} ({t_cache:.2f}s)")
+                                break
+                        except Exception:
                             continue
-
-                        if not isinstance(info, dict):
-                            info = {}
-
-                        # Encontrar el archivo de video original (.mp4) dentro de la carpeta
-                        video_files = [p for p in folder.glob("*.mp4") if not p.name.startswith("_")]
-                        if video_files:
-                            path = video_files[0]
-                            results.append(
-                                {
-                                    "path": path,
-                                    "output_name": output_name,
-                                    "url": u,
-                                    "info": info,
-                                    "texts": translated_result,
-                                    "src_lang": getattr(transcription, "language", "es") if transcription else "es",
-                                    "result": result,
-                                    "transcription": transcription,
-                                    "diarization": diarization,
-                                    "cached": True,
-                                }
-                            )
-                            found_in_cache = True
-                            t_cache = time.perf_counter() - t_url_pipeline_start
-                            print(f"♻️ Caché detectada por URL: {output_name} ({t_cache:.2f}s)")
-                            break
-                    except Exception:
-                        continue
 
             if found_in_cache:
                 continue
             # ---------------------------------------
 
-            path, info = yt(u, vocals_separation=True)
+            path, info = yt(u, vocals_separation=True, force_new=force_reprocess)
             output_file = path.with_name("result.pkl")
 
-            # --- Lógica de Caché por Path (en caso de que el URL no se detectó antes pero el archivo sí existe) ---
-            if output_file.exists():
+            # --- Lógica de Caché por Path ---
+            if not force_reprocess and output_file.exists():
                 print(f"♻️ Cargando caché: {path.name}")
                 with open(output_file, "rb") as f:
                     # Carga directa de la nueva estructura de 7 campos
@@ -153,8 +154,15 @@ def process_video_queue(
                 except Exception:
                     pass
             # Uso del título original para la visualización en el frontend
-            safe_title = info.get("title") if isinstance(info, dict) else None
-            run_res = run_main(path, u, translate=translate_lang, title=safe_title)
+            safe_title = info.get("output_name") or info.get("safe_name") or (info.get("title") if isinstance(info, dict) else None)
+            run_res = run_main(
+                path,
+                u,
+                translate=translate_lang,
+                title=safe_title,
+                thinking_level=thinking_level,
+                use_search_grounding=use_search_grounding,
+            )
             translated_result = run_res[0]
             output_name = run_res[1]
             result = run_res[2]

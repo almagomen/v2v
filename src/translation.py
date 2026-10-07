@@ -85,10 +85,13 @@ def translate_text_list(
     target_lang: str,
     source_lang: str = "en",
     model_name: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    use_search_grounding: bool = False,
 ) -> list[str] | None:
     """
     Traduce una lista de frases a un idioma objetivo usando Gemini con fallback robusto
     y rotación automática de API keys ante cuotas o errores 503/429.
+    Soporta thinking_level configurable ('minimal', 'low', 'medium', 'high') y Google Search grounding.
     """
     if not list_sentences:
         return []
@@ -157,7 +160,10 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
 
         for k_idx, key in enumerate(keys_to_attempt):
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
-            print(f"🌐 [Traducción] Probando '{model}' (API Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag})...", flush=True)
+            opt_tag = f" [thinking: {thinking_level}]" if thinking_level else ""
+            if use_search_grounding:
+                opt_tag += " [google_search]"
+            print(f"🌐 [Traducción] Probando '{model}'{opt_tag} (API Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag})...", flush=True)
             t_call_start = time.perf_counter()
             try:
                 t0_init = time.perf_counter()
@@ -165,21 +171,20 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
                 t_init_dur = time.perf_counter() - t0_init
 
                 is_gemma = "gemma" in model.lower()
-                config = {
-                    "response_mime_type": "application/json",
-                    "max_output_tokens": 65536,
-                } if not is_gemma else {
+                gen_config = {
                     "max_output_tokens": 65536,
                 }
+                if thinking_level:
+                    gen_config["thinking_level"] = thinking_level
 
                 t0_api = time.perf_counter()
                 interaction_kwargs = {
                     "model": model,
                     "input": prompt,
-                    "generation_config": {
-                        "max_output_tokens": 65536,
-                    },
+                    "generation_config": gen_config,
                 }
+                if use_search_grounding:
+                    interaction_kwargs["tools"] = [{"type": "google_search"}]
                 if not is_gemma:
                     interaction_kwargs["response_format"] = [
                         {"type": "text", "mime_type": "application/json"}
@@ -188,17 +193,11 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
                 try:
                     interaction = client.interactions.create(**interaction_kwargs)
                 except Exception as e_rf:
-                    # Si el modelo específico o versión no acepta response_format, reintentar solo con input y generation_config
-                    if not is_gemma and "response_format" in str(e_rf).lower():
-                        interaction = client.interactions.create(
-                            model=model,
-                            input=prompt,
-                            generation_config={
-                                "max_output_tokens": 65536,
-                            },
-                        )
-                    else:
-                        raise e_rf
+                    # Si falla por response_format o tools, reintentar de forma tolerante
+                    fallback_kwargs = {"model": model, "input": prompt, "generation_config": gen_config}
+                    if use_search_grounding and "response_format" in str(e_rf).lower():
+                        fallback_kwargs["tools"] = [{"type": "google_search"}]
+                    interaction = client.interactions.create(**fallback_kwargs)
 
                 raw_text = getattr(interaction, "output_text", None)
                 if not raw_text and hasattr(interaction, "steps") and interaction.steps:
@@ -254,11 +253,14 @@ def generate_tiktok_title(
     target_lang: str = "es",
     model_name: Optional[str] = None,
     fallback_text: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    use_search_grounding: bool = False,
 ) -> str | None:
     """
     Genera un título viral para TikTok con emojis y hashtags.
     Soporta:
       - Prioridad a texto transcrito directo (latencia ultra baja: 1-2 segundos).
+      - Configuración de thinking_level y Google Search Grounding.
       - Fallback secundario a YouTube URI multimodal solo si no hay transcripción.
       - Cascada de modelos y rotación automática de API keys con logs detallados.
     """
@@ -313,14 +315,22 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
             if fallback_text and fallback_text.strip():
                 t_call_start = time.perf_counter()
                 try:
-                    text_prompt = f"{base_prompt}\n\nTranscripción / Diálogos del video:\n{fallback_text.strip()[:3500]}"
-                    interaction = client.interactions.create(
-                        model=model,
-                        input=text_prompt,
-                        generation_config={
-                            "max_output_tokens": 2048,
-                        },
-                    )
+                    text_prompt = f"{base_prompt}\n\nTranscripción / Diálogos del video:\n{fallback_text.strip()}"
+                    gen_cfg = {
+                        "max_output_tokens": 2048,
+                    }
+                    if thinking_level:
+                        gen_cfg["thinking_level"] = thinking_level
+
+                    call_kwargs = {
+                        "model": model,
+                        "input": text_prompt,
+                        "generation_config": gen_cfg,
+                    }
+                    if use_search_grounding and "gemma" not in model.lower():
+                        call_kwargs["tools"] = [{"type": "google_search"}]
+
+                    interaction = client.interactions.create(**call_kwargs)
                     raw_title = getattr(interaction, "output_text", None)
                     if not raw_title and hasattr(interaction, "steps") and interaction.steps:
                         for step in reversed(interaction.steps):

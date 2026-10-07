@@ -28,7 +28,15 @@ def process_urls(req: ProcessUrlsRequest):
         )
 
     translate = None if req.translate_lang in ("None", "", None) else req.translate_lang
-    job_id = start_process(urls, translate, req.speaker, emotion=req.emotion)
+    job_id = start_process(
+        urls,
+        translate,
+        req.speaker,
+        emotion=req.emotion,
+        thinking_level=req.thinking_level,
+        use_search_grounding=bool(req.use_search_grounding),
+        force_reprocess=bool(req.force_reprocess),
+    )
     return ProcessUrlsResponse(job_id=job_id, message="Procesamiento iniciado")
 
 

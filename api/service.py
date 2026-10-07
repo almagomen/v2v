@@ -55,6 +55,9 @@ def _run_pipeline(
     translate_lang: str | None,
     speaker_name: str,
     emotion: str | None = None,
+    thinking_level: str | None = None,
+    use_search_grounding: bool = False,
+    force_reprocess: bool = False,
 ) -> None:
     """Run pipeline with stdout redirected to job log."""
     import pickle
@@ -117,6 +120,9 @@ def _run_pipeline(
                 on_stage=lambda u, st, msg: set_url_state(u, st, msg),
                 current_idx=idx + 1,
                 total_count=len(urls),
+                thinking_level=thinking_level,
+                use_search_grounding=use_search_grounding,
+                force_reprocess=force_reprocess,
             )
 
             if not res_list:
@@ -293,12 +299,24 @@ def start_process(
     translate_lang: str | None,
     speaker_name: str,
     emotion: str | None = None,
+    thinking_level: str | None = None,
+    use_search_grounding: bool = False,
+    force_reprocess: bool = False,
 ) -> str:
     """Start pipeline in background, return job_id."""
     job_id = create_job()
     thread = threading.Thread(
         target=_run_pipeline,
-        args=(job_id, urls, translate_lang, speaker_name, emotion),
+        args=(
+            job_id,
+            urls,
+            translate_lang,
+            speaker_name,
+            emotion,
+            thinking_level,
+            use_search_grounding,
+            force_reprocess,
+        ),
     )
     thread.start()
     return job_id
