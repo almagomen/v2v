@@ -115,10 +115,9 @@ def launch_async_title_generation(
 def resolve_final_title(
     title_future: Optional[concurrent.futures.Future],
     fallback_title: str,
-    timeout: float = 30.0,
 ) -> tuple[str, float]:
     """
-    Espera la resolución del título viral de forma segura.
+    Espera la resolución del título viral de forma segura sin timeout forzado.
     Garantiza que el título definitivo (sea el inferido por IA o el fallback original)
     esté siempre definido antes de que el tag de la URL pase a completado.
     """
@@ -127,15 +126,13 @@ def resolve_final_title(
         return fallback_title, 0.0
 
     try:
-        raw_title = title_future.result(timeout=timeout)
+        raw_title = title_future.result()
         elapsed = time.perf_counter() - t0
         if raw_title and str(raw_title).strip():
             clean = "".join(c for c in str(raw_title) if c not in r'\/:*?"<>|').replace('\n', ' ').strip()
             if clean:
                 print(f"⏱️ [Etapa: Título Viral (Gemini)] Generado en {elapsed:.1f}s: {clean}", flush=True)
                 return clean, elapsed
-    except concurrent.futures.TimeoutError:
-        print(f"⚠️ [Título Viral] Tiempo límite de espera agotado ({timeout}s). Usando título original: '{fallback_title}'", flush=True)
     except Exception as e:
         print(f"⚠️ [Título Viral] Error en generación: {e}. Usando título original: '{fallback_title}'", flush=True)
 
@@ -204,7 +201,7 @@ def run_main(
         fallback_text=fallback_summary,
         use_search_grounding=use_search_grounding,
     )
-    output_name, t_title = resolve_final_title(title_fut, fallback_title=default_title, timeout=30.0)
+    output_name, t_title = resolve_final_title(title_fut, fallback_title=default_title)
 
     stt_timings = {
         "whisper": t_whisper,
