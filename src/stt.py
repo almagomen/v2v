@@ -79,7 +79,7 @@ def transcribe_and_process(
         t_group = time.perf_counter() - t0_group
         total_stt = t_whisper + t_diarize + t_group
         print(f"⏱️ [Etapa: STT + Diarización Total] {total_stt:.1f}s ({len(result)} segmentos generados)")
-        return result, segments, diarize_segments
+        return result, segments, diarize_segments, {"whisper": t_whisper, "diarization": t_diarize}
 
     raise ValueError("Pasando segments sin media_path no soportado aquí.")
 
@@ -98,10 +98,10 @@ def run_main(
     url: str,
     translate: Union[bool, str] = False,
     title: Optional[str] = None,
-) -> Tuple[list[dict], str, list[dict], Any, Any]:
+) -> Tuple[list[dict], str, list[dict], Any, Any, dict]:
     """
     Pipeline principal: transcribe, opcionalmente traduce, genera título.
-    Returns: (translated_result, output_name, result, transcription, diarization)
+    Returns: (translated_result, output_name, result, transcription, diarization, stt_timings)
     """
     media_path = Path(media)
     vocals_path = media_path.with_name("vocals.wav")
@@ -109,7 +109,11 @@ def run_main(
     if not vocals_path.exists():
         raise FileNotFoundError(f"No se encontró el archivo de voces: {vocals_path}")
 
-    result, transcription, diarization = transcribe_and_process(vocals_path)
+    res_tuple = transcribe_and_process(vocals_path)
+    result, transcription, diarization = res_tuple[0], res_tuple[1], res_tuple[2]
+    step_timings = res_tuple[3] if len(res_tuple) > 3 else {}
+    t_whisper = step_timings.get("whisper", 0.0)
+    t_diarize = step_timings.get("diarization", 0.0)
 
     times = []
     texts = []
@@ -118,6 +122,7 @@ def run_main(
         texts.append(r["text"])
 
     translated_result = result
+    t_trans = 0.0
     if translate:
         t0_trans = time.perf_counter()
         translated_texts = translate_text_list(
@@ -138,6 +143,7 @@ def run_main(
         else:
             print("⚠️ No se pudo traducir, usando texto original")
 
+    t_title = 0.0
     try:
         t0_title = time.perf_counter()
         fallback_summary = " ".join(t["text"] for t in (translated_result or result)[:12]) if (translated_result or result) else (title or "")
@@ -161,4 +167,10 @@ def run_main(
         # Fallback al título original de YouTube proporcionado por pipeline.py
         output_name = title or media_path.stem
 
-    return translated_result, output_name, result, transcription, diarization
+    stt_timings = {
+        "whisper": t_whisper,
+        "diarization": t_diarize,
+        "translation": t_trans,
+        "title": t_title,
+    }
+    return translated_result, output_name, result, transcription, diarization, stt_timings

@@ -154,9 +154,13 @@ def process_video_queue(
                     pass
             # Uso del título original para la visualización en el frontend
             safe_title = info.get("title") if isinstance(info, dict) else None
-            translated_result, output_name, result, transcription, diarization = (
-                run_main(path, u, translate=translate_lang, title=safe_title)
-            )
+            run_res = run_main(path, u, translate=translate_lang, title=safe_title)
+            translated_result = run_res[0]
+            output_name = run_res[1]
+            result = run_res[2]
+            transcription = run_res[3]
+            diarization = run_res[4]
+            stt_timings = run_res[5] if len(run_res) > 5 else {}
 
             with open(output_file, "wb") as f:
                 pickle.dump(
@@ -172,8 +176,16 @@ def process_video_queue(
                     f,
                 )
 
-            t_pipeline_part = time.perf_counter() - t_url_pipeline_start
-            print(f"✅ {output_name}  🚩  {len(translated_result)} segmentos (Pre-TTS: {t_pipeline_part:.1f}s)")
+            timings = {
+                "download": info.get("_download_time", 0.0) if isinstance(info, dict) else 0.0,
+                "stems": info.get("_stems_time", 0.0) if isinstance(info, dict) else 0.0,
+                "whisper": stt_timings.get("whisper", 0.0),
+                "diarization": stt_timings.get("diarization", 0.0),
+                "translation": stt_timings.get("translation", 0.0),
+                "title": stt_timings.get("title", 0.0),
+            }
+
+            print(f"✅ Transcripción y adaptación completadas: {len(translated_result)} segmentos listos para TTS")
 
             if on_stage:
                 try:
@@ -192,6 +204,7 @@ def process_video_queue(
                     "transcription": transcription,
                     "diarization": diarization,
                     "cached": False,
+                    "timings": timings,
                 }
             )
         except Exception as e:

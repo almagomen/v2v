@@ -229,10 +229,31 @@ def _run_pipeline(
             mins = int(t_link_total // 60)
             secs = int(t_link_total % 60)
             fmt_total = f"{t_link_total:.1f}s ({mins}m {secs:02d}s)" if mins > 0 else f"{t_link_total:.1f}s"
+
+            link_timings = r.get("timings", {})
+            t_dl = link_timings.get("download", 0.0)
+            t_stems = link_timings.get("stems", 0.0)
+            t_whisper = link_timings.get("whisper", 0.0)
+            t_diar = link_timings.get("diarization", 0.0)
+            t_trans = link_timings.get("translation", 0.0)
+            t_title = link_timings.get("title", 0.0)
+
             print("=" * 60)
             print(f"⏱️ RESUMEN DE TIEMPOS [Link {idx + 1}/{len(urls)}]: {output_name}")
+            if t_dl > 0:
+                print(f"• 📥 Descarga: {t_dl:.1f}s")
+            if t_stems > 0:
+                print(f"• 🎵 Separación Stems (BS-RoFormer): {t_stems:.1f}s")
+            if t_whisper > 0:
+                print(f"• 📝 Transcripción (Whisper): {t_whisper:.1f}s")
+            if t_diar > 0:
+                print(f"• 👥 Diarización (Pyannote): {t_diar:.1f}s")
+            if t_trans > 0:
+                print(f"• 🌐 Traducción (Gemini): {t_trans:.1f}s ({len(texts)} segmentos)")
+            if t_title > 0:
+                print(f"• ✨ Título Viral (Gemini): {t_title:.1f}s")
             print(f"• ✂️ Corte de secuencias: {t_split:.1f}s")
-            print(f"• 🗣️ Síntesis TTS: {t_tts:.1f}s")
+            print(f"• 🗣️ Síntesis TTS (Fish Audio): {t_tts:.1f}s ({len(paths_es)} audios)")
             print(f"🏁 TIEMPO TOTAL LINK: {fmt_total}")
             print("=" * 60 + "\n")
 

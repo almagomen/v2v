@@ -29,6 +29,48 @@ def _build_atempo_filter(tempo: float) -> str:
     return ",".join(factors)
 
 
+import subprocess
+import tempfile
+import os
+
+
+def _adjust_audio_duration_ffmpeg(
+    audio: Any,
+    filter_str: str,
+    sample_rate: int,
+    target_duration_samples: int,
+) -> Any:
+    """Ajusta el tempo del tensor de audio usando FFmpeg de forma nativa y robusta."""
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f_in, \
+         tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f_out:
+        in_path = f_in.name
+        out_path = f_out.name
+
+    try:
+        torchaudio.save(in_path, audio, sample_rate=sample_rate)
+        cmd = [
+            "ffmpeg", "-y", "-v", "error",
+            "-i", in_path,
+            "-filter:a", filter_str,
+            out_path,
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 44:
+            adjusted, _ = torchaudio.load(out_path)
+            if adjusted.shape[-1] > target_duration_samples:
+                return adjusted[:, :target_duration_samples]
+            return adjusted
+        else:
+            raise RuntimeError(res.stderr.strip() or "FFmpeg falló al procesar el audio")
+    finally:
+        for p in (in_path, out_path):
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+
+
 def adjust_audio_duration(
     audio: Any,
     target_duration_samples: int,
@@ -37,7 +79,7 @@ def adjust_audio_duration(
     max_tempo: float = 4.0,
 ) -> Any:
     """
-    Ajusta la duración del audio usando cambio de tempo.
+    Ajusta la duración del audio usando cambio de tempo (time-stretching sin alterar tono).
     """
     if audio is None or audio.shape[-1] == 0 or target_duration_samples <= 0:
         return audio
@@ -45,13 +87,29 @@ def adjust_audio_duration(
     tempo = audio.shape[-1] / target_duration_samples
     safe_tempo = max(min(tempo, max_tempo), min_tempo)
 
+    # Si la diferencia es imperceptible (<1%), solo recortar si excede
+    if abs(safe_tempo - 1.0) < 0.01:
+        if audio.shape[-1] > target_duration_samples:
+            return audio[:, :target_duration_samples]
+        return audio
+
+    filter_str = _build_atempo_filter(safe_tempo)
+
+    # 1. Intentar torchaudio.io.AudioEffector si está disponible en la versión instalada
     try:
-        filter_str = _build_atempo_filter(safe_tempo)
-        effector = torchaudio.io.AudioEffector(filter_str)
-        adjusted = effector.apply(audio.T, sample_rate).T
-        if adjusted.shape[-1] > target_duration_samples:
-            return adjusted[:, :target_duration_samples]
-        return adjusted
+        import torchaudio.io
+        if hasattr(torchaudio.io, "AudioEffector"):
+            effector = torchaudio.io.AudioEffector(filter_str)
+            adjusted = effector.apply(audio.T, sample_rate).T
+            if adjusted.shape[-1] > target_duration_samples:
+                return adjusted[:, :target_duration_samples]
+            return adjusted
+    except Exception:
+        pass
+
+    # 2. Método estándar y confiable con FFmpeg nativo
+    try:
+        return _adjust_audio_duration_ffmpeg(audio, filter_str, sample_rate, target_duration_samples)
     except Exception as e:
         print(f"⚠️ Error al ajustar tempo ({safe_tempo:.2f}x): {e}")
         if audio.shape[-1] > target_duration_samples:

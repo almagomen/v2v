@@ -360,5 +360,7 @@ def yt(url: str, vocals_separation: bool = True) -> tuple[Path, dict]:
     """Descarga video y opcionalmente separa voces. Returns (path, info)."""
     path, info = download_video(url)
     if vocals_separation:
+        t0_sep = time.perf_counter()
         separate_vocals(path)
+        info["_stems_time"] = time.perf_counter() - t0_sep
     return path, info
