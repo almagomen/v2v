@@ -524,7 +524,7 @@ def _build_ffmpeg_cmd(
 
     filter_complex = ";".join(filter_parts)
 
-    cmd = ["ffmpeg", "-y", "-v", "error"]
+    cmd = ["ffmpeg", "-y", "-v", "error", "-threads", "0"]
     cmd += inputs
     cmd += ["-filter_complex", filter_complex]
 
@@ -550,11 +550,11 @@ def _build_ffmpeg_cmd(
                 "-profile:v",
                 "high",
                 "-preset",
-                "p7",  # Máximo análisis de calidad
+                "p4",  # Preset equilibrado y rápido de alta calidad (Turing NVENC)
                 "-rc",
                 "vbr",
                 "-cq",
-                "28",  # Calidad constante balanceada para peso
+                "26",
                 "-b:v",
                 f"{target_k}k",
                 "-maxrate:v",
@@ -562,7 +562,7 @@ def _build_ffmpeg_cmd(
                 "-bufsize:v",
                 f"{buf_k}k",
                 "-multipass",
-                "2",  # Análisis detallado multipass fullres (0=disabled, 1=qres, 2=fullres)
+                "1",  # Multipass quarter-res optimizado (evita cuello de botella de p7 fullres)
                 "-spatial-aq",
                 "1",  # Adaptive Quantization espacial
                 "-temporal-aq",

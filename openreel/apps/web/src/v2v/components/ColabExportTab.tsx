@@ -15,9 +15,6 @@ import {
   Sparkles,
   RefreshCw,
   Save,
-  Terminal,
-  ChevronDown,
-  Check,
 } from "lucide-react";
 import { Button, Switch, Label, Input } from "@openreel/ui";
 import {
@@ -225,15 +222,6 @@ export const ColabExportTab: React.FC = () => {
   const [savedMetas, setSavedMetas] = useState<AutoSaveMetadata[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [isLogsOpen, setIsLogsOpen] = useState(false);
-  const [copiedLogs, setCopiedLogs] = useState(false);
-  const logsEndRef = React.useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (isLogsOpen && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [exportLogs, isLogsOpen]);
 
   // ── Viral Title states ────────────────────────────────────────
   const [customTitleInput, setCustomTitleInput] = useState<string>("");
@@ -1213,54 +1201,6 @@ export const ColabExportTab: React.FC = () => {
         </div>
       )}
 
-      {/* Visor de Logs de Exportación */}
-      {exportLogs.length > 0 && (
-        <div className="space-y-1.5 border border-border/60 rounded-lg p-2.5 bg-background-tertiary/40">
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setIsLogsOpen(!isLogsOpen)}
-              className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors font-medium select-none"
-            >
-              <Terminal size={13} className="text-primary" />
-              <span>Logs de exportación</span>
-              <span className="text-[10px] text-text-muted font-mono bg-background-secondary px-1.5 py-0.5 rounded border border-border/40">
-                {exportLogs.length}
-              </span>
-              <ChevronDown
-                size={14}
-                className={`transition-transform duration-200 text-text-muted ${
-                  isLogsOpen ? "rotate-180" : ""
-                }`}
-              />
-            </button>
-
-            <button
-              type="button"
-              className="text-text-muted hover:text-text-primary transition-colors p-1 rounded hover:bg-background-tertiary"
-              title="Copiar logs de exportación"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(exportLogs.join("\n"));
-                  setCopiedLogs(true);
-                  setTimeout(() => setCopiedLogs(false), 2000);
-                } catch {
-                  // ignore
-                }
-              }}
-            >
-              {copiedLogs ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
-            </button>
-          </div>
-
-          {isLogsOpen && (
-            <pre className="mt-2 p-2.5 rounded-lg bg-background-tertiary font-mono text-[10px] min-h-[90px] max-h-[280px] overflow-auto whitespace-pre border border-border/50 select-text leading-relaxed">
-              {exportLogs.join("\n")}
-              <div ref={logsEndRef} />
-            </pre>
-          )}
-        </div>
-      )}
 
       {/* Action button */}
       <Button
