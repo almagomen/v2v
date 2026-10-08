@@ -541,7 +541,7 @@ export const ColabExportTab: React.FC = () => {
       const tPrepSec = ((performance.now() - tPrepStart) / 1000).toFixed(1);
       appendExportLog(`⏱️ [Etapa: Preparación] ${clips.length} clip(s) analizados en ${tPrepSec}s`);
 
-      appendExportLog(`🚀 [Etapa: Render Colab] Renderizando en Colab (GPU FFmpeg)...`);
+      appendExportLog(`🚀 [Etapa: Render Colab] Procesando timeline en Colab...`);
       const tRenderColabStart = performance.now();
       const result = await v2vApi.renderTimeline({
         job_id: jobContext.jobId,
@@ -563,7 +563,8 @@ export const ColabExportTab: React.FC = () => {
           statusMsg: "¡Video subido a Catbox!",
         });
         if (catboxResult.timings) {
-          appendExportLog(`⏱️ [Colab Backend] FFmpeg: ${catboxResult.timings.ffmpeg}s | Catbox: ${catboxResult.timings.catbox}s`);
+          const mode = catboxResult.mode || catboxResult.timings?.mode || "FFmpeg";
+          appendExportLog(`⏱️ [Colab Backend] Modo: ${mode} | FFmpeg: ${catboxResult.timings.ffmpeg}s | Catbox: ${catboxResult.timings.catbox}s`);
         }
         appendExportLog(`⏱️ [Etapa: Render + Catbox] Completado en ${tRenderColabSec}s`);
         appendExportLog(`🔗 Enlace Catbox: ${catboxResult.url}`);
@@ -577,7 +578,8 @@ export const ColabExportTab: React.FC = () => {
         });
         const bTimings = (result as any)?.timings;
         if (bTimings?.ffmpeg !== undefined) {
-          appendExportLog(`⏱️ [Colab Backend] FFmpeg: ${bTimings.ffmpeg}s ${bTimings.cached ? '(Caché)' : ''}`);
+          const modeLabel = bTimings.mode ? ` [${bTimings.mode}]` : "";
+          appendExportLog(`⏱️ [Colab Backend] Modo:${modeLabel} | FFmpeg: ${bTimings.ffmpeg}s ${bTimings.cached ? '(Caché)' : ''}`);
         }
         appendExportLog(`⏱️ [Etapa: Render Colab] Descarga MP4 completada en ${tRenderColabSec}s`);
       }

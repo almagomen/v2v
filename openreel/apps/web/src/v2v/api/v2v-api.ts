@@ -610,11 +610,13 @@ export const v2vApi = {
     const ffTime = res.headers.get("X-Render-Time-Ffmpeg");
     const totTime = res.headers.get("X-Render-Time-Total");
     const isCached = res.headers.get("X-Render-Cached") === "1";
-    if (ffTime || totTime) {
+    const mode = res.headers.get("X-Render-Mode") || undefined;
+    if (ffTime || totTime || mode) {
       (blob as any).timings = {
         ffmpeg: ffTime ? parseFloat(ffTime) : undefined,
         total: totTime ? parseFloat(totTime) : undefined,
         cached: isCached,
+        mode: mode,
       };
     }
     return blob;

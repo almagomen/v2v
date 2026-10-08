@@ -250,13 +250,6 @@ def download_video(
     if cookies_file and cookies_file.exists():
         print(f"🍪 [yt-dlp] Usando cookies de YouTube: {cookies_file}", flush=True)
         opts["cookiefile"] = str(cookies_file)
-    else:
-        # Fallback sin cookies: cliente android/mweb para evitar bloqueo de bot ("Sign in to confirm you’re not a bot")
-        opts["extractor_args"] = {
-            "youtube": {
-                "player_client": ["android", "mweb", "web"],
-            }
-        }
 
     t_start_dl = time.perf_counter()
     with YoutubeDL(opts) as ydl:

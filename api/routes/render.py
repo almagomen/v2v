@@ -707,7 +707,7 @@ async def render_timeline(req: RenderTimelineRequest):
         and _is_render_cache_valid(folder, candidate, req.clips, req.job_id, req.video_index)
     )
 
-    t_ff = 0.0
+    render_mode = "Caché"
     if cache_valid and candidate:
         t_cache = time.perf_counter() - t_render_start
         print(f"⏩ [Caché] Timeline sin cambios para {req.output_name}. Reutilizando {candidate.name} ({candidate.stat().st_size / (1024*1024):.1f} MB en {t_cache:.2f}s)")
@@ -730,8 +730,14 @@ async def render_timeline(req: RenderTimelineRequest):
             )
         _save_render_cache_hash(output_path, req.clips)
         t_ff = time.perf_counter() - t0_ff
-        mode_str = "Stream Copy (sin re-encode)" if "-c:v copy" in " ".join(cmd) else f"NVENC GPU {1 if GPU_COUNT >= 2 else 0}"
-        print(f"⏱️ [Etapa: FFmpeg Render] {mode_str} completado en {t_ff:.1f}s ({output_path.name})")
+        cmd_str = " ".join(cmd)
+        if "-c:v copy" in cmd_str:
+            render_mode = "Stream Copy (sin re-encode)"
+        elif "h264_nvenc" in cmd_str:
+            render_mode = f"GPU {1 if GPU_COUNT >= 2 else 0} (NVENC)"
+        else:
+            render_mode = "CPU (libx264)"
+        print(f"⏱️ [Etapa: FFmpeg Render] {render_mode} completado en {t_ff:.1f}s ({output_path.name})")
 
     t_cb = 0.0
     catbox_url = ""
@@ -754,6 +760,7 @@ async def render_timeline(req: RenderTimelineRequest):
     total_fmt = f"{t_total:.1f}s ({mins}m {secs:02d}s)" if mins > 0 else f"{t_total:.1f}s"
     print("=" * 60)
     print(f"🏁 RESUMEN EXPORTACIÓN VIDEO: {req.output_name}")
+    print(f"• Modo Render: {render_mode}")
     print(f"• Renderizado FFmpeg: {t_ff:.1f}s" if not cache_valid else "• Renderizado: 0.0s (Caché)")
     if req.upload_to_catbox:
         print(f"• Subida Catbox: {t_cb:.1f}s")
@@ -766,12 +773,14 @@ async def render_timeline(req: RenderTimelineRequest):
             "url": catbox_url,
             "filename": f"{safe_name}.mp4",
             "expires_in": "24h",
+            "mode": render_mode,
             "timings": {
                 "ffmpeg": round(t_ff, 2),
                 "catbox": round(t_cb, 2),
                 "total": round(t_total, 2),
+                "mode": render_mode,
             },
-            "log": f"FFmpeg: {t_ff:.1f}s | Catbox: {t_cb:.1f}s | Total: {total_fmt}",
+            "log": f"Modo: {render_mode} | FFmpeg: {t_ff:.1f}s | Catbox: {t_cb:.1f}s | Total: {total_fmt}",
         }
 
     return FileResponse(
@@ -782,7 +791,8 @@ async def render_timeline(req: RenderTimelineRequest):
             "X-Render-Time-Ffmpeg": str(round(t_ff, 2)),
             "X-Render-Time-Total": str(round(t_total, 2)),
             "X-Render-Cached": "1" if cache_valid else "0",
-            "Access-Control-Expose-Headers": "X-Render-Time-Ffmpeg, X-Render-Time-Total, X-Render-Cached",
+            "X-Render-Mode": render_mode,
+            "Access-Control-Expose-Headers": "X-Render-Time-Ffmpeg, X-Render-Time-Total, X-Render-Cached, X-Render-Mode",
         },
     )
 
