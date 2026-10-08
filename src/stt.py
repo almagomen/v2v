@@ -1,6 +1,7 @@
 """
 Transcripción STT con Whisper y procesamiento con diarización.
 """
+import concurrent.futures
 import contextlib
 import io
 import time
