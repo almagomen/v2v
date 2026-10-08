@@ -91,7 +91,7 @@ def _check_nvenc_available() -> bool:
         cmd = [
             "ffmpeg",
             "-f", "lavfi",
-            "-i", "nullsrc=s=64x64:d=0.1",
+            "-i", "nullsrc=s=256x256:d=0.1",
             "-c:v", "h264_nvenc",
             "-f", "null",
             "-",
@@ -390,17 +390,23 @@ def _build_ffmpeg_cmd(
     """
     Build an ffmpeg command that renders the timeline clips into a single MP4.
     Strategy:
-     - All input files are added with -i
-     - Video clips are trimmed and set to proper pts offset, then concatenated
-     - Audio clips are trimmed and delayed to their track_start, then mixed
+     - Stream Copy (Zero re-encode): Si el timeline tiene 1 solo clip continuo de video desde el inicio,
+       se copia el flujo de video original con '-c:v copy' y solo se mezclan las pistas de audio.
+     - Re-encode (NVENC GPU / CPU fallback): Si hay cortes/múltiples clips de video, se aplica
+       recorte, concat y re-encode acelerado por GPU (h264_nvenc) o fallback a CPU (libx264).
     """
-    import subprocess
-
     video_clips = [c for c in clips if c.type == "video"]
     audio_clips = [c for c in clips if c.type == "audio"]
 
     if not video_clips and not audio_clips:
         raise HTTPException(status_code=400, detail="No hay clips en el timeline")
+
+    # Detectar si podemos hacer Stream Copy del video (cero recodificación de video)
+    can_stream_copy_video = (
+        len(video_clips) == 1
+        and video_clips[0].start <= 0.05
+        and video_clips[0].track_start <= 0.05
+    )
 
     inputs: list[str] = []
     filter_parts: list[str] = []
@@ -408,17 +414,61 @@ def _build_ffmpeg_cmd(
     video_labels: list[str] = []
     audio_labels: list[str] = []
 
-    # Add video clips
+    if can_stream_copy_video:
+        # Modo Stream Copy: Input 0 es el video completo original sin filtros de video
+        v_clip = video_clips[0]
+        v_path = _resolve_media_path(folder, v_clip.media_name, job_id, video_index)
+        v_duration = v_clip.end - v_clip.start
+        inputs += ["-i", str(v_path)]
+        input_idx = 1
+
+        for i, clip in enumerate(audio_clips):
+            path = _resolve_media_path(folder, clip.media_name, job_id, video_index)
+            if not _has_audio(path):
+                continue
+            duration = clip.end - clip.start
+            delay_ms = int(clip.track_start * 1000)
+            inputs += ["-ss", str(clip.start), "-t", str(duration), "-i", str(path)]
+            label_a = f"a{i}"
+            filter_parts.append(
+                f"[{input_idx}:a]adelay={delay_ms}|{delay_ms},volume={clip.volume}[{label_a}]"
+            )
+            audio_labels.append(f"[{label_a}]")
+            input_idx += 1
+
+        n_audio = len(audio_labels)
+        cmd = ["ffmpeg", "-y", "-v", "error"] + inputs
+
+        if n_audio > 1:
+            mix_inputs = "".join(audio_labels)
+            filter_parts.append(f"{mix_inputs}amix=inputs={n_audio}:normalize=0[aout]")
+            cmd += ["-filter_complex", ";".join(filter_parts)]
+            audio_map = "[aout]"
+        elif n_audio == 1:
+            cmd += ["-filter_complex", ";".join(filter_parts)]
+            audio_map = audio_labels[0]
+        else:
+            audio_map = None
+
+        cmd += ["-map", "0:v", "-c:v", "copy"]
+        if audio_map:
+            cmd += ["-map", audio_map, "-c:a", "aac", "-b:a", "192k"]
+        elif _has_audio(v_path):
+            cmd += ["-map", "0:a", "-c:a", "copy"]
+
+        if v_duration > 0:
+            cmd += ["-t", str(v_duration)]
+
+        cmd.append(str(output_path))
+        return cmd
+
+    # Modo Re-encode (cuando hay cortes o múltiples clips de video)
     for i, clip in enumerate(video_clips):
         path = _resolve_media_path(folder, clip.media_name, job_id, video_index)
         duration = clip.end - clip.start
-        # For video we trim source and then pad to place at track_start
-        # We use -ss before -i for fast seek
         inputs += ["-ss", str(clip.start), "-t", str(duration), "-i", str(path)]
-        # label for this video stream
         label_v = f"v{i}"
         label_a = f"av{i}"
-        # setpts shifts to track_start
         pts_offset = clip.track_start
         filter_parts.append(
             f"[{input_idx}:v]setpts=PTS-STARTPTS+{pts_offset}/TB[{label_v}]"
@@ -432,12 +482,9 @@ def _build_ffmpeg_cmd(
         video_labels.append(f"[{label_v}]")
         input_idx += 1
 
-    # Add audio clips
     for i, clip in enumerate(audio_clips):
         path = _resolve_media_path(folder, clip.media_name, job_id, video_index)
         if not _has_audio(path):
-            # No podemos añadir un clip de audio que no tiene audio... skip or error?
-            # En este contexto de timeline, lo ignoramos para no romper el render.
             continue
         duration = clip.end - clip.start
         delay_ms = int(clip.track_start * 1000)
@@ -449,12 +496,10 @@ def _build_ffmpeg_cmd(
         audio_labels.append(f"[{label_a}]")
         input_idx += 1
 
-    # Build filter_complex
     n_audio = len(audio_labels)
     n_video = len(video_labels)
 
     if n_video > 1:
-        # Concat video + its embedded audio
         concat_filter = "".join(video_labels) + f"concat=n={n_video}:v=1:a=0[vout]"
         filter_parts.append(concat_filter)
         video_map = "[vout]"
@@ -481,21 +526,16 @@ def _build_ffmpeg_cmd(
     if video_map:
         cmd += ["-map", video_map]
 
-        # --- Lógica de Bitrate Dinámico ---
-        # Intentamos obtener el bitrate del video original para ser fieles a la fuente
         assets = load_assets(folder)
         orig_path = assets.get("video_only") or assets.get("merged")
         orig_bitrate = get_video_bitrate(orig_path) if orig_path else 0
 
-        # Convertimos a Kbps para FFmpeg. Límites: 800k min, 8000k max.
-        # Si no se detecta (0), usamos 2000k como valor seguro por defecto.
         target_k = (
             max(800, min(int(orig_bitrate / 1000), 8000)) if orig_bitrate > 0 else 2000
         )
         max_k = int(target_k * 1.1)
         buf_k = int(target_k * 2.0)
 
-        # Configuración de Video Encoder (NVENC con fallback a libx264)
         if _check_nvenc_available():
             cmd += [
                 "-gpu",
@@ -507,17 +547,17 @@ def _build_ffmpeg_cmd(
                 "-preset",
                 "p7",  # Máximo análisis de calidad
                 "-rc",
-                "vbr",  # Variable Bit Rate
+                "vbr",
                 "-cq",
                 "28",  # Calidad constante balanceada para peso
                 "-b:v",
-                f"{target_k}k",  # Bitrate objetivo dinámico
+                f"{target_k}k",
                 "-maxrate:v",
-                f"{max_k}k",  # Límite máximo dinámico
+                f"{max_k}k",
                 "-bufsize:v",
-                f"{buf_k}k",  # Buffer dinámico (2x)
+                f"{buf_k}k",
                 "-multipass",
-                "fullres",  # Análisis detallado multipass
+                "2",  # Análisis detallado multipass fullres (0=disabled, 1=qres, 2=fullres)
                 "-spatial-aq",
                 "1",  # Adaptive Quantization espacial
                 "-temporal-aq",
@@ -690,7 +730,8 @@ async def render_timeline(req: RenderTimelineRequest):
             )
         _save_render_cache_hash(output_path, req.clips)
         t_ff = time.perf_counter() - t0_ff
-        print(f"⏱️ [Etapa: FFmpeg GPU Render] Completado en {t_ff:.1f}s ({output_path.name})")
+        mode_str = "Stream Copy (sin re-encode)" if "-c:v copy" in " ".join(cmd) else f"NVENC GPU {1 if GPU_COUNT >= 2 else 0}"
+        print(f"⏱️ [Etapa: FFmpeg Render] {mode_str} completado en {t_ff:.1f}s ({output_path.name})")
 
     t_cb = 0.0
     catbox_url = ""
@@ -851,7 +892,8 @@ async def render_batch(req: RenderBatchRequest):
 
                 _save_render_cache_hash(output_path, item.clips)
                 t_ff = time.perf_counter() - t0_ff
-                log_render = f"⏱️ [{idx + 1}/{total}] {item.output_name}: Renderizado FFmpeg en {t_ff:.1f}s (GPU {gpu_id})"
+                mode_str = "Stream Copy" if "-c:v copy" in " ".join(cmd) else f"GPU {gpu_id}"
+                log_render = f"⏱️ [{idx + 1}/{total}] {item.output_name}: Renderizado FFmpeg en {t_ff:.1f}s ({mode_str})"
                 print(log_render)
                 output_final = output_path
 
