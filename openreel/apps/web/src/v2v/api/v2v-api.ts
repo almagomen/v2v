@@ -249,7 +249,6 @@ export const v2vApi = {
     speaker: string,
     emotion?: string | null,
     options?: {
-      useSearchGrounding?: boolean;
       forceReprocess?: boolean;
     }
   ): Promise<ProcessUrlsResponse> {
@@ -261,7 +260,6 @@ export const v2vApi = {
         translate_lang: translateLang,
         speaker,
         emotion: emotion || null,
-        use_search_grounding: options?.useSearchGrounding ?? false,
         force_reprocess: options?.forceReprocess ?? false,
       }),
     });
@@ -717,8 +715,7 @@ export const v2vApi = {
         default_model: "gemini-flash-lite-latest",
         models: [
           "gemini-flash-lite-latest",
-          "gemini-flash-latest",
-          "gemma-4-31b-it",
+          "gemma-4-26b-a4b-it",
         ],
       };
     }

@@ -33,7 +33,6 @@ def process_urls(req: ProcessUrlsRequest):
         translate,
         req.speaker,
         emotion=req.emotion,
-        use_search_grounding=bool(req.use_search_grounding),
         force_reprocess=bool(req.force_reprocess),
     )
     return ProcessUrlsResponse(job_id=job_id, message="Procesamiento iniciado")

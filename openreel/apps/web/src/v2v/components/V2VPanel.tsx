@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings, Eye, EyeOff, ChevronDown, Terminal, Copy, Check, Zap, Search, RefreshCw } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings, Eye, EyeOff, ChevronDown, Terminal, Copy, Check, Zap, RefreshCw } from "lucide-react";
 import {
   ScrollArea,
   Button,
@@ -108,7 +108,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [translationModel, setTranslationModel] = React.useState<string>("gemini-flash-lite-latest");
   const [customTranslationModel, setCustomTranslationModel] = React.useState<string>("");
   const [initialEmotion, setInitialEmotion] = React.useState<string>(DEFAULT_EMOTION_TAG);
-  const [useSearchGrounding, setUseSearchGrounding] = React.useState<boolean>(false);
   const [forceReprocess, setForceReprocess] = React.useState<boolean>(false);
   const [showTokenSettings, setShowTokenSettings] = React.useState(false);
   const [isSavingTokens, setIsSavingTokens] = React.useState(false);
@@ -133,7 +132,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       if (res.fish_api_key !== undefined) setFishApiKey(res.fish_api_key || "");
       if (res.google_api_key !== undefined) setGoogleApiKey(res.google_api_key || "");
 
-      const knownModels = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemma-4-31b-it"];
+      const knownModels = ["gemini-flash-lite-latest", "gemma-4-26b-a4b-it"];
 
       if (res.title_model) {
         if (knownModels.includes(res.title_model)) {
@@ -183,7 +182,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         ? (customTitleModel.trim() || "gemini-flash-lite-latest")
         : titleModel;
       const effTrans = translationModel === "custom"
-        ? (customTranslationModel.trim() || "gemini-flash-latest")
+        ? (customTranslationModel.trim() || "gemini-flash-lite-latest")
         : translationModel;
 
       await v2vApi.saveTokens(fishApiKey, googleApiKey, effTitle, effTrans);
@@ -294,7 +293,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         speaker,
         initialEmotion === "none" ? null : initialEmotion,
         {
-          useSearchGrounding: useSearchGrounding,
           forceReprocess: forceReprocess,
         }
       );
@@ -310,7 +308,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     translateLang,
     speaker,
     initialEmotion,
-    useSearchGrounding,
     forceReprocess,
     startPolling,
     setJobId,
@@ -512,9 +509,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       value={translationModel}
                       onChange={(e) => setTranslationModel(e.target.value)}
                     >
-                      <option value="gemini-flash-latest">gemini-flash-latest (Recomendado)</option>
-                      <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Rápido)</option>
-                      <option value="gemma-4-31b-it">gemma-4-31b-it (Fallback)</option>
+                      <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Recomendado)</option>
+                      <option value="gemma-4-26b-a4b-it">gemma-4-26b-a4b-it (Fallback)</option>
                       <option value="custom">Otro modelo personalizado...</option>
                     </select>
                     {translationModel === "custom" && (
@@ -540,8 +536,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                       onChange={(e) => setTitleModel(e.target.value)}
                     >
                       <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Recomendado)</option>
-                      <option value="gemini-flash-latest">gemini-flash-latest (Completo)</option>
-                      <option value="gemma-4-31b-it">gemma-4-31b-it (Fallback)</option>
+                      <option value="gemma-4-26b-a4b-it">gemma-4-26b-a4b-it (Fallback)</option>
                       <option value="custom">Otro modelo personalizado...</option>
                     </select>
                     {titleModel === "custom" && (
@@ -670,25 +665,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             <span className="text-[9px] text-primary/80 font-mono">Configuración</span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-            {/* Google Search Grounding */}
-            <label
-              className="flex items-center gap-2 p-1 rounded-md hover:bg-background/50 cursor-pointer select-none text-[11px] text-text-secondary transition-colors"
-              title="Permite que Gemini consulte Google Search en vivo para nombres propios, términos técnicos o referencias culturales."
-            >
-              <input
-                type="checkbox"
-                checked={useSearchGrounding}
-                onChange={(e) => setUseSearchGrounding(e.target.checked)}
-                disabled={isProcessing}
-                className="rounded border-border text-primary focus:ring-0 focus:ring-offset-0 cursor-pointer w-3.5 h-3.5 accent-primary"
-              />
-              <span className="flex items-center gap-1 truncate">
-                <Search size={12} className="text-blue-400 shrink-0" />
-                <span>Search Grounding</span>
-              </span>
-            </label>
-
+          <div className="pt-0.5">
             {/* Re-inferir sin sobrescribir */}
             <label
               className="flex items-center gap-2 p-1 rounded-md hover:bg-background/50 cursor-pointer select-none text-[11px] text-text-secondary transition-colors"

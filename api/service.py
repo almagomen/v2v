@@ -55,7 +55,6 @@ def _run_pipeline(
     translate_lang: str | None,
     speaker_name: str,
     emotion: str | None = None,
-    use_search_grounding: bool = False,
     force_reprocess: bool = False,
 ) -> None:
     """Run pipeline with stdout redirected to job log."""
@@ -296,7 +295,6 @@ def start_process(
     translate_lang: str | None,
     speaker_name: str,
     emotion: str | None = None,
-    use_search_grounding: bool = False,
     force_reprocess: bool = False,
 ) -> str:
     """Start pipeline in background, return job_id."""
@@ -309,7 +307,6 @@ def start_process(
             translate_lang,
             speaker_name,
             emotion,
-            use_search_grounding,
             force_reprocess,
         ),
     )
