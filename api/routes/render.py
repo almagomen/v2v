@@ -554,7 +554,7 @@ def _build_ffmpeg_cmd(
                 "-rc",
                 "vbr",
                 "-cq",
-                "26",
+                "28",
                 "-b:v",
                 f"{target_k}k",
                 "-maxrate:v",
