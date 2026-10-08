@@ -267,6 +267,22 @@ export const ColabExportTab: React.FC = () => {
     return null;
   }, [analyzed, folderRefs]);
 
+  // Detectar si el timeline conserva el video continuo sin cortes de video (Stream Copy directo)
+  const isStreamCopyCandidate = React.useMemo(() => {
+    if (!project?.timeline?.tracks) return false;
+    const vTracks = project.timeline.tracks.filter((t) => t.type === "video");
+    const vClips = vTracks.flatMap((t) => t.clips || []);
+    return (
+      vClips.length === 1 &&
+      (vClips[0].start || 0) <= 0.05 &&
+      (vClips[0].trackStart || 0) <= 0.05
+    );
+  }, [project]);
+
+  // Modo de exportación: 'auto' (Stream Copy si es posible) o 'reencode' (Forzar GPU NVENC)
+  const [exportMode, setExportMode] = useState<"auto" | "reencode">("auto");
+  const effectiveMode = isStreamCopyCandidate && exportMode === "auto" ? "stream_copy" : "reencode";
+
   // ── Auto-sync with backend manifest ──────────────────────────
   useEffect(() => {
     if (jobContext && !isBatch) {
@@ -532,9 +548,15 @@ export const ColabExportTab: React.FC = () => {
         progress: 60,
         currentStep: uploadToCatbox
           ? "Paso 3/3: Renderizando y subiendo a Catbox…"
-          : "Paso 3/3: Renderizando MP4 en Colab (GPU T4)…",
+          : effectiveMode === "stream_copy"
+            ? "Paso 3/3: Empaquetando MP4 en Colab (Stream Copy)…"
+            : "Paso 3/3: Renderizando MP4 en Colab (GPU T4 NVENC)…",
         currentVideoName: outName,
-        statusMsg: uploadToCatbox ? "Renderizando y subiendo a Catbox…" : "Renderizando en Colab…",
+        statusMsg: uploadToCatbox
+          ? "Renderizando y subiendo a Catbox…"
+          : effectiveMode === "stream_copy"
+            ? "Empaquetando en Colab (Stream Copy)…"
+            : "Renderizando en Colab (GPU NVENC)…",
       });
 
       const clips = buildPayloadClips(analyzed, uploadedMap);
@@ -549,6 +571,7 @@ export const ColabExportTab: React.FC = () => {
         clips,
         output_name: outName,
         upload_to_catbox: uploadToCatbox,
+        mode: effectiveMode,
       });
       const tRenderColabSec = ((performance.now() - tRenderColabStart) / 1000).toFixed(1);
 
@@ -595,7 +618,7 @@ export const ColabExportTab: React.FC = () => {
       setErrorMsg(err);
       appendExportLog(`❌ Error en exportación: ${err}`);
     }
-  }, [analyzed, jobContext, project.name, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData, appendExportLog, clearExportLogs, needUpload.length]);
+  }, [analyzed, jobContext, project.name, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData, appendExportLog, clearExportLogs, needUpload.length, effectiveMode]);
 
   // ── Batch export ─────────────────────────────────────────────
   const handleBatchExport = useCallback(async () => {
@@ -687,6 +710,7 @@ export const ColabExportTab: React.FC = () => {
           video_index: ctx.videoIndex,
           clips: buildPayloadClips(clips, uploadedMap),
           output_name: outName,
+          mode: exportMode === "reencode" ? "reencode" : "auto",
         });
       }
 
@@ -747,6 +771,7 @@ export const ColabExportTab: React.FC = () => {
         zip_name: "batch_export",
         upload_to_catbox: uploadToCatbox,
         batch_id: batchId,
+        mode: exportMode === "reencode" ? "reencode" : "auto",
       });
 
       if (progressInterval) {
@@ -793,7 +818,7 @@ export const ColabExportTab: React.FC = () => {
       setErrorMsg(err);
       appendExportLog(`❌ Error en exportación por lotes: ${err}`);
     }
-  }, [savedProjects, folderRefs, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData, appendExportLog, clearExportLogs]);
+  }, [savedProjects, folderRefs, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData, appendExportLog, clearExportLogs, exportMode]);
 
   const isRunning = status === "uploading" || status === "rendering";
 
@@ -801,12 +826,50 @@ export const ColabExportTab: React.FC = () => {
   return (
     <div className="flex flex-col gap-4 p-4">
       {/* Header */}
-      <div className="flex items-center gap-2">
-        <Server size={16} className="text-primary" />
-        <span className="text-sm font-semibold text-text-primary">Colab FFmpeg Export</span>
-        <span className="ml-auto text-[10px] text-text-muted bg-background-tertiary px-2 py-0.5 rounded-full">
-          GPU T4 · sin re-encode
-        </span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Server size={16} className="text-primary" />
+          <span className="text-sm font-semibold text-text-primary">Colab FFmpeg Export</span>
+        </div>
+
+        {/* Selector de modo: Stream Copy vs Forzar Re-encode (o GPU T4 fijo si hay cortes) */}
+        {isStreamCopyCandidate ? (
+          <div className="inline-flex items-center p-0.5 rounded-lg bg-background-tertiary border border-border/60 text-[10px]">
+            <button
+              type="button"
+              onClick={() => setExportMode("auto")}
+              disabled={isRunning}
+              className={`px-2 py-0.5 rounded-md transition-all font-medium flex items-center gap-1 ${
+                exportMode === "auto"
+                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-xs"
+                  : "text-text-muted hover:text-text-primary"
+              }`}
+              title="Modo ultrarrápido: copia el video sin re-codificar y mezcla el audio. Cero pérdida de calidad."
+            >
+              <span>⚡ Stream Copy</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setExportMode("reencode")}
+              disabled={isRunning}
+              className={`px-2 py-0.5 rounded-md transition-all font-medium flex items-center gap-1 ${
+                exportMode === "reencode"
+                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/30 shadow-xs"
+                  : "text-text-muted hover:text-text-primary"
+              }`}
+              title="Fuerza la recodificación completa del video con GPU T4 NVENC (H.264 CQ 28)."
+            >
+              <span>🔥 Forzar Re-encode</span>
+            </button>
+          </div>
+        ) : (
+          <span
+            className="text-[10px] px-2 py-0.5 rounded-full font-medium text-amber-400 bg-amber-500/10 border border-amber-500/20"
+            title="El timeline contiene cortes o transiciones de video: requiere renderizado con GPU NVENC."
+          >
+            🔥 GPU T4 (NVENC H.264)
+          </span>
+        )}
       </div>
 
       {/* Catbox toggle */}
@@ -1212,7 +1275,9 @@ export const ColabExportTab: React.FC = () => {
               ? `Exportando (${currentIdx || 1}/${totalVideos})…`
               : status === "uploading"
                 ? "Subiendo medios…"
-                : "Renderizando en Colab…"}
+                : effectiveMode === "stream_copy"
+                  ? "Empaquetando en Colab (Stream Copy)…"
+                  : "Renderizando en Colab (GPU NVENC)…"}
           </>
         ) : isBatch ? (
           <>
@@ -1222,7 +1287,11 @@ export const ColabExportTab: React.FC = () => {
         ) : (
           <>
             {uploadToCatbox ? <Upload size={16} /> : <Download size={16} />}
-            {uploadToCatbox ? "Subir a Catbox" : "Exportar MP4 en Colab"}
+            {uploadToCatbox
+              ? "Subir a Catbox"
+              : effectiveMode === "stream_copy"
+                ? "Exportar MP4 (Stream Copy)"
+                : "Renderizar MP4 (GPU NVENC)"}
           </>
         )}
       </Button>

@@ -164,6 +164,8 @@ export interface RenderTimelinePayload {
   clips: TimelineClipPayload[];
   output_name: string;
   upload_to_catbox?: boolean;
+  mode?: "auto" | "stream_copy" | "reencode";
+  force_rerender?: boolean;
 }
 
 export interface BatchRenderItemPayload {
@@ -171,6 +173,7 @@ export interface BatchRenderItemPayload {
   video_index: number;
   clips: TimelineClipPayload[];
   output_name: string;
+  mode?: "auto" | "stream_copy" | "reencode";
 }
 
 export interface RenderBatchPayload {
@@ -178,6 +181,8 @@ export interface RenderBatchPayload {
   zip_name?: string;
   upload_to_catbox?: boolean;
   batch_id?: string;
+  mode?: "auto" | "stream_copy" | "reencode";
+  force_rerender?: boolean;
 }
 
 export interface BatchProgressResponse {
@@ -597,8 +602,15 @@ export const v2vApi = {
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al renderizar en Colab");
+      const text = await res.text().catch(() => "");
+      let detail = "";
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed.detail || parsed.message || "";
+      } catch {
+        detail = text;
+      }
+      throw new Error(detail || `Error al renderizar en Colab (HTTP ${res.status})`);
     }
     
     // Si se solicitó upload a Catbox, la respuesta es JSON

@@ -297,6 +297,7 @@ class RenderTimelineRequest(BaseModel):
     output_name: str = "export"
     upload_to_catbox: bool = False
     force_rerender: bool = False
+    mode: Optional[str] = "auto"  # "auto" | "stream_copy" | "reencode"
 
 
 class BatchRenderItem(BaseModel):
@@ -304,6 +305,7 @@ class BatchRenderItem(BaseModel):
     video_index: int
     clips: list[TimelineClip]
     output_name: str
+    mode: Optional[str] = "auto"
 
 
 class RenderBatchRequest(BaseModel):
@@ -312,6 +314,7 @@ class RenderBatchRequest(BaseModel):
     upload_to_catbox: bool = False
     batch_id: Optional[str] = None
     force_rerender: bool = False
+    mode: Optional[str] = "auto"
 
 
 _batch_progress: dict[str, dict] = {}
@@ -386,13 +389,14 @@ def _build_ffmpeg_cmd(
     job_id: str = None,
     video_index: int = None,
     gpu_id: int = 0,
+    force_reencode: bool = False,
 ) -> list[str]:
     """
     Build an ffmpeg command that renders the timeline clips into a single MP4.
     Strategy:
-     - Stream Copy (Zero re-encode): Si el timeline tiene 1 solo clip continuo de video desde el inicio,
+     - Stream Copy (Zero re-encode): Si el timeline tiene 1 solo clip continuo de video desde el inicio y no se fuerza re-encode,
        se copia el flujo de video original con '-c:v copy' y solo se mezclan las pistas de audio.
-     - Re-encode (NVENC GPU / CPU fallback): Si hay cortes/múltiples clips de video, se aplica
+     - Re-encode (NVENC GPU / CPU fallback): Si hay cortes/múltiples clips de video o se fuerza re-encode, se aplica
        recorte, concat y re-encode acelerado por GPU (h264_nvenc) o fallback a CPU (libx264).
     """
     video_clips = [c for c in clips if c.type == "video"]
@@ -403,7 +407,8 @@ def _build_ffmpeg_cmd(
 
     # Detectar si podemos hacer Stream Copy del video (cero recodificación de video)
     can_stream_copy_video = (
-        len(video_clips) == 1
+        not force_reencode
+        and len(video_clips) == 1
         and video_clips[0].start <= 0.05
         and video_clips[0].track_start <= 0.05
     )
@@ -591,19 +596,22 @@ def _build_ffmpeg_cmd(
     return cmd
 
 
-def _compute_timeline_hash(clips: list[TimelineClip]) -> str:
-    """Calcula un hash único a partir de la composición exacta de los clips del timeline."""
-    data = [
-        {
-            "type": c.type,
-            "media": Path(c.media_name).name,
-            "start": round(float(c.start), 3),
-            "end": round(float(c.end), 3),
-            "track_start": round(float(c.track_start), 3),
-            "vol": round(float(c.volume), 2),
-        }
-        for c in clips
-    ]
+def _compute_timeline_hash(clips: list[TimelineClip], mode: str = "auto") -> str:
+    """Calcula un hash único a partir de la composición exacta de los clips del timeline y el modo de render."""
+    data = {
+        "mode": mode,
+        "clips": [
+            {
+                "type": c.type,
+                "media": Path(c.media_name).name,
+                "start": round(float(c.start), 3),
+                "end": round(float(c.end), 3),
+                "track_start": round(float(c.track_start), 3),
+                "vol": round(float(c.volume), 2),
+            }
+            for c in clips
+        ],
+    }
     raw = json.dumps(data, sort_keys=True).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -614,18 +622,19 @@ def _is_render_cache_valid(
     clips: list[TimelineClip],
     job_id: str = None,
     video_index: int = None,
+    mode: str = "auto",
 ) -> bool:
     """
-    Verifica si un render previo existente sigue siendo 100% fiel al timeline actual.
+    Verifica si un render previo existente sigue siendo 100% fiel al timeline actual y al modo de render solicitado.
     Retorna False (requiere re-render) si:
     1. El archivo MP4 no existe o pesa menos de 50 KB.
-    2. Si existe un archivo .hash, y no coincide con la configuración actual de clips (timeline editado).
+    2. Si existe un archivo .hash, y no coincide con la configuración actual de clips o modo (timeline editado o modo forzado).
     3. Si alguno de los archivos de audio/video involucrados fue modificado DESPUÉS del MP4.
     """
     if not output_path.exists() or output_path.stat().st_size < 50000:
         return False
 
-    current_hash = _compute_timeline_hash(clips)
+    current_hash = _compute_timeline_hash(clips, mode=mode)
     hash_file = output_path.with_suffix(".hash")
 
     if hash_file.exists():
@@ -633,7 +642,7 @@ def _is_render_cache_valid(
             saved_hash = hash_file.read_text(encoding="utf-8").strip()
             if saved_hash != current_hash:
                 print(
-                    f"🔄 [Render Cache] Timeline modificado para {output_path.name} (hash mismatch). Re-renderizando..."
+                    f"🔄 [Render Cache] Timeline o modo modificado para {output_path.name} (hash mismatch). Re-renderizando..."
                 )
                 return False
         except Exception:
@@ -663,10 +672,10 @@ def _is_render_cache_valid(
     return True
 
 
-def _save_render_cache_hash(output_path: Path, clips: list[TimelineClip]) -> None:
-    """Guarda el hash del timeline tras un render exitoso."""
+def _save_render_cache_hash(output_path: Path, clips: list[TimelineClip], mode: str = "auto") -> None:
+    """Guarda el hash del timeline y el modo tras un render exitoso."""
     try:
-        h = _compute_timeline_hash(clips)
+        h = _compute_timeline_hash(clips, mode=mode)
         output_path.with_suffix(".hash").write_text(h, encoding="utf-8")
     except Exception as e:
         print(f"⚠️ Error guardando hash de render: {e}")
@@ -693,25 +702,47 @@ async def render_timeline(req: RenderTimelineRequest):
             print(f"  - {w}")
 
     output_path = folder / f"_export_{safe_name}.mp4"
+    desired_mode = getattr(req, "mode", "auto") or "auto"
+    force_reencode = (desired_mode == "reencode")
 
-    # Verificar si ya existe un render previo válido para el timeline actual
+    # 1. Verificar si ya existe un render previo válido para el timeline actual (mismo nombre o nombre anterior)
     candidate: Optional[Path] = None
     for cand in [output_path, folder / f"_render_{safe_name}.mp4"]:
         if cand.exists() and cand.stat().st_size > 50000:
-            candidate = cand
-            break
+            if _is_render_cache_valid(folder, cand, req.clips, req.job_id, req.video_index, mode=desired_mode):
+                candidate = cand
+                break
 
-    cache_valid = bool(
-        candidate
-        and not req.force_rerender
-        and _is_render_cache_valid(folder, candidate, req.clips, req.job_id, req.video_index)
-    )
+    # Si no hay candidato con el nombre actual, buscar cualquier render previo en la carpeta con hash idéntico
+    if not candidate and not req.force_rerender:
+        all_renders = sorted(
+            list(folder.glob("_export_*.mp4")) + list(folder.glob("_render_*.mp4")),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for cand in all_renders:
+            if cand.exists() and cand.stat().st_size > 50000:
+                if _is_render_cache_valid(folder, cand, req.clips, req.job_id, req.video_index, mode=desired_mode):
+                    candidate = cand
+                    break
 
-    render_mode = "Caché"
+    cache_valid = bool(candidate and not req.force_rerender)
+
+    t_ff = 0.0
+    render_mode = "Caché (sin re-render)"
     if cache_valid and candidate:
         t_cache = time.perf_counter() - t_render_start
-        print(f"⏩ [Caché] Timeline sin cambios para {req.output_name}. Reutilizando {candidate.name} ({candidate.stat().st_size / (1024*1024):.1f} MB en {t_cache:.2f}s)")
-        output_path = candidate
+        if candidate.resolve() != output_path.resolve():
+            import shutil
+            try:
+                shutil.copyfile(candidate, output_path)
+                _save_render_cache_hash(output_path, req.clips, mode=desired_mode)
+            except Exception:
+                output_path = candidate
+            print(f"⏩ [Caché] Timeline idéntico detectado ({desired_mode}). Reutilizando exportación previa para el nuevo título '{req.output_name}' ({output_path.stat().st_size / (1024*1024):.1f} MB en {t_cache:.2f}s)")
+        else:
+            print(f"⏩ [Caché] Timeline sin cambios ({desired_mode}) para {req.output_name}. Reutilizando {candidate.name} ({candidate.stat().st_size / (1024*1024):.1f} MB en {t_cache:.2f}s)")
+            output_path = candidate
     else:
         t0_ff = time.perf_counter()
         cmd = _build_ffmpeg_cmd(
@@ -721,6 +752,7 @@ async def render_timeline(req: RenderTimelineRequest):
             req.job_id,
             req.video_index,
             gpu_id=1 if GPU_COUNT >= 2 else 0,
+            force_reencode=force_reencode,
         )
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -728,7 +760,7 @@ async def render_timeline(req: RenderTimelineRequest):
                 status_code=500,
                 detail=f"Error en ffmpeg: {result.stderr[-500:]}",
             )
-        _save_render_cache_hash(output_path, req.clips)
+        _save_render_cache_hash(output_path, req.clips, mode=desired_mode)
         t_ff = time.perf_counter() - t0_ff
         cmd_str = " ".join(cmd)
         if "-c:v copy" in cmd_str:
@@ -856,30 +888,33 @@ async def render_batch(req: RenderBatchRequest):
             folder = _job_folder(item.job_id, item.video_index)
             safe_name = to_safe_name(item.output_name)
             zip_name = to_zip_name(item.output_name)
-            output_path = folder / f"_render_{safe_name}.mp4"
+            desired_mode = getattr(item, "mode", None) or getattr(req, "mode", "auto") or "auto"
+            force_reencode = (desired_mode == "reencode")
 
-            # Comprobar si ya existe un render previo completado para este video
             existing_file: Optional[Path] = None
             for cand in [output_path, folder / f"_export_{safe_name}.mp4"]:
                 if cand.exists() and cand.stat().st_size > 50000:
-                    existing_file = cand
-                    break
-
-            if not existing_file:
-                for cand in list(folder.glob("_render_*.mp4")) + list(folder.glob("_export_*.mp4")):
-                    if cand.exists() and cand.stat().st_size > 50000:
+                    if _is_render_cache_valid(folder, cand, item.clips, item.job_id, item.video_index, mode=desired_mode):
                         existing_file = cand
                         break
 
-            cache_valid = bool(
-                existing_file
-                and not req.force_rerender
-                and _is_render_cache_valid(folder, existing_file, item.clips, item.job_id, item.video_index)
-            )
+            if not existing_file and not req.force_rerender:
+                all_renders = sorted(
+                    list(folder.glob("_render_*.mp4")) + list(folder.glob("_export_*.mp4")),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                for cand in all_renders:
+                    if cand.exists() and cand.stat().st_size > 50000:
+                        if _is_render_cache_valid(folder, cand, item.clips, item.job_id, item.video_index, mode=desired_mode):
+                            existing_file = cand
+                            break
+
+            cache_valid = bool(existing_file and not req.force_rerender)
 
             t_ff = 0.0
             if cache_valid and existing_file:
-                log_render = f"⏩ [{idx + 1}/{total}] {item.output_name}: Reutilizado de caché (0.0s)"
+                log_render = f"⏩ [{idx + 1}/{total}] {item.output_name}: Reutilizado de caché ({desired_mode}) (0.0s)"
                 print(log_render)
                 output_final = existing_file
             else:
@@ -891,6 +926,7 @@ async def render_batch(req: RenderBatchRequest):
                     item.job_id,
                     item.video_index,
                     gpu_id=gpu_id,
+                    force_reencode=force_reencode,
                 )
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode != 0:
@@ -900,7 +936,7 @@ async def render_batch(req: RenderBatchRequest):
                         _batch_progress[batch_id]["logs"].append(err_msg)
                     return
 
-                _save_render_cache_hash(output_path, item.clips)
+                _save_render_cache_hash(output_path, item.clips, mode=desired_mode)
                 t_ff = time.perf_counter() - t0_ff
                 mode_str = "Stream Copy" if "-c:v copy" in " ".join(cmd) else f"GPU {gpu_id}"
                 log_render = f"⏱️ [{idx + 1}/{total}] {item.output_name}: Renderizado FFmpeg en {t_ff:.1f}s ({mode_str})"

@@ -35,18 +35,29 @@ def resolve_speaker_key(speaker_input: str) -> str:
 
 
 class JobLogWriter(io.TextIOBase):
-    """Redirects stdout to job log."""
+    """Redirects stdout to job log and mirrors to the real terminal stream."""
 
-    def __init__(self, job_id: str):
+    def __init__(self, job_id: str, real_stream=None):
         self._job_id = job_id
+        self._real_stream = real_stream
 
     def write(self, s: str) -> int:
         if s:
             append_log(self._job_id, s)
+            if self._real_stream:
+                try:
+                    self._real_stream.write(s)
+                    self._real_stream.flush()
+                except Exception:
+                    pass
         return len(s)
 
     def flush(self) -> None:
-        pass
+        if self._real_stream:
+            try:
+                self._real_stream.flush()
+            except Exception:
+                pass
 
 
 def _run_pipeline(
@@ -66,7 +77,8 @@ def _run_pipeline(
     old_stdout = sys.stdout
     old_stderr = sys.stderr
     try:
-        sys.stdout = sys.stderr = JobLogWriter(job_id)
+        sys.stdout = JobLogWriter(job_id, real_stream=old_stdout)
+        sys.stderr = JobLogWriter(job_id, real_stream=old_stderr)
         # Inicializar estados por URL
         update_job(
             job_id,

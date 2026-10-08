@@ -224,18 +224,20 @@ def _demix_dual_gpu(
 
     def _infer_chunk(m, chunk, dev):
         with torch.no_grad():
-            with (
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                res, _ = demix_track(config, m, chunk, dev)
-                return res
+            res, _ = demix_track(config, m, chunk, dev)
+            return res
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        f0 = executor.submit(_infer_chunk, model_0, chunk_0, torch.device("cuda:0"))
-        f1 = executor.submit(_infer_chunk, model_1, chunk_1, torch.device("cuda:1"))
-        res_0 = f0.result()
-        res_1 = f1.result()
+    saved_stdout = sys.stdout
+    saved_stderr = sys.stderr
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            f0 = executor.submit(_infer_chunk, model_0, chunk_0, torch.device("cuda:0"))
+            f1 = executor.submit(_infer_chunk, model_1, chunk_1, torch.device("cuda:1"))
+            res_0 = f0.result()
+            res_1 = f1.result()
+    finally:
+        sys.stdout = saved_stdout
+        sys.stderr = saved_stderr
 
     merged_results = {}
     if overlap_samples > 0:
@@ -495,11 +497,7 @@ def separate_vocals(
     else:
         print(f"⚡ [BS-RoFormer Single-GPU] Modo: {device} ({total_duration_sec:.1f}s audio)...")
         with torch.no_grad():
-            with (
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                result, _ = demix_track(config, model, mixture, device)
+            result, _ = demix_track(config, model, mixture, device)
 
     # Guardar stems individuales (vocals, drums, bass, etc.)
     for instrument, audio in result.items():
