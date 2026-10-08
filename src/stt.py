@@ -130,7 +130,6 @@ def resolve_final_title(
         if raw_title and str(raw_title).strip():
             clean = "".join(c for c in str(raw_title) if c not in r'\/:*?"<>|').replace('\n', ' ').strip()
             if clean:
-                print(f"⏱️ [Etapa: Título Viral (Gemini)] Generado en {elapsed:.1f}s: {clean}", flush=True)
                 return clean, elapsed
     except Exception as e:
         print(f"⚠️ [Título Viral] Error en generación: {e}. Usando título original: '{fallback_title}'", flush=True)
@@ -185,7 +184,6 @@ def run_main(
                 seg_dict["end"] = e
                 seg_dict["text"] = txt
                 translated_result.append(seg_dict)
-            print(f"⏱️ [Etapa: Traducción (Gemini)] Completada en {t_trans:.1f}s ({len(translated_texts)} segmentos)")
         else:
             print("⚠️ No se pudo traducir, usando texto original")
 

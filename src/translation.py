@@ -158,7 +158,7 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
                     parsed = json.loads(clean_json)
 
                     if isinstance(parsed, list):
-                        print(f"✅ [Traducción] Completada con '{model}' en {duration:.1f}s ({len(parsed)} frases)\n", flush=True)
+                        print(f"⏱️ [Etapa: Traducción (Gemini)] Completada con '{model}' en {duration:.1f}s ({len(parsed)} frases)", flush=True)
                         return parsed
 
             except Exception as e:
@@ -276,7 +276,7 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
 
                 if raw_title:
                     title = raw_title.replace("\n", " ").strip("\"'")
-                    print(f"✅ [Título Viral] Generado con '{model}' [Interactions API] en {duration:.1f}s: {title}", flush=True)
+                    print(f"⏱️ [Etapa: Título Viral (Gemini)] Generado con '{model}' en {duration:.1f}s: {title}", flush=True)
                     return title
 
             except Exception as e:

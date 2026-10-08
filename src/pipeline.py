@@ -192,8 +192,6 @@ def process_video_queue(
                 "title": stt_timings.get("title", 0.0),
             }
 
-            print(f"✅ Transcripción y adaptación completadas: {len(translated_result)} segmentos listos para TTS")
-
             if on_stage:
                 try:
                     on_stage(u, "ready", f"Listo: {output_name}")

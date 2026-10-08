@@ -190,6 +190,18 @@ def _get_roformer_gpu0(config, primary_model):
     return model_0
 
 
+def preload_roformer_models():
+    """
+    Precarga los modelos de BS-RoFormer en GPU.
+    Si hay >= 2 GPUs, precarga tanto el primario (cuda:1) como la réplica bs_roformer_gpu0 (cuda:0).
+    """
+    import torch
+    config, model, device = get_roformer_model()
+    if torch.cuda.is_available() and torch.cuda.device_count() >= 2:
+        get_or_load_model("bs_roformer_gpu0", _get_roformer_gpu0, config, model)
+    return config, model, device
+
+
 # Solapamiento fijo de 2.0 segundos con crossfade entre GPU 0 y GPU 1:
 # Imprescindible para eliminar el "tic" o discontinuidad de fase/borde en la STFT de BS-RoFormer.
 DUAL_GPU_OVERLAP_SEC: float = 2.0
@@ -231,6 +243,7 @@ def _demix_dual_gpu(
     saved_stdout = sys.stdout
     saved_stderr = sys.stderr
     try:
+        sys.stdout = io.StringIO()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             f0 = executor.submit(_infer_chunk, model_0, chunk_0, torch.device("cuda:0"))
             f1 = executor.submit(_infer_chunk, model_1, chunk_1, torch.device("cuda:1"))
@@ -298,8 +311,16 @@ def print_codecs(info):
     v = info.get("requested_formats", [])[0]
     a = info.get("requested_formats", [])[1]
 
+    dur = info.get("duration")
+    dur_text = ""
+    if dur:
+        m, s = divmod(int(dur), 60)
+        dur_text = f" | {m}m {s:02d}s" if m > 0 else f" | {s}s"
+    elif info.get("duration_string"):
+        dur_text = f" | {info.get('duration_string')}"
+
     print(
-        f"Video: itag {v['format_id']} | {v.get('ext')} | {v.get('vcodec')} | {v.get('height')}p | {v.get('fps')}fps"
+        f"Video: itag {v['format_id']} | {v.get('ext')} | {v.get('vcodec')} | {v.get('height')}p | {v.get('fps')}fps{dur_text}"
     )
     print(
         f"Audio: itag {a['format_id']} | {a.get('ext')} | {a.get('acodec')} | {a.get('asr')}Hz | {a.get('abr')}kbps"
@@ -492,13 +513,18 @@ def separate_vocals(
 
     # 3) Separar stems: Dual-GPU o Single-GPU
     if enable_dual:
-        print(f"⚡ [BS-RoFormer Dual-GPU] Modo: GPU 0 + GPU 1 | Solapamiento: {DUAL_GPU_OVERLAP_SEC:.1f}s ({total_duration_sec:.1f}s audio)...")
+        print("⚡ [BS-RoFormer Dual-GPU] Modo: GPU 0 + GPU 1")
         model_0 = get_or_load_model("bs_roformer_gpu0", _get_roformer_gpu0, config, model)
         result = _demix_dual_gpu(config, model_0, model, mixture, sr)
     else:
-        print(f"⚡ [BS-RoFormer Single-GPU] Modo: {device} ({total_duration_sec:.1f}s audio)...")
-        with torch.no_grad():
-            result, _ = demix_track(config, model, mixture, device)
+        print(f"⚡ [BS-RoFormer Single-GPU] Modo: {device}")
+        saved_stdout = sys.stdout
+        try:
+            sys.stdout = io.StringIO()
+            with torch.no_grad():
+                result, _ = demix_track(config, model, mixture, device)
+        finally:
+            sys.stdout = saved_stdout
 
     # Guardar stems individuales (vocals, drums, bass, etc.)
     for instrument, audio in result.items():
