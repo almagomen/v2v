@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Union, Tuple, Any, Optional
 
 try:
+    import torch
     import stable_whisper
     import torchaudio
 except ImportError:
+    torch = None
     stable_whisper = None
     torchaudio = None
 
@@ -47,26 +49,44 @@ def transcribe_and_process(
     segments: Any = None,
     gap: float = 1,
     duration: int = 7,
-) -> Tuple[list[dict], Any, Any]:
+) -> Tuple[list[dict], Any, Any, dict]:
     """
-    Transcribe y procesa con diarización. Si segments es None, transcribe desde media_path.
-    Returns: (result, transcription_segments, diarize_segments)
+    Transcribe y procesa con diarización en paralelo cuando hay 2 GPUs. Si segments es None, procesa desde media_path.
+    Returns: (result, transcription_segments, diarize_segments, timings)
     """
     if segments is None:
         if media_path is None:
             raise ValueError("Se requiere media_path o segments.")
-        t0_whisper = time.perf_counter()
-        whisper_model = get_whisper_model()
-        segments = whisper_model.transcribe(str(media_path), verbose=None)
-        t_whisper = time.perf_counter() - t0_whisper
-        print(f"⏱️ [Etapa: Transcripción (Whisper)] Completada en {t_whisper:.1f}s")
 
-        t0_diarize = time.perf_counter()
-        diarization_model = get_diarization_model()
-        f_err = io.StringIO()
-        with contextlib.redirect_stderr(f_err):
-            diarize_segments = speaker_diarization(diarization_model, str(media_path))
-        t_diarize = time.perf_counter() - t0_diarize
+        t0_stt_wall = time.perf_counter()
+
+        def _run_whisper():
+            t0 = time.perf_counter()
+            whisper_model = get_whisper_model()
+            res = whisper_model.transcribe(str(media_path), verbose=None)
+            t_taken = time.perf_counter() - t0
+            return res, t_taken
+
+        def _run_diarization():
+            t0 = time.perf_counter()
+            diarization_model = get_diarization_model()
+            f_err = io.StringIO()
+            with contextlib.redirect_stderr(f_err):
+                d_segs = speaker_diarization(diarization_model, str(media_path))
+            t_taken = time.perf_counter() - t0
+            return d_segs, t_taken
+
+        gpu_count = torch.cuda.device_count() if (torch is not None and torch.cuda.is_available()) else 0
+        if gpu_count >= 2:
+            print("⚡ [STT + Diarización Dual-GPU] Modo: Whisper (GPU 0) + Pyannote (GPU 1) en paralelo...")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="v2v_stt_diarize") as executor:
+            fut_whisper = executor.submit(_run_whisper)
+            fut_diarize = executor.submit(_run_diarization)
+            segments, t_whisper = fut_whisper.result()
+            diarize_segments, t_diarize = fut_diarize.result()
+
+        print(f"⏱️ [Etapa: Transcripción (Whisper)] Completada en {t_whisper:.1f}s")
         print(f"⏱️ [Etapa: Diarización (Pyannote)] Completada en {t_diarize:.1f}s")
 
         t0_group = time.perf_counter()
@@ -78,8 +98,8 @@ def transcribe_and_process(
             max_gap=gap,
         )
         t_group = time.perf_counter() - t0_group
-        total_stt = t_whisper + t_diarize + t_group
-        print(f"⏱️ [Etapa: STT + Diarización Total] {total_stt:.1f}s ({len(result)} segmentos generados)")
+        total_stt_wall = time.perf_counter() - t0_stt_wall
+        print(f"⏱️ [Etapa: STT + Diarización Total] {total_stt_wall:.1f}s ({len(result)} segmentos generados)")
         return result, segments, diarize_segments, {"whisper": t_whisper, "diarization": t_diarize}
 
     raise ValueError("Pasando segments sin media_path no soportado aquí.")

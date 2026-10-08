@@ -15,7 +15,7 @@ except ImportError:
     Pipeline = None
     Segment = None
 
-from src.config import DEVICE, DRIVE_DIR, KAGGLE_INPUT_DIR, get_hf_token
+from src.config import DEVICE, DEVICE_SECONDARY, DRIVE_DIR, KAGGLE_INPUT_DIR, get_hf_token
 from src.models import get_or_load_model
 
 DIARIZATION_DIR = DRIVE_DIR / "speaker-diarization-community-1" if DRIVE_DIR else None
@@ -51,7 +51,8 @@ def _load_diarization_model() -> Any:
         else:
             raise
 
-    model.to(torch.device(DEVICE))
+    target_dev = DEVICE_SECONDARY if (torch is not None and torch.cuda.is_available()) else DEVICE
+    model.to(torch.device(target_dev))
     return model
 
 
