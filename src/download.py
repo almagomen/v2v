@@ -189,19 +189,22 @@ def _get_roformer_gpu0(config, primary_model):
     return model_0
 
 
+# Solapamiento fijo de 2.0 segundos con crossfade entre GPU 0 y GPU 1:
+# Imprescindible para eliminar el "tic" o discontinuidad de fase/borde en la STFT de BS-RoFormer.
+DUAL_GPU_OVERLAP_SEC: float = 2.0
+
+
 def _demix_dual_gpu(
     config,
     model_0,
     model_1,
     mixture,
     sr: int,
-    overlap_sec: float = 2.0,
-    use_fp16: bool = True,
 ) -> dict:
     """
-    Divide el audio en 2 bloques solapados y ejecuta la inferencia en paralelo
-    en GPU 0 y GPU 1 usando ThreadPoolExecutor con precisión FP16 o FP32.
-    Aplica crossfade suave en la unión para eliminar cualquier artefacto de borde.
+    Divide el audio en 2 bloques solapados (2.0s) y ejecuta la inferencia en paralelo
+    en GPU 0 y GPU 1 usando ThreadPoolExecutor.
+    Aplica crossfade suave en la unión para eliminar cualquier artefacto de borde ("tic").
     """
     import numpy as np
     import torch
@@ -209,7 +212,7 @@ def _demix_dual_gpu(
     from bs_roformer.utils import demix_track
 
     total_samples = mixture.shape[1]
-    overlap_samples = min(int(max(0.0, overlap_sec) * sr), total_samples // 4)
+    overlap_samples = min(int(DUAL_GPU_OVERLAP_SEC * sr), total_samples // 4)
     mid = total_samples // 2
 
     if overlap_samples > 0:
@@ -221,13 +224,12 @@ def _demix_dual_gpu(
 
     def _infer_chunk(m, chunk, dev):
         with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=bool(use_fp16 and torch.cuda.is_available())):
-                with (
-                    contextlib.redirect_stdout(io.StringIO()),
-                    contextlib.redirect_stderr(io.StringIO()),
-                ):
-                    res, _ = demix_track(config, m, chunk, dev)
-                    return res
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                res, _ = demix_track(config, m, chunk, dev)
+                return res
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         f0 = executor.submit(_infer_chunk, model_0, chunk_0, torch.device("cuda:0"))
@@ -427,16 +429,14 @@ def separate_vocals(
     video_path: Path,
     output_dir: Path | None = None,
     force_dual_gpu: bool | None = None,
-    use_fp16: bool | None = None,
-    overlap_sec: float | None = None,
 ) -> tuple[Path, Path]:
     """
     Separa las voces del audio usando BS-RoFormer.
 
-    Parámetros configurables (o vía variables de entorno ROFORMER_DUAL_GPU, ROFORMER_FP16, ROFORMER_OVERLAP):
+    Parámetros:
       - force_dual_gpu: True para forzar 2 GPUs, False para 1 GPU, None para auto-detección.
-      - use_fp16: True para Tensor Cores FP16, False para FP32, None para auto (true por defecto).
-      - overlap_sec: Segundos de solapamiento en la unión de mitades (default 2.0s, 0 para corte seco).
+        (El solapamiento Dual-GPU se fija internamente en 2.0s con crossfade para garantizar
+        que no exista ningún 'tic' o discontinuidad en el punto de corte).
 
     Registra en v2v_assets.json:
       - vocals:    pista de voz extraída (vocals.wav)
@@ -475,15 +475,7 @@ def separate_vocals(
     total_duration_sec = mixture.shape[1] / sr
     gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
 
-    # Determinar parámetros de configuración
-    if use_fp16 is None:
-        use_fp16 = os.environ.get("ROFORMER_FP16", "true").lower() in ("true", "1", "yes")
-    if overlap_sec is None:
-        try:
-            overlap_sec = float(os.environ.get("ROFORMER_OVERLAP", "2.0"))
-        except ValueError:
-            overlap_sec = 2.0
-
+    # Determinar si se activa Dual-GPU
     if force_dual_gpu is None:
         env_dg = os.environ.get("ROFORMER_DUAL_GPU", "auto").lower()
         if env_dg in ("false", "0", "no"):
@@ -495,22 +487,19 @@ def separate_vocals(
     else:
         enable_dual = bool(force_dual_gpu and gpu_count >= 2)
 
-    prec_label = "FP16" if use_fp16 else "FP32"
-
     # 3) Separar stems: Dual-GPU o Single-GPU
     if enable_dual:
-        print(f"⚡ [BS-RoFormer Dual-GPU] Modo: GPU 0 + GPU 1 | Precisión: {prec_label} | Solapamiento: {overlap_sec:.1f}s ({total_duration_sec:.1f}s audio)...")
+        print(f"⚡ [BS-RoFormer Dual-GPU] Modo: GPU 0 + GPU 1 | Solapamiento: {DUAL_GPU_OVERLAP_SEC:.1f}s ({total_duration_sec:.1f}s audio)...")
         model_0 = get_or_load_model("bs_roformer_gpu0", _get_roformer_gpu0, config, model)
-        result = _demix_dual_gpu(config, model_0, model, mixture, sr, overlap_sec=overlap_sec, use_fp16=use_fp16)
+        result = _demix_dual_gpu(config, model_0, model, mixture, sr)
     else:
-        print(f"⚡ [BS-RoFormer Single-GPU] Modo: {device} | Precisión: {prec_label} ({total_duration_sec:.1f}s audio)...")
+        print(f"⚡ [BS-RoFormer Single-GPU] Modo: {device} ({total_duration_sec:.1f}s audio)...")
         with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=bool(use_fp16 and torch.cuda.is_available())):
-                with (
-                    contextlib.redirect_stdout(io.StringIO()),
-                    contextlib.redirect_stderr(io.StringIO()),
-                ):
-                    result, _ = demix_track(config, model, mixture, device)
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                result, _ = demix_track(config, model, mixture, device)
 
     # Guardar stems individuales (vocals, drums, bass, etc.)
     for instrument, audio in result.items():
