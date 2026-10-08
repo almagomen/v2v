@@ -103,3 +103,7 @@ def fish_tts(
 def model_tts(text: str, language: str, audio_ref: str, **kwargs) -> tuple:
     """Wrapper para usar como tts_fn en clone_voice_segments. audio_ref = voice_id / reference_id."""
     return fish_tts(text=text, language=language, voice_id=audio_ref, **kwargs)
+
+
+# Alias para compatibilidad con notebooks y scripts
+synthesize_speech = model_tts
