@@ -4,6 +4,7 @@ Los activos generados se registran en v2v_assets.json de la carpeta del job.
 """
 
 import io
+import sys
 import time
 import contextlib
 from pathlib import Path
