@@ -142,6 +142,17 @@ def clone_voice_segments(
     times: list[int] = []
     path_es: list[Path] = []
 
+    # Obtener duración total del video si vocals.wav existe
+    video_total_duration: Optional[float] = None
+    vocals_main_path = path.with_name("vocals.wav")
+    if vocals_main_path.exists():
+        try:
+            v_info = torchaudio.info(str(vocals_main_path))
+            if v_info.sample_rate > 0:
+                video_total_duration = v_info.num_frames / v_info.sample_rate
+        except Exception:
+            pass
+
     for idx, text_dict in enumerate(texts_to_process):
         text = text_dict["text"]
         start_time = text_dict["start"]
@@ -171,25 +182,63 @@ def clone_voice_segments(
         duration_ratio = dur_es / dur_en if dur_en > 0 else 0
         print(f"{idx+1:2d}. ", end="")
 
+        # ─── BÚSQUEDA DEL PRÓXIMO SEGMENTO DEL MISMO HABLANTE ───
+        # Buscar en la lista global 'texts' el siguiente inicio para este speaker
+        next_same_speaker_starts = [
+            t["start"]
+            for t in texts
+            if t.get("speaker", "SPEAKER_00") == speaker and t["start"] > start_time + 0.01
+        ]
+        next_speaker_start = min(next_same_speaker_starts) if next_same_speaker_starts else None
+
+        # Determinar el límite máximo disponible sin colisionar
+        if next_speaker_start is not None:
+            available_space = next_speaker_start - start_time
+            original_gap = available_space - dur_en
+            # Gap dinámico de respiro: entre 0.05s y 0.15s según el espacio libre
+            safety_gap = min(0.15, max(0.05, original_gap * 0.1)) if original_gap > 0.1 else min(0.05, max(0.0, original_gap))
+            max_allowed_dur = max(dur_en, available_space - safety_gap)
+        elif video_total_duration is not None:
+            available_space = video_total_duration - start_time
+            max_allowed_dur = max(dur_en, available_space - 0.1)
+        else:
+            max_allowed_dur = None
+
         if slowdown_range and stretch_target_ratio != 1.0:
             if duration_ratio > 1.0:
-                print(
-                    f"{(dur_es / dur_en):.2f}x: {dur_es:5.2f}s → {dur_en:5.2f}s",
-                    end=" ",
-                )
-                target_samples = int(dur_en * rate)
-                arr = adjust_audio_duration(arr, target_samples, rate)
+                if max_allowed_dur is not None and dur_es > max_allowed_dur:
+                    # Choca con el siguiente segmento del mismo hablante:
+                    # Ajustamos únicamente lo necesario para encajar en max_allowed_dur
+                    ratio_needed = dur_es / max_allowed_dur
+                    print(
+                        f"⚠️ Choque ({ratio_needed:.2f}x): {dur_es:5.2f}s → {max_allowed_dur:5.2f}s (tope sig: {next_speaker_start:.2f}s)",
+                        end=" ",
+                    )
+                    target_samples = int(max_allowed_dur * rate)
+                    arr = adjust_audio_duration(arr, target_samples, rate)
+                else:
+                    # Cabe perfectamente en el silencio/pausa sin chocar:
+                    limit_str = f"tope: {max_allowed_dur:5.2f}s" if max_allowed_dur else "sin tope"
+                    print(
+                        f"✨ 1.00x (natural, cabe en pausa): {dur_es:5.2f}s (orig: {dur_en:5.2f}s | {limit_str})",
+                        end=" ",
+                    )
             elif slowdown_range[0] < duration_ratio < slowdown_range[1]:
-                target_dur_sec = dur_es + (dur_en - dur_es) * stretch_target_ratio
+                # Estiramiento suave con tope estricto de 0.85x mínimo (evita distorsión / voz arrastrada)
+                desired_dur = dur_es + (dur_en - dur_es) * stretch_target_ratio
+                max_slow_dur = dur_es / 0.85  # Nunca ralentizar a menos de 0.85x
+                target_dur_sec = min(desired_dur, max_slow_dur, dur_en)
+                effective_slow_speed = dur_es / target_dur_sec if target_dur_sec > 0 else 1.0
+
                 print(
-                    f"{(dur_es / target_dur_sec):.2f}x: {dur_es:5.2f}s → {target_dur_sec:5.2f}s",
+                    f"🔉 {effective_slow_speed:.2f}x (estiramiento suave): {dur_es:5.2f}s → {target_dur_sec:5.2f}s",
                     end=" ",
                 )
                 target_samples = int(target_dur_sec * rate)
                 arr = adjust_audio_duration(arr, target_samples, rate)
             else:
                 print(
-                    f"{(dur_es / dur_en):.2f}x: {dur_es:5.2f}s → {dur_en:5.2f}s",
+                    f"✨ 1.00x: {dur_es:5.2f}s (orig: {dur_en:5.2f}s)",
                     end=" ",
                 )
 
@@ -221,6 +270,11 @@ def clone_voice_segments(
             target_samples = int(arr.shape[-1] / speed)
             print(f"Speed manual: {speed}x -> {target_samples} samples", end=" ")
             arr = adjust_audio_duration(arr, target_samples, rate)
+
+        # Actualizar metadatos de duración y fin real del segmento
+        final_dur = arr.shape[-1] / rate
+        text_dict["end"] = round(start_time + final_dur, 3)
+        text_dict["duration"] = round(final_dur, 3)
 
         print(f" {text}")
 

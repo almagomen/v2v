@@ -231,6 +231,18 @@ def _run_pipeline(
                 set_url_state(r.get("url", ""), "error", "Error en TTS")
                 continue
 
+            # Actualizar result.pkl con las duraciones reales sincronizadas tras TTS
+            output_file = path.with_name("result.pkl")
+            if output_file.exists():
+                try:
+                    with open(output_file, "rb") as f:
+                        pkl_data = list(pickle.load(f))
+                    pkl_data[0] = texts
+                    with open(output_file, "wb") as f:
+                        pickle.dump(tuple(pkl_data), f)
+                except Exception as pkl_err:
+                    print(f"⚠️ No se pudo actualizar result.pkl con duraciones TTS: {pkl_err}")
+
             # El pipeline termina aquí. El render se hace desde Colab Export.
             # Recargar el manifiesto (register_segment lo actualizó iterativamente).
             assets = load_assets(path.parent)

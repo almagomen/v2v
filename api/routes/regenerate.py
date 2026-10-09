@@ -214,6 +214,23 @@ async def apply_speed(req: ApplySpeedRequest):
 
     torchaudio.save(str(audio_path), arr_new, sample_rate=rate)
 
+    # Actualizar end del segmento en result.pkl
+    pkl_path = path.with_name("result.pkl")
+    if pkl_path.exists():
+        try:
+            with open(pkl_path, "rb") as f:
+                pkl_data = list(pickle.load(f))
+            texts_list = pkl_data[0]
+            if 1 <= req.seg_idx <= len(texts_list):
+                new_dur = arr_new.shape[-1] / rate
+                texts_list[req.seg_idx - 1]["end"] = round(texts_list[req.seg_idx - 1]["start"] + new_dur, 3)
+                texts_list[req.seg_idx - 1]["duration"] = round(new_dur, 3)
+                pkl_data[0] = texts_list
+                with open(pkl_path, "wb") as f:
+                    pickle.dump(tuple(pkl_data), f)
+        except Exception as pkl_err:
+            print(f"⚠️ Error actualizando result.pkl tras apply-speed: {pkl_err}")
+
     return FileResponse(audio_path, filename=audio_path.name, media_type="audio/wav")
 
 
