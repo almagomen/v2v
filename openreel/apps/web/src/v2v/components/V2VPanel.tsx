@@ -113,9 +113,11 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [isSavingTokens, setIsSavingTokens] = React.useState(false);
   const [showFishApiKey, setShowFishApiKey] = React.useState(false);
   const [showGoogleApiKey, setShowGoogleApiKey] = React.useState(false);
-  const [isLogsOpen, setIsLogsOpen] = React.useState(false);
-  const [logsTab, setLogsTab] = React.useState<"process" | "export">("process");
   const exportLogs = useColabExportStore((s) => s.exportLogs);
+  const isLogsOpen = useColabExportStore((s) => s.isLogsOpen);
+  const setIsLogsOpen = useColabExportStore((s) => s.setIsLogsOpen);
+  const logsTab = useColabExportStore((s) => s.activeLogTab);
+  const setLogsTab = useColabExportStore((s) => s.setActiveLogTab);
   const [titleDisplayModes, setTitleDisplayModes] = React.useState<Record<string, number>>({});
   const [copiedUrlKey, setCopiedUrlKey] = React.useState<string | null>(null);
 
@@ -891,7 +893,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           </div>
         )}
 
-        {(log || Object.keys(urlLogs).length > 0 || (exportLogs && exportLogs.length > 0)) && (
+        {(log || Object.keys(urlLogs).length > 0 || (exportLogs && exportLogs.length > 0) || isLogsOpen || logsTab === "export") && (
           <div className="space-y-1.5 border border-border/60 rounded-lg p-2 bg-background-tertiary/40">
             <div className="flex items-center justify-between">
               <button
@@ -911,7 +913,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
               {isLogsOpen && (
                 <div className="flex items-center gap-1">
-                  {exportLogs && exportLogs.length > 0 && (
+                  {(logsTab === "export" || (exportLogs && exportLogs.length > 0)) && (
                     <div className="flex items-center rounded border border-border bg-background-secondary p-0.5 text-[9px]">
                       <button
                         type="button"
@@ -933,7 +935,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                             : "text-text-muted hover:text-text-primary"
                         }`}
                       >
-                        Exportación ({exportLogs.length})
+                        Exportación {exportLogs?.length ? `(${exportLogs.length})` : ""}
                       </button>
                     </div>
                   )}

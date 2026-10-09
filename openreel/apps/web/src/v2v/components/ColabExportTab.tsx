@@ -69,10 +69,23 @@ function isInV2VFolder(
   for (const folderKey of Object.keys(folderRefs)) {
     const ref = folderRefs[folderKey];
     if (ref.nativeFiles && Array.isArray(ref.nativeFiles)) {
-      if (ref.nativeFiles.includes(filename)) {
+      if (ref.nativeFiles.includes(filename) || ref.nativeFiles.includes(norm)) {
         return true;
       }
     }
+  }
+
+  // Detección tolerante de medios que provienen intrínsecamente del pipeline V2V en Colab
+  const isV2VStandardAsset =
+    filename.startsWith("tts_") ||
+    filename.startsWith("seg_") ||
+    filename.startsWith("video_only") ||
+    filename.startsWith("merged") ||
+    filename.includes("tts_") ||
+    filename.includes("seg_");
+
+  if (isV2VStandardAsset && Object.keys(folderRefs).length > 0) {
+    return true;
   }
 
   return false;
@@ -217,6 +230,8 @@ export const ColabExportTab: React.FC = () => {
     exportLogs,
     appendExportLog,
     clearExportLogs,
+    openExportLogs,
+    resetStatus,
   } = useColabExportStore();
 
   const [savedMetas, setSavedMetas] = useState<AutoSaveMetadata[]>([]);
@@ -240,20 +255,92 @@ export const ColabExportTab: React.FC = () => {
   const needUpload = analyzed.filter((c) => c.status === "upload_needed");
   const totalClips = analyzed.filter((c) => c.status !== "not_allowed").length;
 
-  // Get job/video context and a descriptive name from folderRefs matching media names
+  // Get job/video context and a descriptive name from folderRefs matching media names, projectId o session
   const jobContext = React.useMemo(() => {
+    const refs = folderRefs as Record<string, any>;
+    const refEntries = Object.entries(refs);
+    if (refEntries.length === 0) {
+      // Fallback si no hay folderRefs aún en storage pero hay sesión activa en V2V store
+      const v2vState = useV2VStore.getState();
+      if (v2vState.jobId) {
+        const currentIdx = v2vState.selectedVideoIndex ?? 0;
+        const curVid = v2vState.videos?.[currentIdx];
+        return {
+          jobId: v2vState.jobId,
+          videoIndex: currentIdx,
+          outputName: curVid?.output_name || project?.name || "export",
+          longName: curVid?.output_name || project?.name || "export",
+          nativeFiles: [],
+        };
+      }
+      return null;
+    }
+
+    // Estrategia 1: Coincidencia por nativeFiles con clips válidos
     for (const clip of analyzed) {
-      if (clip.status !== "not_allowed") {
-        const filename = clip.mediaName.split("/").pop() || clip.mediaName;
-        for (const [folderKey, ref] of Object.entries(folderRefs as Record<string, any>)) {
-          if (ref.nativeFiles && Array.isArray(ref.nativeFiles) && ref.nativeFiles.includes(filename)) {
-            return { ...ref, longName: ref.outputName || folderKey };
-          }
+      const filename = clip.mediaName.split("/").pop() || clip.mediaName;
+      for (const [folderKey, ref] of refEntries) {
+        if (
+          ref.nativeFiles &&
+          Array.isArray(ref.nativeFiles) &&
+          (ref.nativeFiles.includes(filename) || ref.nativeFiles.includes(clip.mediaName))
+        ) {
+          return { ...ref, longName: ref.outputName || folderKey };
         }
       }
     }
+
+    // Estrategia 2: Coincidencia por projectId (el ID del proyecto actual en OpenReel)
+    if (project?.id) {
+      for (const [folderKey, ref] of refEntries) {
+        if (ref.projectId === project.id) {
+          return { ...ref, longName: ref.outputName || folderKey };
+        }
+      }
+    }
+
+    // Estrategia 3: Coincidencia por nombre de proyecto o carpeta
+    const projNameNorm = (project?.name || "").trim().toLowerCase();
+    if (projNameNorm) {
+      for (const [folderKey, ref] of refEntries) {
+        const outNorm = (ref.outputName || "").trim().toLowerCase();
+        const fKeyNorm = folderKey.trim().toLowerCase();
+        if (
+          (outNorm && (outNorm === projNameNorm || projNameNorm.includes(outNorm) || outNorm.includes(projNameNorm))) ||
+          (fKeyNorm && (fKeyNorm === projNameNorm || projNameNorm.includes(fKeyNorm) || fKeyNorm.includes(projNameNorm)))
+        ) {
+          return { ...ref, longName: ref.outputName || folderKey };
+        }
+      }
+    }
+
+    // Estrategia 4: Coincidencia por sesión activa de V2V store
+    const v2vState = useV2VStore.getState();
+    if (v2vState.jobId) {
+      const currentIdx = v2vState.selectedVideoIndex ?? 0;
+      for (const [folderKey, ref] of refEntries) {
+        if (ref.jobId === v2vState.jobId && ref.videoIndex === currentIdx) {
+          return { ...ref, longName: ref.outputName || folderKey };
+        }
+      }
+      const curVid = v2vState.videos?.[currentIdx];
+      return {
+        jobId: v2vState.jobId,
+        videoIndex: currentIdx,
+        outputName: curVid?.output_name || project?.name || "export",
+        longName: curVid?.output_name || project?.name || "export",
+        nativeFiles: [],
+      };
+    }
+
+    // Estrategia 5: Si sólo hay una carpeta registrada en folderRefs
+    if (refEntries.length === 1) {
+      const [folderKey, ref] = refEntries[0];
+      return { ...ref, longName: ref.outputName || folderKey };
+    }
+
     return null;
-  }, [analyzed, folderRefs]);
+  }, [analyzed, folderRefs, project]);
 
   // Detectar si el timeline conserva el video continuo sin cortes de video (Stream Copy directo)
   const isStreamCopyCandidate = React.useMemo(() => {
@@ -490,7 +577,7 @@ export const ColabExportTab: React.FC = () => {
     }
 
     clearExportLogs();
-    setIsLogsOpen(true);
+    openExportLogs();
     const tExportStart = performance.now();
     const rawName = jobContext.longName || project.name || "export";
     const outName = rawName.replace(/^\d+[._\s]*/, "");
@@ -606,7 +693,7 @@ export const ColabExportTab: React.FC = () => {
       setErrorMsg(err);
       appendExportLog(`❌ Error en exportación: ${err}`);
     }
-  }, [analyzed, jobContext, project.name, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData, appendExportLog, clearExportLogs, needUpload.length, effectiveMode]);
+  }, [analyzed, jobContext, project.name, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData, appendExportLog, clearExportLogs, openExportLogs, needUpload.length, effectiveMode]);
 
   // ── Batch export ─────────────────────────────────────────────
   const handleBatchExport = useCallback(async () => {
@@ -618,7 +705,7 @@ export const ColabExportTab: React.FC = () => {
     }
 
     clearExportLogs();
-    setIsLogsOpen(true);
+    openExportLogs();
     const tBatchStart = performance.now();
 
     const totalSelected = selected.length;
@@ -806,7 +893,7 @@ export const ColabExportTab: React.FC = () => {
       setErrorMsg(err);
       appendExportLog(`❌ Error en exportación por lotes: ${err}`);
     }
-  }, [savedProjects, folderRefs, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData, appendExportLog, clearExportLogs, exportMode]);
+  }, [savedProjects, folderRefs, uploadToCatbox, setStatus, setErrorMsg, setCatboxUrl, setCatboxVideos, setProgressData, appendExportLog, clearExportLogs, openExportLogs, exportMode]);
 
   const isRunning = status === "uploading" || status === "rendering";
 
@@ -1203,38 +1290,51 @@ export const ColabExportTab: React.FC = () => {
 
 
       {/* Action button */}
-      <Button
-        className="w-full"
-        onClick={isBatch ? handleBatchExport : handleSingleExport}
-        disabled={isRunning || totalClips === 0 || (!isBatch && !jobContext)}
-      >
-        {isRunning ? (
-          <>
-            <Loader2 size={16} className="animate-spin" />
-            {isBatch && totalVideos > 0
-              ? `Exportando (${currentIdx || 1}/${totalVideos})…`
-              : status === "uploading"
-                ? "Subiendo medios…"
+      <div className="flex flex-col gap-1.5">
+        <Button
+          className="w-full"
+          onClick={isBatch ? handleBatchExport : handleSingleExport}
+          disabled={isRunning || totalClips === 0 || (!isBatch && !jobContext)}
+        >
+          {isRunning ? (
+            <>
+              <Loader2 size={16} className="animate-spin" />
+              {isBatch && totalVideos > 0
+                ? `Exportando (${currentIdx || 1}/${totalVideos})…`
+                : status === "uploading"
+                  ? "Subiendo medios…"
+                  : effectiveMode === "stream_copy"
+                    ? "Empaquetando en Colab (Stream Copy)…"
+                    : "Renderizando en Colab (GPU NVENC)…"}
+            </>
+          ) : isBatch ? (
+            <>
+              {uploadToCatbox ? <Upload size={16} /> : <Archive size={16} />}
+              {uploadToCatbox ? "Subir todos a Catbox" : "Exportar como ZIP"}
+            </>
+          ) : (
+            <>
+              {uploadToCatbox ? <Upload size={16} /> : <Download size={16} />}
+              {uploadToCatbox
+                ? "Subir a Catbox"
                 : effectiveMode === "stream_copy"
-                  ? "Empaquetando en Colab (Stream Copy)…"
-                  : "Renderizando en Colab (GPU NVENC)…"}
-          </>
-        ) : isBatch ? (
-          <>
-            {uploadToCatbox ? <Upload size={16} /> : <Archive size={16} />}
-            {uploadToCatbox ? "Subir todos a Catbox" : "Exportar como ZIP"}
-          </>
-        ) : (
-          <>
-            {uploadToCatbox ? <Upload size={16} /> : <Download size={16} />}
-            {uploadToCatbox
-              ? "Subir a Catbox"
-              : effectiveMode === "stream_copy"
-                ? "Exportar MP4 (Stream Copy)"
-                : "Renderizar MP4 (GPU NVENC)"}
-          </>
+                  ? "Exportar MP4 (Stream Copy)"
+                  : "Renderizar MP4 (GPU NVENC)"}
+            </>
+          )}
+        </Button>
+
+        {isRunning && (
+          <button
+            type="button"
+            onClick={resetStatus}
+            className="text-[10px] text-text-muted hover:text-red-400 text-center py-0.5 transition-colors underline cursor-pointer"
+            title="Restablece el estado si la conexión se interrumpió"
+          >
+            ¿Proceso bloqueado? Cancelar / Reiniciar estado
+          </button>
         )}
-      </Button>
+      </div>
     </div>
   );
 };

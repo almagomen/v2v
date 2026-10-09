@@ -64,6 +64,11 @@ export interface ColabExportState {
   exportLogs: string[];
   appendExportLog: (msg: string) => void;
   clearExportLogs: () => void;
+  isLogsOpen: boolean;
+  setIsLogsOpen: (open: boolean) => void;
+  activeLogTab: "process" | "export";
+  setActiveLogTab: (tab: "process" | "export") => void;
+  openExportLogs: () => void;
 
   setIsBatch: (isBatch: boolean) => void;
   setUploadToCatbox: (upload: boolean) => void;
@@ -110,6 +115,11 @@ export const useColabExportStore = create<ColabExportState>((set, get) => ({
   catboxUrl: null,
   catboxVideos: [],
   exportLogs: [],
+  isLogsOpen: false,
+  setIsLogsOpen: (isLogsOpen) => set({ isLogsOpen }),
+  activeLogTab: "process",
+  setActiveLogTab: (activeLogTab) => set({ activeLogTab }),
+  openExportLogs: () => set({ isLogsOpen: true, activeLogTab: "export" }),
 
   appendExportLog: (msg) =>
     set((state) => ({
