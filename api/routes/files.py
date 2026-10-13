@@ -1,10 +1,10 @@
-"""File serving endpoints."""
-
+import io
 import os
+import tarfile
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from api.job_store import get_job
 
@@ -160,3 +160,30 @@ def serve_audio_segment(job_id: str, video_index: int, seg: int):
         return FileResponse(file_path, filename=filename, media_type="audio/wav")
 
     raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+
+@router.get("/job/{job_id}/audio-segments-tar/{video_index}")
+def serve_audio_segments_tar(job_id: str, video_index: int):
+    """Empaqueta todos los segmentos de audio TTS de un video en un stream TAR ultrarrápido (1 sola petición HTTP)."""
+    folder = _get_video_folder(job_id, video_index)
+    seqs_trg = folder / "Seqs_trg"
+    if not seqs_trg.exists() or not seqs_trg.is_dir():
+        raise HTTPException(status_code=404, detail="Carpeta Seqs_trg no encontrada")
+
+    tar_stream = io.BytesIO()
+    with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+        for f in sorted(seqs_trg.glob("*.wav")):
+            if f.is_file() and f.stat().st_size > 0:
+                tar.add(f, arcname=f.name)
+
+    tar_bytes = tar_stream.getvalue()
+    if not tar_bytes:
+        raise HTTPException(status_code=404, detail="No hay segmentos WAV disponibles para empaquetar")
+
+    return Response(
+        content=tar_bytes,
+        media_type="application/x-tar",
+        headers={
+            "Content-Disposition": f'attachment; filename="audio_segments_{video_index}.tar"'
+        },
+    )

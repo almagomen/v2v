@@ -15,10 +15,11 @@ import {
 import { toast } from "@/stores/notification-store";
 import {
   addClipToDetachedProject,
+  addMultipleClipsToDetachedProject,
   addTrackAndGetId,
   renameTrackInProject,
   muteTrackInProject,
-} from "@/utils/detached-project-actions";
+} from "../utils/v2v-detached-actions";
 import { autoSaveManager } from "@/services/auto-save";
 import {
   type V2VSegmentInfo,
@@ -196,6 +197,55 @@ export interface V2VState {
   updateVideoOutputName: (videoIndex: number, newOutputName: string, targetJobId?: string) => Promise<void>;
   syncFolderAssets: (jobId: string, videoIndex: number, folder: string) => Promise<void>;
   reset: () => void;
+}
+
+async function generateWaveformsInBackground(projectId: string, mediaItems: MediaItem[]) {
+  if (!mediaItems || mediaItems.length === 0) return;
+  try {
+    const mediaBridge = getMediaBridge();
+    if (!mediaBridge.isInitialized()) {
+      await initializeMediaBridge();
+    }
+    const BATCH_SIZE = 4;
+    for (let i = 0; i < mediaItems.length; i += BATCH_SIZE) {
+      const slice = mediaItems.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(
+        slice.map(async (item) => {
+          if (!item.blob) return null;
+          try {
+            const wf = await mediaBridge.generateWaveform(item.blob, item.id);
+            return { id: item.id, peaks: wf?.peaks || null };
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      const currentStore = useProjectStore.getState();
+      if (currentStore.project && currentStore.project.id === projectId) {
+        const updatedItems = currentStore.project.mediaLibrary.items.map((m) => {
+          const match = results.find((r) => r && r.id === m.id);
+          return match && match.peaks ? { ...m, waveformData: match.peaks } : m;
+        });
+        currentStore.setProject({
+          ...currentStore.project,
+          mediaLibrary: {
+            ...currentStore.project.mediaLibrary,
+            items: updatedItems,
+          },
+        });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+
+    const finalStore = useProjectStore.getState();
+    if (finalStore.project && finalStore.project.id === projectId) {
+      await autoSaveManager.forceSave(finalStore.project);
+    }
+  } catch (err) {
+    console.warn("[V2V] Error generating waveforms in background:", err);
+  }
 }
 
 export const useV2VStore = create<V2VState>((set, get) => {
@@ -758,21 +808,56 @@ export const useV2VStore = create<V2VState>((set, get) => {
                   };
 
                   const assetTasks = assets.map(fetchAssetBlob);
-                  const segmentTasks = audioSegs.map((seg) => {
-                    const logicalName = segmentLogicalName(seg);
-                    return v2vApi
-                      .fetchAudioSegmentBlob(jobId, v.index, seg.seg)
-                      .then((blob) => ({ isSegment: true as const, seg, logicalName, blob }))
-                      .catch(() => null);
-                  });
-
-                  const [downloadedAssetsRaw, downloadedSegsRaw] = await Promise.all([
+                  const [downloadedAssetsRaw, downloadedSegs] = await Promise.all([
                     Promise.all(assetTasks),
-                    Promise.all(segmentTasks)
+                    (async () => {
+                      if (audioSegs.length === 0) return [];
+                      // 1. Intentar descarga consolidada en 1 solo stream TAR ultrarrápido (sin saturar túnel)
+                      try {
+                        const tarMap = await v2vApi.fetchAudioSegmentsTar(jobId, v.index);
+                        const segsFromTar: Array<{ isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob }> = [];
+                        for (const seg of audioSegs) {
+                          const logicalName = segmentLogicalName(seg);
+                          let blob: Blob | undefined;
+                          if (seg.filename && tarMap.has(seg.filename)) {
+                            blob = tarMap.get(seg.filename);
+                          } else if (tarMap.has(logicalName)) {
+                            blob = tarMap.get(logicalName);
+                          } else {
+                            const segSuffix = `_${String(seg.seg).padStart(3, "0")}.wav`;
+                            for (const [name, b] of tarMap.entries()) {
+                              if (name.endsWith(segSuffix)) {
+                                blob = b;
+                                break;
+                              }
+                            }
+                          }
+                          if (blob) {
+                            segsFromTar.push({ isSegment: true, seg, logicalName, blob });
+                          }
+                        }
+                        if (segsFromTar.length > 0) {
+                          console.log(`[V2V] Descargados ${segsFromTar.length} audios vía TAR consolidado para ${folder}`);
+                          return segsFromTar;
+                        }
+                      } catch (e) {
+                        console.warn(`[V2V] Fallback a descargas individuales de audio para ${folder}:`, e);
+                      }
+
+                      // 2. Fallback a peticiones individuales si el endpoint TAR no está disponible
+                      const segmentTasks = audioSegs.map((seg) => {
+                        const logicalName = segmentLogicalName(seg);
+                        return v2vApi
+                          .fetchAudioSegmentBlob(jobId, v.index, seg.seg)
+                          .then((blob) => ({ isSegment: true as const, seg, logicalName, blob }))
+                          .catch(() => null);
+                      });
+                      const individualResults = await Promise.all(segmentTasks);
+                      return individualResults.filter((d): d is { isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } => d !== null);
+                    })()
                   ]);
 
                   const downloadedAssets = downloadedAssetsRaw.filter((d): d is { asset: V2VAssetDef, blob: Blob } => d !== null);
-                  const downloadedSegs = downloadedSegsRaw.filter((d): d is { isSegment: true, seg: AudioSegmentItem, logicalName: string, blob: Blob } => d !== null);
 
                   if (audioSegs.length > 0 && downloadedSegs.length === 0) {
                     console.warn(
@@ -826,6 +911,8 @@ export const useV2VStore = create<V2VState>((set, get) => {
                       (bySpkAll[spk] ||= []).push(seg);
                     }
 
+                    const allClipsToBatchAdd: Array<{ trackId: string; mediaId: string; startTime: number }> = [];
+
                     for (const sKey of Object.keys(bySpkAll)) {
                       const segs = bySpkAll[sKey].sort((a, b) => a.seg - b.seg);
                       const { project: p2, trackId } = await addTrackAndGetId(workingProject, "audio");
@@ -851,13 +938,11 @@ export const useV2VStore = create<V2VState>((set, get) => {
                             );
                             continue;
                           }
-                          const clipRes = (await addClipToDetachedProject(
-                            workingProject,
+                          allClipsToBatchAdd.push({
                             trackId,
-                            media.id,
-                            seg.start,
-                          )) as { project?: typeof workingProject };
-                          if (clipRes.project) workingProject = clipRes.project;
+                            mediaId: media.id,
+                            startTime: seg.start,
+                          });
                         } else {
                           // TTS falló: crear MediaItem placeholder para que el clip
                           // quede en el timeline y pueda regenerarse desde el Bulk Editor
@@ -891,13 +976,11 @@ export const useV2VStore = create<V2VState>((set, get) => {
                             },
                           };
 
-                          const clipRes = (await addClipToDetachedProject(
-                            workingProject,
+                          allClipsToBatchAdd.push({
                             trackId,
-                            placeholderItem.id,
-                            seg.start,
-                          )) as { project?: typeof workingProject };
-                          if (clipRes.project) workingProject = clipRes.project;
+                            mediaId: placeholderItem.id,
+                            startTime: seg.start,
+                          });
                           failedSegNums.push(seg.seg);
                         }
                       }
@@ -909,33 +992,25 @@ export const useV2VStore = create<V2VState>((set, get) => {
                       }
                     }
 
+                    // Inserción en lote de todos los clips con un único clone estructurado (acelera de 10s a 15ms)
+                    if (allClipsToBatchAdd.length > 0) {
+                      const batchAddRes = await addMultipleClipsToDetachedProject(workingProject, allClipsToBatchAdd);
+                      workingProject = batchAddRes.project;
+                    }
+
+                    // Guardado atómico final del proyecto importado (1 solo I/O a IndexedDB)
                     await autoSaveManager.forceSave(workingProject);
+
+                    const importElapsedMs = Math.round(performance.now() - importStartTime);
+                    console.log(`[V2V] Importación al timeline completada para "${folder}" en ${importElapsedMs}ms (${allClipsToBatchAdd.length} clips insertados en lote)`);
                     
                     const audioSegmentsImported = workingProject.mediaLibrary.items.filter(
                       m => m.type === "audio" && m.name.startsWith("tts_") && !m.waveformData && !m.isPlaceholder
                     );
                     
+                    // Generación de formas de onda en segundo plano sin congelar la interfaz
                     if (audioSegmentsImported.length > 0) {
-                      const mediaBridge = getMediaBridge();
-                      if (!mediaBridge.isInitialized()) {
-                        await initializeMediaBridge();
-                      }
-                      for (const mediaItem of audioSegmentsImported) {
-                        if (!mediaItem.blob) continue;
-                        try {
-                          const waveformData = await mediaBridge.generateWaveform(mediaItem.blob, mediaItem.id);
-                          const idx = workingProject.mediaLibrary.items.findIndex(m => m.id === mediaItem.id);
-                          if (idx >= 0) {
-                            workingProject.mediaLibrary.items[idx] = {
-                              ...workingProject.mediaLibrary.items[idx],
-                              waveformData: waveformData?.peaks || null,
-                            };
-                          }
-                        } catch (e) {
-                          console.warn(`[V2V] Error generating waveform for ${mediaItem.name}:`, e);
-                        }
-                      }
-                      await autoSaveManager.forceSave(workingProject);
+                      generateWaveformsInBackground(workingProject.id, audioSegmentsImported);
                     }
                     
                     const nativeFiles = filesToImport.map(f => f.name.split("/").pop() || "");

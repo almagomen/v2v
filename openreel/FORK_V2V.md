@@ -53,6 +53,7 @@ apps/web/src/v2v/
     ├── v2v-segment-regen.ts           # Motor de regeneración de audio sin tocar el caché inmutable de OpenReel
     ├── v2v-segment-ids.ts             # Generador y parser de IDs deterministas de segmentos (jobId + videoIdx + segIdx)
     ├── v2v-utils.ts                   # Normalización de tokens, nombres lógicos y emparejamiento en librería
+    ├── v2v-detached-actions.ts        # Acciones sobre proyectos desacoplados (inmutables) e inserción en lote
     ├── v2v-emotions.ts                # Catálogo unificado de emociones Fish Audio (s2.1) y manipulación de tags
     └── v2v-folder-utils.ts            # Helpers de carpetas y assets de jobs V2V en la librería de medios
 ```
@@ -72,6 +73,7 @@ apps/web/src/v2v/
 | `src/v2v/utils/v2v-segment-regen.ts` | **Motor de regeneración de audio**: sustituye audios en el timeline de forma desacoplada usando la API pública `importMedia` (ver sección 3). |
 | `src/v2v/utils/v2v-segment-ids.ts` | IDs estables deterministas para segmentos V2V que persisten independientemente del cambio de nombre de archivo. |
 | `src/v2v/utils/v2v-utils.ts` | Normalización de nombres de medios (`segmentLogicalName`), parseo de tokens y emparejamiento en librería. |
+| `src/v2v/utils/v2v-detached-actions.ts` | **Acciones sobre proyectos desacoplados**: inserción en lote (`addMultipleClipsToDetachedProject`) y manipulación inmutable de tracks/clips sin tocar el store reactivo de OpenReel. |
 | `src/v2v/utils/v2v-emotions.ts` | Catálogo de 50+ emociones y estados de voz para Fish Audio (s2.1). |
 | `src/v2v/utils/v2v-folder-utils.ts` | Helpers de agrupación por carpetas de proyectos y snapshots de clips en el timeline. |
 

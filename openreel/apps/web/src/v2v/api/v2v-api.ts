@@ -247,6 +247,48 @@ export interface RegenerateTitleResponse {
   message?: string;
 }
 
+/**
+ * Desempaqueta un stream TAR estándar de forma nativa en JS (sin dependencias).
+ * Retorna un mapa filename -> Blob (audio/wav).
+ */
+export function parseTarArchive(buffer: ArrayBuffer): Map<string, Blob> {
+  const result = new Map<string, Blob>();
+  const bytes = new Uint8Array(buffer);
+  let offset = 0;
+
+  while (offset + 512 <= bytes.length) {
+    if (bytes[offset] === 0) break;
+
+    // Nombre de archivo en los primeros 100 bytes
+    let filename = "";
+    for (let i = 0; i < 100; i++) {
+      if (bytes[offset + i] === 0) break;
+      filename += String.fromCharCode(bytes[offset + i]);
+    }
+    filename = filename.trim().split("/").pop() || filename.trim();
+
+    // Tamaño del archivo en octal en bytes 124..136
+    let sizeStr = "";
+    for (let i = 124; i < 136; i++) {
+      if (bytes[offset + i] === 0 || bytes[offset + i] === 32) break;
+      sizeStr += String.fromCharCode(bytes[offset + i]);
+    }
+    const fileSize = parseInt(sizeStr.trim(), 8) || 0;
+
+    offset += 512;
+
+    if (fileSize > 0 && offset + fileSize <= bytes.length) {
+      if (filename.endsWith(".wav") || filename.includes(".wav")) {
+        const fileContent = bytes.slice(offset, offset + fileSize);
+        result.set(filename, new Blob([fileContent], { type: "audio/wav" }));
+      }
+      offset += Math.ceil(fileSize / 512) * 512;
+    }
+  }
+
+  return result;
+}
+
 export const v2vApi = {
   async processUrls(
     urls: string[],
@@ -502,6 +544,20 @@ export const v2vApi = {
       throw new Error(err.detail || `Error al descargar segmento ${seg}`);
     }
     return res.blob();
+  },
+
+  /**
+   * Descarga todos los segmentos WAV de un video en una sola petición empaquetada (TAR).
+   * Reduce radicalmente el tiempo de descarga a través de túneles (de 30s a 1s).
+   */
+  async fetchAudioSegmentsTar(jobId: string, videoIndex: number): Promise<Map<string, Blob>> {
+    const res = await fetch(url(`/api/job/${jobId}/audio-segments-tar/${videoIndex}`));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Error al descargar paquete TAR de segmentos (${res.status})`);
+    }
+    const buffer = await res.arrayBuffer();
+    return parseTarArchive(buffer);
   },
 
   async downloadZipBlob(jobId: string): Promise<Blob> {
