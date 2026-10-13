@@ -1179,15 +1179,7 @@ export const useV2VStore = create<V2VState>((set, get) => {
                         `Abre el proyecto "${folder}" o recupera el autosave más reciente para ver el timeline completo.`,
                       );
                     }
-                  } else {
-                    // El import falló (ej. error decodificando video, falta de memoria)
-                    console.error(`[V2V] importMultipleMediaIntoProject falló para ${folder}`);
-                    get().setImportStatus(key, "error");
-                    if (urlForLog) {
-                      get().appendUrlLog(urlForLog, `❌ Falló la importación al proyecto para ${folder}`);
-                    }
                   }
-                }
               } catch (err) {
                 console.error("V2V Background import error:", err);
                 // Limpiar cualquier video que se haya quedado 'in_progress' por una excepción
