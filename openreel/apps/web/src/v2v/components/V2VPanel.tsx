@@ -374,25 +374,36 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   // Cargar en editor eliminado: ahora se importa automáticamente a Media durante el proceso.
 
 
-  const handleDeleteFolder = useCallback(async (folderName: string, urlToRemove?: string) => {
-    if (!confirm(`¿Estás seguro de borrar físicamente la carpeta "${folderName}"? Se perderá el caché de descarga y procesamiento para este vídeo.`)) {
+  const handleDeleteFolder = useCallback(async (displayName: string, folderName?: string, urlToRemove?: string) => {
+    if (!confirm(`¿Estás seguro de eliminar "${displayName}"? Se borrará el caché de descarga y procesamiento para permitir re-intentar.`)) {
       return;
     }
 
     try {
       setIsProcessing(true);
-      await v2vApi.deleteVideo(folderName);
-      toast.success("Borrado completo", `Carpeta ${folderName} eliminada del disco.`);
+      await v2vApi.deleteVideo(folderName, urlToRemove);
+      toast.success("Eliminado", `Vídeo "${displayName}" eliminado.`);
       
-      // Si se proporciona una URL, la quitamos también de la lista de items para permitir re-intento
-      if (urlToRemove) {
-        useV2VStore.setState((state) => ({
-          urlItems: state.urlItems.filter(it => it.url !== urlToRemove)
-        }));
-      } else {
-        // Si es un video de la lista final, refrescamos el job para que desaparezca
-        if (jobId) startPolling(jobId);
-      }
+      // Limpiar urlItems, videos e importStatusByKey del store local
+      useV2VStore.setState((state) => {
+        const nextUrlItems = urlToRemove ? state.urlItems.filter(it => it.url !== urlToRemove) : state.urlItems;
+        const nextVideos = urlToRemove ? state.videos.filter(v => v.url !== urlToRemove) : state.videos;
+        const nextStatus = { ...state.importStatusByKey };
+        if (urlToRemove) {
+          for (const k of Object.keys(nextStatus)) {
+            if (k.startsWith(`${urlToRemove}::`)) {
+              delete nextStatus[k];
+            }
+          }
+        }
+        return {
+          urlItems: nextUrlItems,
+          videos: nextVideos,
+          importStatusByKey: nextStatus,
+        };
+      });
+
+      if (jobId) startPolling(jobId);
     } catch (e) {
       toast.error("Error al borrar", e instanceof Error ? e.message : "No se pudo borrar");
     } finally {
@@ -876,8 +887,9 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                               disabled={isProcessing}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                const folder = folderNameFromTitle(it.output_name || it.url);
-                                handleDeleteFolder(folder, it.url);
+                                const folder = it.output_name ? folderNameFromTitle(it.output_name) : "";
+                                const displayName = currentTitle || it.output_name || it.url;
+                                handleDeleteFolder(displayName, folder, it.url);
                               }}
                             >
                               <Trash2 size={12} />

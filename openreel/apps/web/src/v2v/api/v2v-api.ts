@@ -738,8 +738,12 @@ export const v2vApi = {
     return readJsonOrThrow(res);
   },
 
-  async deleteVideo(folderName: string): Promise<{ status: string; message: string }> {
-    const res = await fetch(url(`/api/video/${encodeURIComponent(folderName)}`), {
+  async deleteVideo(folderName?: string, urlToRemove?: string): Promise<{ status: string; message: string }> {
+    const params = new URLSearchParams();
+    if (folderName) params.append("folder_name", folderName);
+    if (urlToRemove) params.append("url", urlToRemove);
+    const endpoint = params.toString() ? `/api/video?${params.toString()}` : `/api/video/${encodeURIComponent(folderName || "")}`;
+    const res = await fetch(url(endpoint), {
       method: "DELETE",
     });
     if (!res.ok) {
