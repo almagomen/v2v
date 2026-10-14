@@ -48,18 +48,39 @@ export const V2VToolbarEntry: React.FC = () => {
   const exportStatus = useColabExportStore((s) => s.status);
   const isExporting = exportStatus === "uploading" || exportStatus === "rendering";
 
+  // Atajo global Alt+V para alternar el panel de Video2Video en Web y Desktop
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.altKey && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        setIsV2VOpen(!isV2VOpen);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isV2VOpen, setIsV2VOpen]);
+
   return (
     <>
-      {/* Botón en el Toolbar */}
+      {/* Botón en el Toolbar / DesktopTitleBar */}
       <button
         type="button"
         onClick={() => setIsV2VOpen(!isV2VOpen)}
-        className={`flex items-center gap-1.5 rounded-[8px] px-3 py-[9px] text-[13px] font-semibold transition-colors ${
+        className={`flex items-center gap-1.5 rounded-[8px] px-3 py-[9px] text-[13px] font-semibold transition-colors mr-2 ${
           isV2VOpen
             ? "bg-red-500/15 text-red-500 hover:bg-red-500/20"
             : "bg-bg-2 text-fg-2 hover:text-fg hover:bg-bg-3"
         }`}
-        title={isExporting ? "Video2Video – Exportación en progreso…" : "Video2Video – Traducción y doblaje"}
+        title={isExporting ? "Video2Video – Exportación en progreso…" : "Video2Video – Traducción y doblaje (Alt+V)"}
       >
         <Youtube size={15} className="text-red-500" />
         <span className="hidden sm:inline">Video2Video</span>

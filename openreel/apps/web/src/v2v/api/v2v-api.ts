@@ -1,7 +1,31 @@
 /**
  * v2v API client - connects to the FastAPI backend
  */
-const API_BASE = (import.meta.env.VITE_V2V_API_URL || "").replace(/\/$/, "");
+const STORAGE_KEY_BACKEND_URL = "v2v_backend_url";
+
+export function getCustomBackendUrl(): string {
+  if (typeof window !== "undefined") {
+    return localStorage.getItem(STORAGE_KEY_BACKEND_URL) || "";
+  }
+  return "";
+}
+
+export function setCustomBackendUrl(customUrl: string): void {
+  if (typeof window !== "undefined") {
+    const trimmed = customUrl.trim().replace(/\/$/, "");
+    if (trimmed) {
+      localStorage.setItem(STORAGE_KEY_BACKEND_URL, trimmed);
+    } else {
+      localStorage.removeItem(STORAGE_KEY_BACKEND_URL);
+    }
+  }
+}
+
+export function getEffectiveBackendUrl(): string {
+  const custom = getCustomBackendUrl();
+  if (custom) return custom;
+  return (import.meta.env.VITE_V2V_API_URL || "").replace(/\/$/, "");
+}
 
 function isLocalhostLikeHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "0.0.0.0";
@@ -13,16 +37,18 @@ function apiBaseTargetsLocalhost(base: string): boolean {
 }
 
 function url(path: string): string {
-  // En Colab normalmente abrimos el backend vía ngrok y el frontend se sirve desde el mismo host.
-  // Si el build se hizo con VITE_V2V_API_URL apuntando a localhost, en el navegador eso falla.
-  if (API_BASE) {
+  const base = getEffectiveBackendUrl();
+  if (base) {
     if (typeof window !== "undefined") {
       const currentHost = window.location.hostname;
-      if (apiBaseTargetsLocalhost(API_BASE) && !isLocalhostLikeHost(currentHost)) {
-        return path; // usa llamada relativa (/api/...) contra el mismo backend
+      const isDesktop = window.location.protocol === "app:" || (window as any).openreel?.platform === "desktop";
+      // En modo Web remoto (ej: trycloudflare), si apunta a localhost usamos ruta relativa con proxy
+      // En Desktop (app://), SIEMPRE usamos la URL base absoluta
+      if (!isDesktop && apiBaseTargetsLocalhost(base) && !isLocalhostLikeHost(currentHost)) {
+        return path;
       }
     }
-    return `${API_BASE}${path}`;
+    return `${base}${path}`;
   }
 
   return path;
@@ -330,6 +356,12 @@ export const v2vApi = {
       return httpUrl.replace("https://", "wss://");
     }
     if (typeof window !== "undefined") {
+      const isDesktop = window.location.protocol === "app:" || (window as any).openreel?.platform === "desktop";
+      if (isDesktop) {
+        const base = getEffectiveBackendUrl();
+        if (base.startsWith("https://")) return `${base.replace("https://", "wss://")}/ws/job/${jobId}`;
+        if (base.startsWith("http://")) return `${base.replace("http://", "ws://")}/ws/job/${jobId}`;
+      }
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       return `${proto}//${window.location.host}${httpUrl}`;
     }
@@ -865,6 +897,26 @@ export const v2vApi = {
       throw new Error(err.detail || "Error al generar título viral");
     }
     return readJsonOrThrow<RegenerateTitleResponse>(res);
+  },
+
+  async checkHealth(): Promise<{ ok: boolean; status?: number; error?: string }> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch(url("/health"), { signal: controller.signal });
+      clearTimeout(timeoutId);
+      return { ok: res.ok, status: res.status };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || "Sin conexión con el backend" };
+    }
+  },
+
+  getBackendUrl(): string {
+    return getEffectiveBackendUrl();
+  },
+
+  setBackendUrl(newUrl: string): void {
+    setCustomBackendUrl(newUrl);
   },
 };
 

@@ -18,6 +18,7 @@ import { useSettingsStore } from "../stores/settings-store";
 import { SettingsDialog } from "../components/editor/settings/SettingsDialog";
 import { ToolcraftButton as Button } from "@openreel/ui";
 import { Settings, Sparkles } from "@/icons/lucide-compat";
+import { V2VToolbarEntry } from "@/v2v";
 import "./theme/desktop-theme.css";
 
 function detectPlatform(): string {
@@ -107,6 +108,7 @@ export function DesktopApp(): JSX.Element {
             aria-pressed={agentChatVisible}
           />
         ) : null}
+        {hasProject && isVideoEditing ? <V2VToolbarEntry /> : null}
         {hasProject && isVideoEditing ? <DesktopExportButton /> : null}
         <Button
           label="Settings"

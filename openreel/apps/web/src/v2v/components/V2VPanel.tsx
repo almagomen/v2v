@@ -98,6 +98,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     setIsV2VOpen,
   } = useV2VStore();
 
+  const [backendUrl, setBackendUrl] = React.useState<string>(() => v2vApi.getBackendUrl());
   const [fishApiKey, setFishApiKey] = React.useState("");
   const [googleApiKey, setGoogleApiKey] = React.useState("");
   const [titleModel, setTitleModel] = React.useState<string>("gemini-flash-lite-latest");
@@ -168,6 +169,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         ? (customTranslationModel.trim() || "gemini-flash-lite-latest")
         : translationModel;
 
+      v2vApi.setBackendUrl(backendUrl);
       await v2vApi.saveTokens(fishApiKey, googleApiKey, effTitle, effTrans);
 
       // Sincronizar también con colab-export-store para exportación coherente
@@ -176,7 +178,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         useColabExportStore.getState().setCustomGeminiModel(customTitleModel.trim());
       }
 
-      toast.success("Configuración guardada", "Tokens y modelos de IA actualizados correctamente.");
+      await fetchSpeakers();
+      await loadTokensAndModels();
+
+      toast.success("Configuración guardada", "Servidor y tokens de IA actualizados correctamente.");
       setShowTokenSettings(false);
     } catch (err) {
       toast.error("Error al guardar", err instanceof Error ? err.message : "No se pudo actualizar");
@@ -427,6 +432,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
         {showTokenSettings && (
           <TokensConfigSection
+            backendUrl={backendUrl}
+            setBackendUrl={setBackendUrl}
             fishApiKey={fishApiKey}
             setFishApiKey={setFishApiKey}
             googleApiKey={googleApiKey}

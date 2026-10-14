@@ -1,8 +1,11 @@
 import React, { useState } from "react";
-import { Eye, EyeOff, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Loader2, Server, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@openreel/ui";
+import { v2vApi } from "../api/v2v-api";
 
 export interface TokensConfigSectionProps {
+  backendUrl: string;
+  setBackendUrl: (url: string) => void;
   fishApiKey: string;
   setFishApiKey: (key: string) => void;
   googleApiKey: string;
@@ -21,6 +24,8 @@ export interface TokensConfigSectionProps {
 }
 
 export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
+  backendUrl,
+  setBackendUrl,
   fishApiKey,
   setFishApiKey,
   googleApiKey,
@@ -39,6 +44,26 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
 }) => {
   const [showFishApiKey, setShowFishApiKey] = useState(false);
   const [showGoogleApiKey, setShowGoogleApiKey] = useState(false);
+  const [isTestingBackend, setIsTestingBackend] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const handleTestConnection = async () => {
+    setIsTestingBackend(true);
+    setTestResult(null);
+    try {
+      v2vApi.setBackendUrl(backendUrl);
+      const res = await v2vApi.checkHealth();
+      if (res.ok) {
+        setTestResult({ ok: true, message: "Conexión exitosa con el backend (GPU activa)" });
+      } else {
+        setTestResult({ ok: false, message: res.error || "El servidor no respondió /health" });
+      }
+    } catch (e: any) {
+      setTestResult({ ok: false, message: e?.message || "Error al conectar con la URL" });
+    } finally {
+      setIsTestingBackend(false);
+    }
+  };
 
   return (
     <div className="p-3.5 rounded-xl border border-primary/20 bg-primary/5 space-y-3.5 relative overflow-hidden">
@@ -47,14 +72,63 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
       <div className="relative">
         <h3 className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-          Configurar Tokens y Modelos IA (Fish Audio / Google)
+          Configurar Backend y Tokens IA (Fish Audio / Google)
         </h3>
         <p className="text-[10px] text-text-muted mt-0.5 leading-normal">
-          Configura tus credenciales de API y los modelos de Gemini/Gemma para doblaje, traducción y títulos virales.
+          Configura la URL de tu servidor en la nube (Kaggle/Colab) y las credenciales de API para síntesis y traducción.
         </p>
       </div>
 
       <div className="space-y-2.5 relative">
+        {/* Backend URL para Desktop o Conexión Externa */}
+        <div className="p-2.5 rounded-lg border border-border/80 bg-background/70 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] font-semibold text-text-primary flex items-center gap-1.5">
+              <Server size={12} className="text-primary" />
+              URL del Backend Remoto (Kaggle / Colab)
+            </label>
+            <button
+              type="button"
+              onClick={handleTestConnection}
+              disabled={isTestingBackend}
+              className="px-2 py-0.5 rounded text-[10px] font-medium bg-background-tertiary border border-border hover:bg-background-secondary text-text-primary transition-colors flex items-center gap-1 disabled:opacity-50"
+            >
+              {isTestingBackend ? (
+                <>
+                  <Loader2 size={10} className="animate-spin text-primary" />
+                  Probando...
+                </>
+              ) : (
+                "Probar conexión"
+              )}
+            </button>
+          </div>
+          <input
+            type="text"
+            className="w-full px-2.5 py-1.5 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
+            placeholder="https://xxxx.trycloudflare.com (o vacío para localhost/web)"
+            value={backendUrl}
+            onChange={(e) => {
+              setBackendUrl(e.target.value);
+              setTestResult(null);
+            }}
+          />
+          <p className="text-[9px] text-text-muted leading-tight">
+            En OpenReel Desktop, pega aquí la URL pública generada por Cloudflare en Kaggle. En la versión Web, déjalo vacío para usar el proxy automático.
+          </p>
+          {testResult && (
+            <div
+              className={`flex items-center gap-1.5 text-[10px] p-1.5 rounded-md ${
+                testResult.ok
+                  ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                  : "bg-red-500/10 text-red-400 border border-red-500/20"
+              }`}
+            >
+              {testResult.ok ? <CheckCircle2 size={12} className="shrink-0" /> : <XCircle size={12} className="shrink-0" />}
+              <span className="truncate">{testResult.message}</span>
+            </div>
+          )}
+        </div>
         <div>
           <label className="text-[9px] text-text-muted block mb-1 font-medium">
             FISH_API_KEY (Fish Audio)

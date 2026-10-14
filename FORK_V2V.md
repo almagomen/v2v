@@ -14,13 +14,20 @@ Toda la funcionalidad de Video2Video vive estrictamente encapsulada en un único
 ### Principios de Diseño
 1. **Cero colisiones con Upstream**: Al no dispersar archivos en `components/`, `stores/`, `lib/` ni `utils/`, cualquier actualización o rebase desde el repositorio oficial de OpenReel (`Augani/openreel-video`) se realiza sin conflictos con los archivos propios de V2V.
 2. **Cero cambios de configuración de compilación**: No se altera `vite.config.ts`, `tsconfig.json` ni los paths del bundler. Gracias a que OpenReel ya tiene configurado el alias `@/*` apuntando a `./src/*`, cualquier módulo dentro de `src/v2v/` se importa de manera limpia vía `@/v2v` o imports relativos internos (`../stores/`, `../api/`, etc.).
-3. **Punto único de contacto en UI**: En toda la aplicación de OpenReel, solo existe **1 punto de montaje** en el código fuente:
-   - **`apps/web/src/components/editor/Toolbar.tsx`**: Una única importación y línea JSX que monta `<V2VToolbarEntry />`:
+3. **Puntos de contacto mínimos en UI (Web & Desktop)**: En toda la base de código de OpenReel, solo existen **2 puntos de montaje de 1 línea** para habilitar Video2Video tanto en la versión Web como en la app Desktop nativa:
+   - **Web**: `apps/web/src/components/editor/Toolbar.tsx`:
      ```tsx
      import { V2VToolbarEntry } from "@/v2v";
      // ...
      <V2VToolbarEntry />
      ```
+   - **Desktop**: `apps/web/src/desktop/DesktopApp.tsx` (en `DesktopTitleBar`):
+     ```tsx
+     import { V2VToolbarEntry } from "@/v2v";
+     // ...
+     {hasProject && isVideoEditing ? <V2VToolbarEntry /> : null}
+     ```
+   - **Atajo global**: `Alt+V` registrado en el listener para alternar el panel en cualquier plataforma.
 4. **Directorios estándar 100% limpios**: Las carpetas nativas de OpenReel (`src/components/`, `src/stores/`, `src/lib/`, `src/utils/`) se mantienen puras, preservando la arquitectura original del proyecto.
 
 > [!IMPORTANT]
