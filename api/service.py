@@ -7,6 +7,7 @@ from pathlib import Path
 
 from api.job_store import create_job, update_job, append_log, get_job
 from src.assets import load_assets
+from src.result_store import load_result, save_result, update_result_segments
 
 SPEAKER_OPTIONS = {
     "mrbeast": "49898752f6994bc9a6ef1502214190de",
@@ -67,9 +68,9 @@ def _run_pipeline(
     speaker_name: str,
     emotion: str | None = None,
     force_reprocess: bool = False,
+    speaker_map: dict[str, str] | None = None,
 ) -> None:
     """Run pipeline with stdout redirected to job log."""
-    import pickle
     from src.pipeline import process_video_queue, split_all_sequences
     from src.audio_utils import clone_voice_segments
     from src.tts import model_tts
@@ -141,8 +142,7 @@ def _run_pipeline(
             path = r["path"]
             texts = r["texts"]
             output_name = f"{idx + 1}. {r['output_name']}"
-            transcription = r["transcription"]
-            lang = translate_lang if translate_lang else getattr(transcription, "language", "es")
+            lang = translate_lang if translate_lang else r.get("src_lang", "es")
 
             # Leer activos deterministas desde el manifiesto
             assets = load_assets(path.parent)
@@ -157,6 +157,7 @@ def _run_pipeline(
                         "end": t["end"],
                         "text": t["text"],
                         "speaker": t.get("speaker", speaker_name),
+                        "original_speaker": t.get("original_speaker") or t.get("speaker") or "SPEAKER_00",
                     }
                     for i, t in enumerate(texts_list)
                 ]
@@ -192,11 +193,15 @@ def _run_pipeline(
             t_split = time.perf_counter() - t0_split
             print(f"⏱️ [Etapa: Corte de Secuencias] Completado en {t_split:.1f}s")
 
-            # ESTANDARIZACIÓN: Sobre-escribimos el tag 'speaker' devuelto por la diarizacion 
-            # (ej: SPEAKER_00) con el nombre standard del diccionario preasignado para el pipeline.
-            # Esto soluciona que archivos nazcan dispares entre Frontend y Filesystem.
+            # Preservar el tag 'original_speaker' devuelto por la diarización (ej: SPEAKER_00)
+            # y asignar la voz correspondiente según speaker_map o speaker_name por defecto.
             for t in texts:
-                t["speaker"] = speaker_name
+                orig_spk = t.get("original_speaker") or t.get("speaker") or "SPEAKER_00"
+                t["original_speaker"] = orig_spk
+                if speaker_map and orig_spk in speaker_map:
+                    t["speaker"] = speaker_map[orig_spk]
+                else:
+                    t["speaker"] = speaker_name
 
             # Si se especificó una emoción en el proceso inicial, se antepone a cada segmento
             if emotion and emotion != "none":
@@ -206,23 +211,12 @@ def _run_pipeline(
                     if not current_txt.startswith(clean_tag):
                         t["text"] = f"{clean_tag} {current_txt}"
 
-                # Persistir textos con la emoción antepuesta en result.pkl
-                output_file = path.with_name("result.pkl")
-                if output_file.exists():
-                    try:
-                        with open(output_file, "rb") as f:
-                            pkl_data = list(pickle.load(f))
-                        pkl_data[0] = texts
-                        with open(output_file, "wb") as f:
-                            pickle.dump(tuple(pkl_data), f)
-                    except Exception as pkl_err:
-                        print(f"⚠️ No se pudo actualizar result.pkl con emoción: {pkl_err}")
-
             print("⚡ TTS:")
             t0_tts = time.perf_counter()
             paths_es, _times, _freq = clone_voice_segments(
                 path, texts, lang, speaker_audio, model_tts,
                 slowdown_range=(0.5, 0.8), stretch_target_ratio=0.85,
+                speaker_map=speaker_map,
             )
             t_tts = time.perf_counter() - t0_tts
             print(f"⏱️ [Etapa: Síntesis TTS (Fish Audio)] Completada en {t_tts:.1f}s ({len(paths_es)} audios generados)\n")
@@ -231,17 +225,8 @@ def _run_pipeline(
                 set_url_state(r.get("url", ""), "error", "Error en TTS")
                 continue
 
-            # Actualizar result.pkl con las duraciones reales sincronizadas tras TTS
-            output_file = path.with_name("result.pkl")
-            if output_file.exists():
-                try:
-                    with open(output_file, "rb") as f:
-                        pkl_data = list(pickle.load(f))
-                    pkl_data[0] = texts
-                    with open(output_file, "wb") as f:
-                        pickle.dump(tuple(pkl_data), f)
-                except Exception as pkl_err:
-                    print(f"⚠️ No se pudo actualizar result.pkl con duraciones TTS: {pkl_err}")
+            # Guardar segmentos actualizados (con emociones y duraciones TTS) — una sola escritura
+            update_result_segments(path.parent, texts)
 
             # El pipeline termina aquí. El render se hace desde Colab Export.
             # Recargar el manifiesto (register_segment lo actualizó iterativamente).
@@ -320,6 +305,7 @@ def start_process(
     speaker_name: str,
     emotion: str | None = None,
     force_reprocess: bool = False,
+    speaker_map: dict[str, str] | None = None,
 ) -> str:
     """Start pipeline in background, return job_id."""
     job_id = create_job()
@@ -332,6 +318,7 @@ def start_process(
             speaker_name,
             emotion,
             force_reprocess,
+            speaker_map,
         ),
     )
     thread.start()

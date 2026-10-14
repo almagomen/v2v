@@ -163,7 +163,7 @@ def _load_bs_roformer():
         config = ConfigDict(yaml.load(f, Loader=SafeLoaderWithTuple))
 
     model = get_model_from_config("bs_roformer", config)
-    state = torch.load(model_path, map_location="cpu")
+    state = torch.load(model_path, map_location="cpu", weights_only=True)
     model.load_state_dict(state)
 
     device = torch.device(DEVICE_SECONDARY if torch.cuda.is_available() else "cpu")

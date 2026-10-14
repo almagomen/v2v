@@ -80,7 +80,11 @@ def fish_tts(
         payload["prosody"] = prosody
 
     try:
-        response = requests.post(FISH_TTS_URL, headers=headers, json=payload, timeout=60)
+        # Timeout proporcional a la longitud del texto: base 30s, +30s por cada 100 chars, máx 3 min
+        base_timeout = 30
+        chars_factor = max(1, len(text) / 100)
+        timeout = min(int(base_timeout * chars_factor), 180)
+        response = requests.post(FISH_TTS_URL, headers=headers, json=payload, timeout=timeout)
         response.raise_for_status()
 
         if torchaudio is None:

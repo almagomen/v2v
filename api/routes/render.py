@@ -1122,12 +1122,12 @@ async def set_gemini_default_model(req: SetDefaultGeminiModelRequest):
 async def regenerate_title(req: RegenerateTitleRequest):
     """
     Regenera el título viral usando Gemini o aplica un nombre manual.
-    Actualiza v2v_assets.json, result.pkl (si existe), y el estado del job en memoria.
+    Actualiza v2v_assets.json, result.json, y el estado del job en memoria.
     """
-    import pickle
     import re
     from src.assets import update_assets, load_assets
     from src.translation import generate_tiktok_title, get_default_gemini_model
+    from src.result_store import load_result, update_result_output_name
 
     folder: Optional[Path] = None
     if req.job_id:
@@ -1141,7 +1141,6 @@ async def regenerate_title(req: RegenerateTitleRequest):
         if cand_folder.exists() and cand_folder.is_dir():
             folder = cand_folder
         else:
-            # Búsqueda fallback dentro de QUEUE_DIR
             for sub in QUEUE_DIR.glob("*"):
                 if sub.is_dir() and (sub.name == req.folder_name or req.folder_name in sub.name):
                     folder = sub
@@ -1160,23 +1159,9 @@ async def regenerate_title(req: RegenerateTitleRequest):
         if not clean_name:
             clean_name = "video_export"
 
-        # Guardar en v2v_assets.json
         update_assets(folder, output_name=clean_name, viral_title=clean_name)
+        update_result_output_name(folder, clean_name)
 
-        # Actualizar result.pkl si existe
-        pkl_file = folder / "result.pkl"
-        if pkl_file.exists():
-            try:
-                with open(pkl_file, "rb") as f:
-                    data = list(pickle.load(f))
-                if len(data) >= 2:
-                    data[1] = clean_name  # output_name es el 2do elemento
-                    with open(pkl_file, "wb") as f:
-                        pickle.dump(tuple(data), f)
-            except Exception as e:
-                print(f"⚠️ Error actualizando result.pkl con título manual: {e}")
-
-        # Actualizar job en memoria si existe
         if req.job_id:
             try:
                 job = get_job(req.job_id)
@@ -1197,20 +1182,14 @@ async def regenerate_title(req: RegenerateTitleRequest):
     fallback_text = ""
     original_title = ""
 
-    # Primero intentar leer result.pkl
-    pkl_file = folder / "result.pkl"
-    if pkl_file.exists():
-        try:
-            with open(pkl_file, "rb") as f:
-                data = pickle.load(f)
-                if len(data) >= 3 and isinstance(data[2], str):
-                    cached_url = data[2]
-                if len(data) >= 1 and isinstance(data[0], list):
-                    fallback_text = " ".join(t.get("text", "") for t in data[0])
-                if len(data) >= 7 and isinstance(data[6], dict):
-                    original_title = data[6].get("title", "")
-        except Exception as e:
-            print(f"⚠️ No se pudo leer result.pkl para contexto de título: {e}")
+    result_data = load_result(folder)
+    if result_data:
+        cached_url = result_data.get("url", "")
+        segments = result_data.get("segments", [])
+        if segments:
+            fallback_text = " ".join(t.get("text", "") for t in segments)
+        info = result_data.get("info", {})
+        original_title = info.get("title", "") if isinstance(info, dict) else ""
 
     # Fallback a v2v_assets.json si falta info
     assets = load_assets(folder)
@@ -1239,26 +1218,12 @@ async def regenerate_title(req: RegenerateTitleRequest):
             detail="La IA no pudo generar un título. Intenta con otro modelo de Gemini o define el título manualmente.",
         )
 
-    # Limpiar título
     clean_title = re.sub(r'[/\\:*?"<>|\n]', " ", new_title).strip()
     clean_title = re.sub(r" {2,}", " ", clean_title)
 
-    # Guardar en assets
     update_assets(folder, output_name=clean_title, viral_title=clean_title)
+    update_result_output_name(folder, clean_title)
 
-    # Guardar en result.pkl
-    if pkl_file.exists():
-        try:
-            with open(pkl_file, "rb") as f:
-                data = list(pickle.load(f))
-            if len(data) >= 2:
-                data[1] = clean_title
-                with open(pkl_file, "wb") as f:
-                    pickle.dump(tuple(data), f)
-        except Exception as e:
-            print(f"⚠️ Error actualizando result.pkl: {e}")
-
-    # Actualizar job en memoria
     if req.job_id:
         try:
             job = get_job(req.job_id)
@@ -1273,4 +1238,5 @@ async def regenerate_title(req: RegenerateTitleRequest):
         model_used=model_to_use,
         message="Título viral generado exitosamente",
     )
+
 

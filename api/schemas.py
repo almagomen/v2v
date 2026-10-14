@@ -16,6 +16,9 @@ class ProcessUrlsRequest(BaseModel):
     force_reprocess: Optional[bool] = Field(
         False, description="Forzar re-inferencia sin usar caché existente creando nueva versión de proyecto"
     )
+    speaker_map: Optional[dict[str, str]] = Field(
+        None, description="Mapeo de speaker diarizado a voz, ej: {'SPEAKER_00': 'mrbeast'}"
+    )
 
 
 class ProcessUrlsResponse(BaseModel):
@@ -36,6 +39,7 @@ class SegmentSchema(BaseModel):
     end: float
     text: str
     speaker: Optional[str] = None
+    original_speaker: Optional[str] = None
 
     model_config = {"populate_by_name": True, "extra": "allow"}
 
@@ -53,6 +57,7 @@ class SegmentSchema(BaseModel):
                 "end": float(end) if end is not None else 0.0,
                 "text": str(text) if text is not None else "",
                 "speaker": v.get("speaker"),
+                "original_speaker": v.get("original_speaker") or v.get("speaker"),
             }
         return v
 
@@ -163,7 +168,20 @@ class SegmentEditorRow(BaseModel):
     original_text: str
     tts_text: str
     speaker: Optional[str] = None
+    original_speaker: Optional[str] = None
     filename: Optional[str] = None
+
+
+class SpeakerMapRequest(BaseModel):
+    speaker_map: dict[str, str] = Field(..., description="Diccionario mapeando original_speaker a voz/speaker")
+
+
+class SpeakerDetectionResponse(BaseModel):
+    job_id: str
+    video_index: int
+    detected_speakers: list[str]
+    speaker_map: dict[str, str]
+
 
 
 class SegmentsEditorResponse(BaseModel):

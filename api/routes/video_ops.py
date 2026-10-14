@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query
 from pathlib import Path
-import pickle
 import shutil
 from src.config import QUEUE_DIR
+from src.result_store import load_result, unregister_url
 from api.job_store import _jobs, _lock, _save_job_to_disk
 
 router = APIRouter(prefix="/api", tags=["video"])
@@ -30,21 +30,14 @@ def _find_folder_to_delete(folder_name: str | None, url: str | None) -> tuple[Pa
                             if cand.exists() and cand.is_dir() and QUEUE_DIR.resolve() in cand.resolve().parents:
                                 return cand, affected_job_ids
 
-    # 2. Buscar en QUEUE_DIR escaneando result.pkl si hay url
+    # 2. Buscar en QUEUE_DIR escaneando result.json si hay url
     if url:
         for cand in QUEUE_DIR.glob("*"):
             if not cand.is_dir():
                 continue
-            pkl = cand / "result.pkl"
-            if pkl.exists():
-                try:
-                    with open(pkl, "rb") as f:
-                        data = pickle.load(f)
-                        # data[2] es cached_url en la tupla guardada por pipeline.py
-                        if len(data) >= 3 and data[2] == url:
-                            return cand, affected_job_ids
-                except Exception:
-                    pass
+            result_data = load_result(cand)
+            if result_data and result_data.get("url") == url:
+                return cand, affected_job_ids
 
     # 3. Si se pasó folder_name, sanitizar y buscar
     if folder_name:
@@ -98,6 +91,8 @@ def delete_video_folder(
                         changed = True
                 if changed:
                     _save_job_to_disk(j_id)
+        # Limpiar del índice URL
+        unregister_url(url)
 
     if not folder or not folder.exists():
         return {

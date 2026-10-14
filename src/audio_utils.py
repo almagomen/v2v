@@ -129,6 +129,7 @@ def clone_voice_segments(
     speed: float = 1.0,
     target_duration: Optional[float] = None,
     register: bool = True,
+    speaker_map: Optional[dict[str, str]] = None,
     **kwargs,
 ) -> Tuple[list[Path], list[int], int]:
     seqs_src_dir = path.parent / "Seqs_src"
@@ -157,6 +158,16 @@ def clone_voice_segments(
         text = text_dict["text"]
         start_time = text_dict["start"]
         speaker = text_dict.get("speaker", "SPEAKER_00")
+        orig_spk = text_dict.get("original_speaker") or speaker
+        target_spk = (speaker_map.get(orig_spk) if speaker_map else None) or speaker
+
+        # Resolver voz específica del segmento si difiere de audio_ref
+        from api.service import SPEAKER_OPTIONS
+        seg_audio_ref = SPEAKER_OPTIONS.get(target_spk, target_spk) if target_spk else audio_ref
+        if not seg_audio_ref:
+            seg_audio_ref = audio_ref
+
+        safe_speaker = str(target_spk).replace(" ", "_").replace("/", "_").replace("\\", "_")
 
         seq_num = only_indices[idx] if only_indices else idx + 1
 
@@ -168,12 +179,11 @@ def clone_voice_segments(
         arr_en, rate_en = torchaudio.load(str(audio_en_path))
         dur_en = arr_en.shape[-1] / rate_en
 
-        arr, rate = tts_fn(text, language, audio_ref, **kwargs)
+        arr, rate = tts_fn(text, language, seg_audio_ref, **kwargs)
         if arr is None or rate is None:
             continue
 
         # --- GUARDAR COPIA RAW INTACTA PARA "APPLY SPEED" FUTURO ---
-        safe_speaker = speaker.replace(" ", "_").replace("/", "_").replace("\\", "_")
         raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"
         torchaudio.save(str(raw_es_path), arr, sample_rate=rate)
         # --------------------------------------------------------
@@ -280,7 +290,6 @@ def clone_voice_segments(
 
         # Generar nombre con formato consistente: tts_{speaker}_{NNNN}.wav
         # Esto permite al frontend identificar el segmento y su speaker
-        safe_speaker = speaker.replace(" ", "_").replace("/", "_").replace("\\", "_")
         audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.wav"
         torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
         path_es.append(audio_es_path)

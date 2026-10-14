@@ -28,6 +28,9 @@ import { autoSaveManager } from "@/services/auto-save";
 import type { AutoSaveMetadata } from "@/services/auto-save";
 import type { Project, MediaItem } from "@openreel/core";
 import { useColabExportStore, type CatboxVideoResult } from "../stores/colab-export-store";
+import { RenderProgressBar } from "./RenderProgressBar";
+import { CatboxUploadStatus } from "./CatboxUploadStatus";
+import { BatchRenderQueue } from "./BatchRenderQueue";
 
 // ----------------------------------------------------------------
 // Types
@@ -1092,116 +1095,29 @@ export const ColabExportTab: React.FC = () => {
 
       {/* ── Batch Mode ── */}
       {isBatch && (
-        <div className="space-y-2">
-          {loadingSaved ? (
-            <div className="flex items-center gap-2 text-xs text-text-muted p-3">
-              <Loader2 size={14} className="animate-spin" />
-              Cargando proyectos guardados…
-            </div>
-          ) : savedProjects.length === 0 ? (
-            <div className="text-xs text-text-muted p-3 text-center">No hay proyectos guardados.</div>
-          ) : (
-            <>
-              <button
-                onClick={toggleAll}
-                className="text-[10px] text-primary hover:underline px-1"
-                disabled={isRunning}
-              >
-                {savedProjects.every((p) => p.selected) ? "Deseleccionar todo" : "Seleccionar todo"}
-              </button>
-              <div className="max-h-56 overflow-y-auto space-y-1.5 border border-border rounded-lg p-2">
-                {savedProjects.map((sp) => (
-                  <div
-                    key={sp.meta.id}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-background-tertiary transition-colors"
-                  >
-                    <button
-                      onClick={() => toggleProject(sp.meta.id)}
-                      disabled={isRunning}
-                      className="flex items-center gap-2 flex-1 min-w-0 text-left"
-                    >
-                      {sp.selected ? (
-                        <CheckSquare size={14} className="text-primary shrink-0" />
-                      ) : (
-                        <Square size={14} className="text-text-muted shrink-0" />
-                      )}
-                      <span className="text-xs text-text-primary truncate" title={sp.meta.projectName}>
-                        {sp.meta.projectName}
-                      </span>
-                    </button>
-
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleBatchRegenerateViralTitle(sp);
-                      }}
-                      disabled={isRunning || batchRegeneratingId === sp.meta.id}
-                      className="p-1 rounded hover:bg-primary/20 text-yellow-400 hover:text-yellow-300 transition-colors shrink-0"
-                      title="Regenerar título viral con IA para este proyecto"
-                    >
-                      {batchRegeneratingId === sp.meta.id ? (
-                        <Loader2 size={12} className="animate-spin text-primary" />
-                      ) : (
-                        <Sparkles size={12} />
-                      )}
-                    </button>
-
-                    <span className="text-[10px] text-text-muted shrink-0">
-                      {new Date(sp.meta.timestamp).toLocaleDateString()}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <p className="text-[10px] text-text-muted px-1">
-                {savedProjects.filter((p) => p.selected).length} de {savedProjects.length} seleccionados
-              </p>
-            </>
-          )}
-        </div>
+        <BatchRenderQueue
+          loadingSaved={loadingSaved}
+          savedProjects={savedProjects}
+          isRunning={isRunning}
+          batchRegeneratingId={batchRegeneratingId}
+          onToggleAll={toggleAll}
+          onToggleProject={toggleProject}
+          onBatchRegenerateTitle={handleBatchRegenerateViralTitle}
+        />
       )}
 
       {/* Status con Barra de Progreso Mejorada */}
-      {isRunning && (
-        <div className="space-y-2 p-3 bg-primary/10 border border-primary/30 rounded-xl shadow-sm">
-          {/* Fila 1: Paso actual y Porcentaje */}
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <Loader2 size={13} className="animate-spin text-primary shrink-0" />
-              <span className="text-xs font-semibold text-text-primary truncate">
-                {currentStep || (status === "uploading" ? "Preparando medios…" : "Renderizando…")}
-              </span>
-            </div>
-            <span className="text-[11px] font-mono font-bold text-primary px-2 py-0.5 bg-primary/20 rounded-full border border-primary/30 shrink-0">
-              {progress || (status === "uploading" ? 15 : 50)}%
-            </span>
-          </div>
-
-          {/* Barra de progreso animada */}
-          <div className="w-full bg-background-secondary rounded-full h-2 overflow-hidden border border-border/60">
-            <div
-              className="bg-primary h-full transition-all duration-300 ease-out rounded-full"
-              style={{
-                width: `${Math.max(4, Math.min(100, progress || (status === "uploading" ? 15 : 50)))}%`,
-              }}
-            />
-          </div>
-
-          {/* Fila 2: Nombre del video en proceso y contador */}
-          <div className="flex items-center justify-between text-[10px] text-text-muted gap-2 pt-0.5">
-            <span
-              className="truncate max-w-[270px] font-medium text-text-secondary"
-              title={currentVideoName || statusMsg}
-            >
-              {currentVideoName ? `▶ ${currentVideoName}` : statusMsg}
-            </span>
-            {isBatch && totalVideos > 0 && (
-              <span className="shrink-0 font-semibold text-primary/90">
-                {currentIdx || 1} de {totalVideos}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
+      <RenderProgressBar
+        isRunning={isRunning}
+        currentStep={currentStep}
+        status={status}
+        progress={progress}
+        currentVideoName={currentVideoName}
+        statusMsg={statusMsg}
+        isBatch={isBatch}
+        totalVideos={totalVideos}
+        currentIdx={currentIdx}
+      />
       {status === "done" && !catboxUrl && catboxVideos.length === 0 && (
         <div className="flex items-center gap-2 p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
           <CheckCircle size={14} className="text-green-400" />
@@ -1215,78 +1131,14 @@ export const ColabExportTab: React.FC = () => {
         </div>
       )}
 
-      {/* Catbox Results - Single */}
-      {!isBatch && catboxUrl && status === "done" && (
-        <div className="space-y-2 p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
-          <div className="flex items-center gap-2">
-            <CheckCircle size={14} className="text-green-400" />
-            <span className="text-xs text-green-300 font-medium">Video subido a Catbox</span>
-            <span className="text-[10px] text-text-muted ml-auto">Expira en 24h</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="flex-1 flex items-center gap-2 px-2 py-1.5 bg-background-secondary rounded border border-border">
-              <LinkIcon size={12} className="text-text-muted shrink-0" />
-              <span className="text-[10px] text-text-primary truncate flex-1">{catboxUrl}</span>
-            </div>
-            <button
-              onClick={() => copyToClipboard(catboxUrl!)}
-              className="p-1.5 bg-background-secondary border border-border rounded hover:bg-background-tertiary transition-colors"
-              title="Copiar enlace"
-            >
-              {copiedIndex !== null ? <CheckCircle size={12} className="text-green-400" /> : <Copy size={12} className="text-text-muted" />}
-            </button>
-            <a
-              href={catboxUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-1.5 bg-background-secondary border border-border rounded hover:bg-background-tertiary transition-colors"
-              title="Abrir enlace"
-            >
-              <ExternalLink size={12} className="text-text-muted" />
-            </a>
-          </div>
-        </div>
-      )}
-
-      {/* Catbox Results - Batch */}
-      {isBatch && catboxVideos.length > 0 && status === "done" && (
-        <div className="space-y-2 p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
-          <div className="flex items-center gap-2 mb-2">
-            <CheckCircle size={14} className="text-green-400" />
-            <span className="text-xs text-green-300 font-medium">{catboxVideos.length} video(s) subido(s) a Catbox</span>
-            <span className="text-[10px] text-text-muted ml-auto">Expira en 24h</span>
-          </div>
-          <div className="space-y-1.5 max-h-48 overflow-y-auto">
-            {catboxVideos.map((v, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <div className="flex-1 min-w-0">
-                  <p className="text-[10px] text-text-secondary truncate">{v.filename}</p>
-                  <div className="flex items-center gap-1.5 mt-0.5">
-                    <LinkIcon size={10} className="text-text-muted shrink-0" />
-                    <span className="text-[10px] text-text-primary truncate">{v.url}</span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => copyToClipboard(v.url, i)}
-                  className="p-1.5 bg-background-secondary border border-border rounded hover:bg-background-tertiary transition-colors shrink-0"
-                  title="Copiar enlace"
-                >
-                  {copiedIndex === i ? <CheckCircle size={12} className="text-green-400" /> : <Copy size={12} className="text-text-muted" />}
-                </button>
-                <a
-                  href={v.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="p-1.5 bg-background-secondary border border-border rounded hover:bg-background-tertiary transition-colors shrink-0"
-                  title="Abrir enlace"
-                >
-                  <ExternalLink size={12} className="text-text-muted" />
-                </a>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Catbox Results */}
+      <CatboxUploadStatus
+        catboxUrl={catboxUrl}
+        catboxVideos={catboxVideos}
+        isBatch={isBatch}
+        onCopyUrl={copyToClipboard}
+        copiedIndex={copiedIndex}
+      />
 
 
       {/* Action button */}

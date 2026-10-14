@@ -5,7 +5,6 @@ Pipeline: cola de videos, transcripción, división en secuencias.
 import contextlib
 import io
 import time
-import pickle
 from pathlib import Path
 from typing import Union, Optional
 
@@ -17,6 +16,13 @@ except ImportError:
 from src.download import yt
 from src.stt import run_main
 from src.config import QUEUE_DIR
+from src.result_store import (
+    load_result,
+    save_result,
+    create_result,
+    register_url,
+    lookup_folder_by_url,
+)
 
 
 def process_video_queue(
@@ -47,98 +53,62 @@ def process_video_queue(
             except Exception:
                 pass
         try:
-            # --- Pre-verificación de Caché por URL ---
+            # --- Pre-verificación de Caché por URL (O(1) con índice) ---
             found_in_cache = False
             if not force_reprocess:
-                # Escanear carpetas en Queue para ver si alguna tiene este link
-                for folder in QUEUE_DIR.glob("*"):
-                    pkl_file = folder / "result.pkl"
-                    if pkl_file.exists() and pkl_file.is_file():
-                        try:
-                            with open(pkl_file, "rb") as f:
-                                (
-                                    translated_result,
-                                    output_name,
-                                    cached_url,
-                                    result,
-                                    transcription,
-                                    diarization,
-                                    info,
-                                    *extra,
-                                ) = pickle.load(f)
-
-                            if cached_url != u:
-                                continue
-
-                            if not isinstance(info, dict):
-                                info = {}
-
-                            video_files = [p for p in folder.glob("*.mp4") if not p.name.startswith("_")]
-                            if video_files:
-                                path = video_files[0]
-                                results.append(
-                                    {
-                                        "path": path,
-                                        "output_name": output_name,
-                                        "url": u,
-                                        "info": info,
-                                        "texts": translated_result,
-                                        "src_lang": getattr(transcription, "language", "es") if transcription else "es",
-                                        "result": result,
-                                        "transcription": transcription,
-                                        "diarization": diarization,
-                                        "cached": True,
-                                    }
-                                )
-                                found_in_cache = True
-                                t_cache = time.perf_counter() - t_url_pipeline_start
-                                print(f"♻️ Caché detectada por URL: {output_name} ({t_cache:.2f}s)")
-                                break
-                        except Exception:
-                            continue
+                cached_folder_name = lookup_folder_by_url(u)
+                if cached_folder_name:
+                    folder = QUEUE_DIR / cached_folder_name
+                    result_data = load_result(folder) if folder.exists() else None
+                    if result_data:
+                        video_files = [p for p in folder.glob("*.mp4") if not p.name.startswith("_")]
+                        if video_files:
+                            path = video_files[0]
+                            t_cache = time.perf_counter() - t_url_pipeline_start
+                            results.append(
+                                {
+                                    "path": path,
+                                    "output_name": result_data["output_name"],
+                                    "url": u,
+                                    "info": result_data.get("info", {}),
+                                    "texts": result_data["segments"],
+                                    "src_lang": result_data.get("source_lang", "es"),
+                                    "result": result_data.get("original_segments", []),
+                                    "transcription_lang": result_data.get("source_lang", "es"),
+                                    "cached": True,
+                                }
+                            )
+                            found_in_cache = True
+                            print(f"♻️ Caché detectada por URL: {result_data['output_name']} ({t_cache:.2f}s)")
 
             if found_in_cache:
                 continue
             # ---------------------------------------
 
             path, info = yt(u, vocals_separation=True, force_new=force_reprocess)
-            output_file = path.with_name("result.pkl")
+            result_json_path = path.parent / "result.json"
 
             # --- Lógica de Caché por Path ---
-            if not force_reprocess and output_file.exists():
-                print(f"♻️ Cargando caché: {path.name}")
-                with open(output_file, "rb") as f:
-                    # Carga directa de la nueva estructura de 7 campos
-                    (
-                        translated_result,
-                        output_name,
-                        url,
-                        result,
-                        transcription,
-                        diarization,
-                        info,
-                        *extra,
-                    ) = pickle.load(f)
-                    if not isinstance(info, dict):
-                        info = {}
-
-                t_cache = time.perf_counter() - t_url_pipeline_start
-                results.append(
-                    {
-                        "path": path,
-                        "output_name": output_name,
-                        "url": u,
-                        "info": info,
-                        "texts": translated_result,
-                        "src_lang": getattr(transcription, "language", "es") if transcription else "es",
-                        "result": result,
-                        "transcription": transcription,
-                        "diarization": diarization,
-                        "cached": True,
-                    }
-                )
-                print(f"✅ {output_name} (cargado de caché en {t_cache:.2f}s)")
-                continue
+            if not force_reprocess:
+                cached_data = load_result(path.parent)
+                if cached_data:
+                    t_cache = time.perf_counter() - t_url_pipeline_start
+                    print(f"♻️ Cargando caché: {path.name}")
+                    results.append(
+                        {
+                            "path": path,
+                            "output_name": cached_data["output_name"],
+                            "url": u,
+                            "info": cached_data.get("info", {}),
+                            "texts": cached_data["segments"],
+                            "src_lang": cached_data.get("source_lang", "es"),
+                            "result": cached_data.get("original_segments", []),
+                            "transcription_lang": cached_data.get("source_lang", "es"),
+                            "cached": True,
+                        }
+                    )
+                    print(f"✅ {cached_data['output_name']} (cargado de caché en {t_cache:.2f}s)")
+                    continue
             # -----------------------
 
             print("📝 Transcribiendo (Whisper + diarización)...")
@@ -161,36 +131,32 @@ def process_video_queue(
             )
             translated_result = run_res[0]
             output_name = run_res[1]
-            result = run_res[2]
-            transcription = run_res[3]
-            diarization = run_res[4]
-            stt_timings = run_res[5] if len(run_res) > 5 else {}
+            original_result = run_res[2]
+            source_lang = run_res[3]
+            stt_timings = run_res[4]
 
-            with open(output_file, "wb") as f:
-                pickle.dump(
-                    (
-                        translated_result,
-                        output_name,
-                        u,
-                        result,
-                        transcription,
-                        diarization,
-                        info,
-                    ),
-                    f,
-                )
+            # Guardar resultado en JSON y registrar en índice
+            result_data = create_result(
+                url=u,
+                output_name=output_name,
+                source_lang=source_lang,
+                target_lang=translate_lang if isinstance(translate_lang, str) else None,
+                segments=translated_result,
+                original_segments=original_result,
+                info=info,
+                timings={
+                    "download": info.get("_download_time", 0.0) if isinstance(info, dict) else 0.0,
+                    "stems": info.get("_stems_time", 0.0) if isinstance(info, dict) else 0.0,
+                    **stt_timings,
+                },
+            )
+            save_result(path.parent, result_data)
+            register_url(u, path.parent.name)
 
             from src.assets import update_assets
             update_assets(path.parent, output_name=output_name)
 
-            timings = {
-                "download": info.get("_download_time", 0.0) if isinstance(info, dict) else 0.0,
-                "stems": info.get("_stems_time", 0.0) if isinstance(info, dict) else 0.0,
-                "whisper": stt_timings.get("whisper", 0.0),
-                "diarization": stt_timings.get("diarization", 0.0),
-                "translation": stt_timings.get("translation", 0.0),
-                "title": stt_timings.get("title", 0.0),
-            }
+            timings = result_data["timings"]
 
             if on_stage:
                 try:
@@ -204,10 +170,9 @@ def process_video_queue(
                     "url": u,
                     "info": info,
                     "texts": translated_result,
-                    "src_lang": getattr(transcription, "language", "es") if transcription else "es",
-                    "result": result,
-                    "transcription": transcription,
-                    "diarization": diarization,
+                    "src_lang": source_lang,
+                    "result": original_result,
+                    "transcription_lang": source_lang,
                     "cached": False,
                     "timings": timings,
                 }
@@ -266,15 +231,11 @@ def split_audio_sequences(
 def split_all_sequences(video_paths: list[Path]) -> None:
     """Divide el audio de todos los videos en secuencias."""
     for path in video_paths:
-        texts_file = path.with_name("result.pkl")
-        if not texts_file.exists():
-            print(f"⚠️ Saltando {path.stem}: no hay archivo de textos")
+        result_data = load_result(path.parent)
+        if not result_data:
+            print(f"⚠️ Saltando {path.stem}: no hay archivo de resultados")
             continue
-        with open(texts_file, "rb") as f:
-            # Sincronización con el nuevo formato de 7 campos en todos los procesos
-            texts, output_name, url, result, transcription, diarization, info, *rest = (
-                pickle.load(f)
-            )
+        texts = result_data.get("segments", [])
         split_audio_sequences(
             audio_path=path.with_name("vocals.wav"),
             texts=texts,

@@ -49,10 +49,10 @@ def transcribe_and_process(
     segments: Any = None,
     gap: float = 1,
     duration: int = 7,
-) -> Tuple[list[dict], Any, Any, dict]:
+) -> Tuple[list[dict], str, dict]:
     """
-    Transcribe y procesa con diarización en paralelo cuando hay 2 GPUs. Si segments es None, procesa desde media_path.
-    Returns: (result, transcription_segments, diarize_segments, timings)
+    Transcribe y procesa con diarización en paralelo cuando hay 2 GPUs.
+    Returns: (result, detected_language, timings)
     """
     if segments is None:
         if media_path is None:
@@ -89,6 +89,9 @@ def transcribe_and_process(
         print(f"⏱️ [Etapa: Transcripción (Whisper)] Completada en {t_whisper:.1f}s")
         print(f"⏱️ [Etapa: Diarización (Pyannote)] Completada en {t_diarize:.1f}s")
 
+        # Extraer idioma detectado antes de procesar
+        detected_language = getattr(segments, "language", "es") if segments else "es"
+
         t0_group = time.perf_counter()
         result = process_audio(
             segments,
@@ -100,7 +103,7 @@ def transcribe_and_process(
         t_group = time.perf_counter() - t0_group
         total_stt_wall = time.perf_counter() - t0_stt_wall
         print(f"⏱️ [Etapa: STT + Diarización Total] {total_stt_wall:.1f}s ({len(result)} segmentos generados)")
-        return result, segments, diarize_segments, {"whisper": t_whisper, "diarization": t_diarize}
+        return result, detected_language, {"whisper": t_whisper, "diarization": t_diarize}
 
     raise ValueError("Pasando segments sin media_path no soportado aquí.")
 
@@ -163,10 +166,12 @@ def run_main(
     url: str,
     translate: Union[bool, str] = False,
     title: Optional[str] = None,
-) -> Tuple[list[dict], str, list[dict], Any, Any, dict]:
+) -> Tuple[list[dict], str, list[dict], str, dict]:
     """
     Pipeline principal: transcribe, opcionalmente traduce, genera título.
-    Returns: (translated_result, output_name, result, transcription, diarization, stt_timings)
+    Returns: (translated_result, output_name, original_result, source_lang, stt_timings)
+    
+    Nota: Ya no retorna objetos Whisper/Pyannote. Retorna solo datos JSON-serializables.
     """
     media_path = Path(media)
     vocals_path = media_path.with_name("vocals.wav")
@@ -174,9 +179,7 @@ def run_main(
     if not vocals_path.exists():
         raise FileNotFoundError(f"No se encontró el archivo de voces: {vocals_path}")
 
-    res_tuple = transcribe_and_process(vocals_path)
-    result, transcription, diarization = res_tuple[0], res_tuple[1], res_tuple[2]
-    step_timings = res_tuple[3] if len(res_tuple) > 3 else {}
+    result, detected_language, step_timings = transcribe_and_process(vocals_path)
     t_whisper = step_timings.get("whisper", 0.0)
     t_diarize = step_timings.get("diarization", 0.0)
 
@@ -193,7 +196,7 @@ def run_main(
         translated_texts = translate_text_list(
             texts,
             target_lang=translate,
-            source_lang=transcription.language,
+            source_lang=detected_language,
         )
         t_trans = time.perf_counter() - t0_trans
         if translated_texts:
@@ -212,7 +215,7 @@ def run_main(
     default_title = title or media_path.stem
     title_fut = launch_async_title_generation(
         url=url,
-        target_lang=translate if translate else transcription.language,
+        target_lang=translate if translate else detected_language,
         fallback_text=fallback_summary,
     )
     output_name, t_title = resolve_final_title(title_fut, fallback_title=default_title)
@@ -223,4 +226,4 @@ def run_main(
         "translation": t_trans,
         "title": t_title,
     }
-    return translated_result, output_name, result, transcription, diarization, stt_timings
+    return translated_result, output_name, result, detected_language, stt_timings

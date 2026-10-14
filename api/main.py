@@ -13,11 +13,14 @@ try:
 except Exception:
     pass
 
-from fastapi import FastAPI
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from api.routes import process, files, regenerate, speakers, share, transcribe_audio, render, video_ops, segments
+from api.websocket_manager import ws_manager
+from api.job_store import get_job
 
 app = FastAPI(
     title="v2v API",
@@ -34,6 +37,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    loop = asyncio.get_running_loop()
+    ws_manager.set_event_loop(loop)
+
 app.include_router(process.router)
 app.include_router(files.router)
 app.include_router(regenerate.router)
@@ -43,6 +51,32 @@ app.include_router(transcribe_audio.router)
 app.include_router(render.router)
 app.include_router(video_ops.router)
 app.include_router(segments.router)
+
+
+@app.websocket("/ws/job/{job_id}")
+async def websocket_job_endpoint(websocket: WebSocket, job_id: str):
+    """Canal WebSocket para streaming bidireccional de logs y estado en tiempo real."""
+    await ws_manager.connect(websocket, job_id)
+    current_job = get_job(job_id)
+    if current_job:
+        try:
+            await websocket.send_json({
+                "type": "job_snapshot",
+                "job_id": job_id,
+                "data": current_job,
+            })
+        except Exception:
+            pass
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket, job_id)
+    except Exception:
+        ws_manager.disconnect(websocket, job_id)
 
 
 @app.get("/health")

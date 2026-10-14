@@ -1,6 +1,5 @@
 """Segment editor and bulk retranslation endpoints."""
 
-import pickle
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -14,29 +13,20 @@ from api.schemas import (
     RetranslateSegmentsResponse,
     RetranslateSegmentItem,
 )
+from src.result_store import load_result
 
 router = APIRouter(prefix="/api", tags=["segments"])
 
 
-def _load_pkl_texts(video_folder: Path) -> tuple[list[dict], list[dict], str | None]:
+def _load_result_texts(video_folder: Path) -> tuple[list[dict], list[dict], str | None]:
     """Returns (tts_texts, original_stt_texts, source_lang)."""
-    pkl_path = video_folder / "result.pkl"
-    if not pkl_path.exists():
-        raise HTTPException(status_code=404, detail="result.pkl no encontrado")
+    result_data = load_result(video_folder)
+    if not result_data:
+        raise HTTPException(status_code=404, detail="result.json no encontrado")
 
-    with open(pkl_path, "rb") as f:
-        data = pickle.load(f)
-
-    if not isinstance(data, (tuple, list)) or len(data) < 4:
-        raise HTTPException(status_code=500, detail="Formato de result.pkl no reconocido")
-
-    tts_list = data[0] if isinstance(data[0], list) else []
-    original_list = data[3] if isinstance(data[3], list) else []
-
-    source_lang = None
-    if len(data) > 4 and data[4] is not None:
-        transcription = data[4]
-        source_lang = getattr(transcription, "language", None)
+    tts_list = result_data.get("segments", [])
+    original_list = result_data.get("original_segments", [])
+    source_lang = result_data.get("source_lang")
 
     return tts_list, original_list, source_lang
 
@@ -79,7 +69,7 @@ def get_segments_editor(job_id: str, video_index: int):
         raise HTTPException(status_code=404, detail="Video no encontrado")
 
     folder = _get_video_folder(job_id, video_index)
-    tts_list, original_list, source_lang = _load_pkl_texts(folder)
+    tts_list, original_list, source_lang = _load_result_texts(folder)
     job_video = videos[video_index]
     job_segments = job_video.get("segments", []) or []
 
@@ -107,6 +97,14 @@ def get_segments_editor(job_id: str, video_index: int):
         if not original_text.strip() and tts_text.strip():
             original_text = tts_text
 
+        orig_spk = (
+            orig_d.get("original_speaker")
+            or orig_d.get("speaker")
+            or tts_d.get("original_speaker")
+            or (js.get("original_speaker") if i < len(job_segments) else None)
+            or "SPEAKER_00"
+        )
+
         slot = max(0.0, end - start)
         rows.append(
             SegmentEditorRow(
@@ -117,6 +115,7 @@ def get_segments_editor(job_id: str, video_index: int):
                 original_text=original_text,
                 tts_text=tts_text,
                 speaker=speaker,
+                original_speaker=orig_spk,
                 filename=_find_tts_filename(folder, seg_num),
             )
         )
@@ -141,7 +140,7 @@ def get_segments_editor(job_id: str, video_index: int):
 def retranslate_segments(req: RetranslateSegmentsRequest):
     """Propose new translations for selected segments (does not regenerate audio)."""
     folder = _get_video_folder(req.job_id, req.video_index)
-    _tts_list, original_list, source_lang = _load_pkl_texts(folder)
+    _tts_list, original_list, source_lang = _load_result_texts(folder)
 
     if not source_lang:
         source_lang = "en"

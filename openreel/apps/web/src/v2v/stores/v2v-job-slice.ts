@@ -1,0 +1,1005 @@
+import type { StateCreator } from "zustand";
+import { v4 as uuidv4 } from "uuid";
+import type { MediaItem } from "@openreel/core";
+import {
+  v2vApi,
+  type VideoResult,
+  type JobUrlItem,
+  type AudioSegmentItem,
+} from "../api/v2v-api";
+import { useProjectStore } from "@/stores/project-store";
+import { createEmptyProject } from "@/stores/project";
+import { importMultipleMediaIntoProject } from "@/utils/import-media-into-project";
+import {
+  folderNameFromTitle,
+  importKeyFor,
+  segmentLogicalName,
+  findSegmentMediaInLibrary,
+  toSafeToken,
+} from "../utils/v2v-utils";
+import { toast } from "@/stores/notification-store";
+import {
+  addClipToDetachedProject,
+  addMultipleClipsToDetachedProject,
+  addTrackAndGetId,
+  renameTrackInProject,
+  muteTrackInProject,
+} from "../utils/v2v-detached-actions";
+import { autoSaveManager } from "@/services/auto-save";
+import { saveMediaBlob } from "@/services/media-storage";
+import {
+  generateFolderId,
+  createSegmentInfo,
+} from "../utils/v2v-segment-ids";
+import { getMediaBridge, initializeMediaBridge } from "@/bridges/media-bridge";
+import type { V2VState, JobSlice, SerializedFolderData } from "./v2v-types";
+import {
+  JOB_STATE_STORAGE_KEY,
+  loadJobStateFromStorage,
+  saveJobStateToStorage,
+} from "./v2v-storage";
+import {
+  loadFolderRefsFromStorage,
+  saveFolderRefsToStorage,
+} from "./v2v-folders-slice";
+
+const POLL_INTERVAL_FAST = 2000;
+const POLL_INTERVAL_SLOW = 8000;
+
+let pollingTimer: ReturnType<typeof setInterval> | null = null;
+let activeWebSocket: WebSocket | null = null;
+let isImportingBusy = false;
+let currentPollPhase: "fast" | "slow" = "fast";
+
+async function generateWaveformsInBackground(projectId: string, mediaItems: MediaItem[]) {
+  if (!mediaItems || mediaItems.length === 0) return;
+  try {
+    const mediaBridge = getMediaBridge();
+    if (!mediaBridge.isInitialized()) {
+      await initializeMediaBridge();
+    }
+    const BATCH_SIZE = 4;
+    for (let i = 0; i < mediaItems.length; i += BATCH_SIZE) {
+      const slice = mediaItems.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(
+        slice.map(async (item) => {
+          if (!item.blob) return null;
+          try {
+            const wf = await mediaBridge.generateWaveform(item.blob, item.id);
+            return { id: item.id, peaks: wf?.peaks || null };
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      const currentStore = useProjectStore.getState();
+      if (currentStore.project && currentStore.project.id === projectId) {
+        const updatedItems = currentStore.project.mediaLibrary.items.map((m) => {
+          const match = results.find((r) => r && r.id === m.id);
+          return match && match.peaks ? { ...m, waveformData: match.peaks } : m;
+        });
+        currentStore.setProject({
+          ...currentStore.project,
+          mediaLibrary: {
+            ...currentStore.project.mediaLibrary,
+            items: updatedItems,
+          },
+        });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+
+    const finalStore = useProjectStore.getState();
+    if (finalStore.project && finalStore.project.id === projectId) {
+      await autoSaveManager.forceSave(finalStore.project);
+    }
+  } catch (err) {
+    console.warn("[V2V] Error generating waveforms in background:", err);
+  }
+}
+
+export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, get) => {
+  const saved = loadJobStateFromStorage();
+  return {
+    urls: saved.urls ?? "",
+    jobId: saved.jobId ?? null,
+    progress: saved.progress ?? 0,
+    error: null,
+    videos: saved.videos ?? [],
+    selectedVideoIndex: saved.selectedVideoIndex ?? 0,
+    isProcessing: false,
+    shareUrl: saved.shareUrl ?? null,
+    log: saved.log ?? "",
+    importStatusByKey: saved.importStatusByKey ?? {},
+    urlItems: saved.urlItems ?? [],
+    selectedUrlForLogs: null,
+    urlLogs: saved.urlLogs ?? {},
+    jobPhase: saved.jobPhase ?? "idle",
+    lastUrlsSignature: saved.lastUrlsSignature ?? null,
+
+    isV2VOpen: false,
+    setIsV2VOpen: (isV2VOpen) => set({ isV2VOpen }),
+    bulkEditorOpen: false,
+    setBulkEditorOpen: (bulkEditorOpen) => set({ bulkEditorOpen }),
+    timelineHeight: 320,
+    setTimelineHeight: (timelineHeight) => set({ timelineHeight }),
+
+    setUrls: (urls) => {
+      set({ urls });
+      saveJobStateToStorage({ urls });
+    },
+    setJobId: (jobId) => {
+      set({ jobId });
+      saveJobStateToStorage({ jobId });
+    },
+    setProgress: (progress) => {
+      set({ progress });
+      saveJobStateToStorage({ progress });
+    },
+    setError: (error) => set({ error }),
+
+    setVideos: (videos) => {
+      set({ videos });
+      saveJobStateToStorage({ videos });
+    },
+    setSelectedVideoIndex: (selectedVideoIndex) => {
+      set({ selectedVideoIndex });
+      saveJobStateToStorage({ selectedVideoIndex });
+    },
+
+    setIsProcessing: (isProcessing) => set({ isProcessing }),
+    setShareUrl: (shareUrl) => {
+      set({ shareUrl });
+      saveJobStateToStorage({ shareUrl });
+    },
+    setLog: (log) => {
+      set({ log });
+      saveJobStateToStorage({ log });
+    },
+    setImportStatus: (key, status) =>
+      set((state) => {
+        const next = { ...state.importStatusByKey, [key]: status };
+        saveJobStateToStorage({ importStatusByKey: next });
+        return { importStatusByKey: next };
+      }),
+    setUrlItems: (urlItems) => {
+      set({ urlItems });
+      saveJobStateToStorage({ urlItems });
+    },
+    setSelectedUrlForLogs: (selectedUrlForLogs) => set({ selectedUrlForLogs }),
+    appendUrlLog: (url, line) =>
+      set((state) => {
+        const prev = state.urlLogs[url] || "";
+        const next = prev ? `${prev}\n${line}` : line;
+        const updated = { ...state.urlLogs, [url]: next };
+        saveJobStateToStorage({ urlLogs: updated });
+        return { urlLogs: updated };
+      }),
+    setJobPhase: (jobPhase) => {
+      set({ jobPhase });
+      saveJobStateToStorage({ jobPhase });
+    },
+
+    clearJobRunState: (opts) =>
+      set((state) => {
+        const keepImports = opts?.keepImports ?? false;
+        const keepItems = opts?.keepItems ?? false;
+        if (!keepItems) localStorage.removeItem(JOB_STATE_STORAGE_KEY);
+        return {
+          jobId: null,
+          progress: 0,
+          error: null,
+          videos: keepItems ? state.videos : [],
+          selectedVideoIndex: 0,
+          segments: keepItems ? state.segments : [],
+          selectedRowIndex: null,
+          isProcessing: false,
+          regenStatus: "",
+          shareUrl: null,
+          log: "",
+          importStatusByKey: keepImports ? state.importStatusByKey : {},
+          urlItems: keepItems ? state.urlItems : [],
+          selectedUrlForLogs: null,
+          urlLogs: keepItems ? state.urlLogs : {},
+          jobPhase: "idle",
+          folderRefs: state.folderRefs,
+          lastUrlsSignature: state.lastUrlsSignature,
+        };
+      }),
+
+    setLastUrlsSignature: (lastUrlsSignature) => {
+      set({ lastUrlsSignature });
+      saveJobStateToStorage({ lastUrlsSignature });
+    },
+
+    startPolling: (jobId) => {
+      if (pollingTimer) clearInterval(pollingTimer);
+      if (activeWebSocket) {
+        try { activeWebSocket.close(); } catch {}
+        activeWebSocket = null;
+      }
+
+      set({ jobId, isProcessing: true });
+      saveJobStateToStorage({ jobId });
+      currentPollPhase = "fast";
+
+      // ── Conexión WebSocket para streaming en tiempo real ──
+      try {
+        const wsUrl = v2vApi.getJobWebSocketUrl(jobId);
+        const ws = new WebSocket(wsUrl);
+        activeWebSocket = ws;
+
+        ws.onopen = () => {
+          console.log(`[V2V] ⚡ WebSocket conectado en tiempo real para job ${jobId}`);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === "log_chunk" && msg.chunk) {
+              set((st) => {
+                const nextLog = (st.log || "") + msg.chunk;
+                saveJobStateToStorage({ log: nextLog });
+                return { log: nextLog };
+              });
+            } else if (msg.type === "job_update" && msg.data) {
+              const d = msg.data;
+              const updates: Partial<any> = {};
+              if (d.progress !== undefined) updates.progress = d.progress * 100;
+              if (d.status) updates.jobPhase = d.status;
+              if (d.url_states) {
+                updates.urlItems = (d.url_states as JobUrlItem[]).map((it) => ({ ...it, jobId }));
+              }
+              if (d.videos) {
+                updates.videos = (d.videos as VideoResult[]).map((v) => ({ ...v, jobId }));
+              }
+              set(updates);
+              saveJobStateToStorage(updates);
+            } else if (msg.type === "job_snapshot" && msg.data) {
+              const snap = msg.data;
+              const snapUpdates: Partial<any> = {};
+              if (snap.progress !== undefined) snapUpdates.progress = snap.progress * 100;
+              if (snap.status) snapUpdates.jobPhase = snap.status;
+              if (snap.log) snapUpdates.log = snap.log;
+              if (snap.url_states) {
+                snapUpdates.urlItems = snap.url_states.map((it: any) => ({ ...it, jobId }));
+              }
+              if (snap.videos) {
+                snapUpdates.videos = snap.videos.map((v: any) => ({ ...v, jobId }));
+              }
+              set(snapUpdates);
+              saveJobStateToStorage(snapUpdates);
+            }
+          } catch {
+            // Ignorar respuestas no-JSON
+          }
+        };
+
+        ws.onerror = (e) => {
+          console.warn("[V2V] WebSocket no disponible o error, continuando con HTTP polling:", e);
+        };
+
+        ws.onclose = () => {
+          if (activeWebSocket === ws) activeWebSocket = null;
+        };
+      } catch (wsErr) {
+        console.warn("[V2V] Excepción al conectar WebSocket, continuando con HTTP polling:", wsErr);
+      }
+
+      const scheduleNext = () => {
+        if (pollingTimer) clearInterval(pollingTimer);
+        const interval = currentPollPhase === "fast" ? POLL_INTERVAL_FAST : POLL_INTERVAL_SLOW;
+        pollingTimer = setInterval(pollOnce, interval);
+      };
+
+      const pollOnce = async () => {
+        const state = get();
+        if (!jobId || !state.isProcessing) {
+          if (pollingTimer) {
+            clearInterval(pollingTimer);
+            pollingTimer = null;
+          }
+          if (activeWebSocket) {
+            try { activeWebSocket.close(); } catch {}
+            activeWebSocket = null;
+          }
+          return;
+        }
+
+        try {
+          const pollResult = await v2vApi.poll(jobId);
+          const { status: s, log: jobLog, items, result: partial } = pollResult;
+
+          set({ progress: s.progress * 100, jobPhase: s.status });
+          saveJobStateToStorage({ progress: s.progress * 100, jobPhase: s.status });
+
+          if (jobLog && jobLog.length > state.log.length) {
+            set({ log: jobLog });
+            saveJobStateToStorage({ log: jobLog });
+          }
+
+          if (items && items.length) {
+            set((st) => {
+              const otherItems = st.urlItems.filter(it => (it as any).jobId && (it as any).jobId !== jobId);
+              const jobItems = items.map(it => ({ ...it, jobId }));
+              const nextItems = [...otherItems, ...jobItems];
+              saveJobStateToStorage({ urlItems: nextItems });
+              return { urlItems: nextItems };
+            });
+          }
+
+          if (partial?.videos?.length) {
+            set((st) => {
+              const otherVideos = st.videos.filter(v => (v as any).jobId && (v as any).jobId !== jobId);
+              const jobVideos = partial.videos.map(v => ({ ...v, jobId }));
+              const nextVideos = [...otherVideos, ...jobVideos];
+              saveJobStateToStorage({ videos: nextVideos });
+              return { videos: nextVideos };
+            });
+          }
+
+          const currentVideos = partial?.videos || [];
+          const hasPendingImports = currentVideos.some(
+            (v) => !get().importStatusByKey[importKeyFor(v.url, v.index)],
+          );
+
+          if (hasPendingImports && !isImportingBusy) {
+            currentPollPhase = "slow";
+            scheduleNext();
+          } else if (currentPollPhase === "slow" && !hasPendingImports) {
+            currentPollPhase = "fast";
+            scheduleNext();
+          }
+
+          if (s.status === "done" || s.status === "error" || s.status === "interrupted") {
+            if (s.status === "interrupted") {
+              console.warn(`[V2V] Job ${jobId} fue interrumpido por reinicio del servidor`);
+              get().stopPolling();
+              set({
+                isProcessing: false,
+                error: "El servidor se reinició durante el procesamiento. Revisa los jobs completados o reinicia.",
+              });
+            } else if (!isImportingBusy) {
+              const stillPending = get().videos.filter(v => !get().importStatusByKey[importKeyFor(v.url, v.index)]);
+              if (stillPending.length === 0) {
+                get().stopPolling();
+                if (s.status === "error") set({ isProcessing: false });
+              }
+            }
+          }
+
+          if (!isImportingBusy) {
+            const pendingVideos = currentVideos.filter(
+              (v) => !get().importStatusByKey[importKeyFor(v.url, v.index)],
+            );
+
+            if (pendingVideos.length > 0) {
+              isImportingBusy = true;
+              try {
+                const baseProjectSettings = useProjectStore.getState().project.settings;
+                for (const v of pendingVideos) {
+                  const key = importKeyFor(v.url, v.index);
+                  if (get().importStatusByKey[key]) continue;
+
+                  set((st) => ({
+                    importStatusByKey: { ...st.importStatusByKey, [key]: "in_progress" }
+                  }));
+
+                  let audioSegs: AudioSegmentItem[] = [];
+                  try {
+                    audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
+                    audioSegs = audioSegs.filter((as, i, a) => a.findIndex(t => t.seg === as.seg) === i);
+                  } catch {
+                    get().setImportStatus(key, "error");
+                    continue;
+                  }
+
+                  const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
+                  const urlForLog = v.url || "";
+                  const importStartTime = performance.now();
+                  let workingProject = createEmptyProject(folder, {
+                    width: baseProjectSettings.width,
+                    height: baseProjectSettings.height,
+                    frameRate: baseProjectSettings.frameRate,
+                  });
+
+                  interface V2VAssetDef {
+                    id: string;
+                    serverFn: string;
+                    logicalName: string;
+                    type: 'video' | 'audio';
+                    toTimeline: boolean;
+                    trackPrefix?: string;
+                    muted?: boolean;
+                    enabled: boolean;
+                  }
+
+                  const assets: V2VAssetDef[] = [
+                    { 
+                      id: 'video_only', 
+                      serverFn: v.video_only_path?.split(/[\\/]/).pop() || "", 
+                      logicalName: v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4", 
+                      type: 'video', 
+                      toTimeline: true, 
+                      trackPrefix: 'Video',
+                      enabled: !!v.video_only_path 
+                    },
+                    { 
+                      id: 'instrumental', 
+                      serverFn: v.instrumental_path?.split(/[\\/]/).pop() || "no_vocals.wav", 
+                      logicalName: "no_vocals.wav", 
+                      type: 'audio', 
+                      toTimeline: true, 
+                      trackPrefix: 'INSTRUMENTAL',
+                      enabled: !!v.instrumental_path 
+                    },
+                    { 
+                      id: 'merged_video', 
+                      serverFn: v.video_path?.split(/[\\/]/).pop() || "", 
+                      logicalName: v.video_path?.split(/[\\/]/).pop() || "merged.mp4", 
+                      type: 'video', 
+                      toTimeline: false, 
+                      enabled: !!v.video_path 
+                    },
+                    { 
+                      id: 'original_audio', 
+                      serverFn: v.original_audio_path?.split(/[\\/]/).pop() || "", 
+                      logicalName: v.original_audio_path?.split(/[\\/]/).pop() || "original_audio.webm", 
+                      type: 'audio', 
+                      toTimeline: false, 
+                      enabled: !!v.original_audio_path 
+                    },
+                    { 
+                      id: 'vocals_original', 
+                      serverFn: v.vocals_path?.split(/[\\/]/).pop() || "vocals.wav", 
+                      logicalName: "vocals.wav", 
+                      type: 'audio', 
+                      toTimeline: false, 
+                      enabled: !!v.vocals_path 
+                    }
+                  ];
+
+                  const fetchAssetBlob = async (asset: V2VAssetDef) => {
+                    if (!asset.enabled) return null;
+                    try {
+                      const blob = await v2vApi.fetchFileBlob(jobId, v.index, asset.serverFn);
+                      return { asset, blob };
+                    } catch (e) {
+                      console.warn(`[V2V] Asset opcional no disponible: ${asset.serverFn}`, e);
+                      return null;
+                    }
+                  };
+
+                  if (urlForLog) {
+                    get().appendUrlLog(urlForLog, `🚀 Iniciando importación al timeline para "${folder}"...`);
+                  }
+
+                  const tStartDownload = performance.now();
+                  const assetTasks = assets.map(fetchAssetBlob);
+
+                  let isTarSuccessful = false;
+                  const [downloadedAssetsRaw, downloadedSegs] = await Promise.all([
+                    Promise.all(assetTasks),
+                    (async () => {
+                      if (audioSegs.length === 0) return [];
+                      try {
+                        const tTarStart = performance.now();
+                        const tarMap = await v2vApi.fetchAudioSegmentsTar(jobId, v.index);
+                        const segsFromTar: Array<{ isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob }> = [];
+                        for (const seg of audioSegs) {
+                          const logicalName = segmentLogicalName(seg);
+                          let blob: Blob | undefined;
+                          if (seg.filename && tarMap.has(seg.filename)) {
+                            blob = tarMap.get(seg.filename);
+                          } else if (tarMap.has(logicalName)) {
+                            blob = tarMap.get(logicalName);
+                          } else {
+                            const segSuffix = `_${String(seg.seg).padStart(3, "0")}.wav`;
+                            for (const [name, b] of tarMap.entries()) {
+                              if (name.endsWith(segSuffix)) {
+                                blob = b;
+                                break;
+                              }
+                            }
+                          }
+                          if (blob) {
+                            segsFromTar.push({ isSegment: true, seg, logicalName, blob });
+                          }
+                        }
+                        if (segsFromTar.length > 0) {
+                          isTarSuccessful = true;
+                          const tTarSec = ((performance.now() - tTarStart) / 1000).toFixed(1);
+                          if (urlForLog) {
+                            get().appendUrlLog(urlForLog, `📦 [Paso 1/4] Descarga TAR consolidada completada en ${tTarSec}s (${segsFromTar.length} audios).`);
+                          }
+                          return segsFromTar;
+                        }
+                      } catch (e) {
+                        console.warn(`[V2V] Fallback a descargas individuales de audio para ${folder}:`, e);
+                      }
+
+                      const tIndivStart = performance.now();
+                      if (urlForLog) {
+                        get().appendUrlLog(urlForLog, `⚠️ [Paso 1/4] Endpoint TAR no disponible en servidor. Descargando ${audioSegs.length} audios individualmente...`);
+                      }
+                      const segmentTasks = audioSegs.map((seg) => {
+                        const logicalName = segmentLogicalName(seg);
+                        return v2vApi
+                          .fetchAudioSegmentBlob(jobId, v.index, seg.seg)
+                          .then((blob) => ({ isSegment: true as const, seg, logicalName, blob }))
+                          .catch(() => null);
+                      });
+                      const individualResults = await Promise.all(segmentTasks);
+                      const res = individualResults.filter((d): d is { isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } => d !== null);
+                      const tIndivSec = ((performance.now() - tIndivStart) / 1000).toFixed(1);
+                      if (urlForLog) {
+                        get().appendUrlLog(urlForLog, `⏱️ [Paso 1/4] Descargas individuales completadas en ${tIndivSec}s (${res.length} audios recibidos).`);
+                      }
+                      return res;
+                    })()
+                  ]);
+
+                  const downloadedAssets = downloadedAssetsRaw.filter((d): d is { asset: V2VAssetDef, blob: Blob } => d !== null);
+                  const tTotalDlSec = ((performance.now() - tStartDownload) / 1000).toFixed(1);
+                  if (urlForLog && isTarSuccessful) {
+                    get().appendUrlLog(urlForLog, `⏱️ [Paso 1/4] Total descarga (Video + audios): ${tTotalDlSec}s.`);
+                  }
+
+                  if (audioSegs.length > 0 && downloadedSegs.length === 0) {
+                    console.warn(
+                      `[V2V] ${audioSegs.length} segmentos listados pero ningún WAV descargado para ${folder}`,
+                    );
+                    get().setImportStatus(key, "error");
+                    if (urlForLog) {
+                      get().appendUrlLog(
+                        urlForLog,
+                        "❌ No se pudieron descargar los audios TTS; reintenta o usa Re-importar.",
+                      );
+                    }
+                    continue;
+                  }
+
+                  const tStartBaseMedia = performance.now();
+                  const baseFilesToImport = downloadedAssets.map(d => 
+                    new File([d.blob], d.asset.logicalName, { type: d.asset.type === 'video' ? 'video/mp4' : 'audio/wav' })
+                  );
+
+                  if (urlForLog) {
+                    get().appendUrlLog(urlForLog, `⏱️ [Paso 2/4] Analizando video base e instrumental (${baseFilesToImport.length} archivos)...`);
+                  }
+
+                  const batchRes = await importMultipleMediaIntoProject(workingProject, baseFilesToImport, { quick: true });
+                  if (!batchRes.success || !batchRes.project) {
+                    console.error(`[V2V] importMultipleMediaIntoProject falló para ${folder}`);
+                    get().setImportStatus(key, "error");
+                    if (urlForLog) {
+                      get().appendUrlLog(urlForLog, `❌ Falló la importación del video base para ${folder}`);
+                    }
+                    continue;
+                  }
+
+                  workingProject = batchRes.project;
+                  const tBaseSec = ((performance.now() - tStartBaseMedia) / 1000).toFixed(1);
+                  if (urlForLog) {
+                    get().appendUrlLog(urlForLog, `⏱️ [Paso 2/4] Video base e instrumental listos en ${tBaseSec}s.`);
+                  }
+
+                  const vMedia = workingProject.mediaLibrary.items.find(m => m.name === (v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4"));
+                  if (vMedia?.metadata.width && vMedia?.metadata.height) {
+                    workingProject = {
+                      ...workingProject,
+                      settings: { ...workingProject.settings, width: vMedia.metadata.width, height: vMedia.metadata.height },
+                    };
+                  }
+
+                  const tStartReg = performance.now();
+                  if (urlForLog) {
+                    get().appendUrlLog(urlForLog, `⏱️ [Paso 3/4] Registrando ${downloadedSegs.length} segmentos TTS en la biblioteca de medios...`);
+                  }
+
+                  const ttsMediaItems: MediaItem[] = [];
+                  for (const d of downloadedSegs) {
+                    const fallbackDuration = Math.max(d.seg.end - d.seg.start, 0.1);
+                    const meta = {
+                      duration: fallbackDuration,
+                      width: 0,
+                      height: 0,
+                      frameRate: 0,
+                      codec: "pcm_s16le",
+                      sampleRate: 48000,
+                      channels: 1,
+                      fileSize: d.blob.size,
+                    };
+                    const item: MediaItem = {
+                      id: uuidv4(),
+                      name: d.logicalName,
+                      type: "audio",
+                      fileHandle: null,
+                      blob: d.blob,
+                      metadata: meta,
+                      thumbnailUrl: null,
+                      waveformData: null,
+                    };
+                    ttsMediaItems.push(item);
+
+                    saveMediaBlob(workingProject.id, item.id, d.blob, meta).catch((err) =>
+                      console.warn(`[V2V] Error guardando blob en IndexedDB para ${d.logicalName}:`, err)
+                    );
+                  }
+
+                  workingProject = {
+                    ...workingProject,
+                    mediaLibrary: {
+                      ...workingProject.mediaLibrary,
+                      items: [...workingProject.mediaLibrary.items, ...ttsMediaItems],
+                    },
+                    modifiedAt: Date.now(),
+                  };
+
+                  const tRegMs = Math.round(performance.now() - tStartReg);
+                  if (urlForLog) {
+                    get().appendUrlLog(urlForLog, `⏱️ [Paso 3/4] ${ttsMediaItems.length} segmentos TTS registrados en biblioteca en ${tRegMs}ms.`);
+                  }
+
+                  const tStartTimeline = performance.now();
+                  if (urlForLog) {
+                    get().appendUrlLog(urlForLog, `⏱️ [Paso 4/4] Montando pistas y posicionando clips en el timeline...`);
+                  }
+
+                  for (const { asset } of downloadedAssets) {
+                    if (!asset.toTimeline) continue;
+                    const media = workingProject.mediaLibrary.items.find(m => m.name === asset.logicalName);
+                    if (!media) continue;
+
+                    const { project: p1, trackId } = await addTrackAndGetId(workingProject, asset.type);
+                    workingProject = p1;
+                    if (!trackId) continue;
+                    workingProject = renameTrackInProject(workingProject, trackId, asset.trackPrefix ? asset.trackPrefix : asset.id);
+                    if (asset.muted) workingProject = muteTrackInProject(workingProject, trackId, true);
+                    const clipRes = (await addClipToDetachedProject(workingProject, trackId, media.id, 0)) as any;
+                    workingProject = clipRes.project!;
+                  }
+
+                  const bySpkAll: Record<string, AudioSegmentItem[]> = {};
+                  for (const seg of audioSegs) {
+                    const spk = (seg.speaker || "").trim() || `Speaker_${seg.seg}`;
+                    (bySpkAll[spk] ||= []).push(seg);
+                  }
+
+                  const allClipsToBatchAdd: Array<{ trackId: string; mediaId: string; startTime: number }> = [];
+
+                  for (const sKey of Object.keys(bySpkAll)) {
+                    const segs = bySpkAll[sKey].sort((a, b) => a.seg - b.seg);
+                    const { project: p2, trackId } = await addTrackAndGetId(workingProject, "audio");
+                    workingProject = p2;
+                    if (!trackId) continue;
+
+                    workingProject = renameTrackInProject(workingProject, trackId, sKey);
+                    const failedSegNums: number[] = [];
+
+                    for (const seg of segs) {
+                      const downloaded = downloadedSegs.find(d => d.seg.seg === seg.seg);
+
+                      if (downloaded) {
+                        const media = findSegmentMediaInLibrary(
+                          workingProject.mediaLibrary.items,
+                          seg,
+                        );
+                        if (!media) {
+                          console.warn(
+                            `[V2V] Segmento ${seg.seg} descargado pero no encontrado en librería: ${downloaded.logicalName}`,
+                          );
+                          continue;
+                        }
+                        allClipsToBatchAdd.push({
+                          trackId,
+                          mediaId: media.id,
+                          startTime: seg.start,
+                        });
+                      } else {
+                        const placeholderName = `tts_${toSafeToken(sKey)}_${String(seg.seg).padStart(3, "0")}.wav`;
+                        const placeholderItem: MediaItem = {
+                          id: uuidv4(),
+                          name: placeholderName,
+                          type: "audio",
+                          fileHandle: null,
+                          blob: null,
+                          isPlaceholder: true,
+                          metadata: {
+                            duration: Math.max(seg.end - seg.start, 0.1),
+                            width: 0,
+                            height: 0,
+                            frameRate: 0,
+                            codec: "",
+                            sampleRate: 48000,
+                            channels: 1,
+                            fileSize: 0,
+                          },
+                          thumbnailUrl: null,
+                          waveformData: null,
+                        };
+
+                        workingProject = {
+                          ...workingProject,
+                          mediaLibrary: {
+                            ...workingProject.mediaLibrary,
+                            items: [...workingProject.mediaLibrary.items, placeholderItem],
+                          },
+                        };
+
+                        allClipsToBatchAdd.push({
+                          trackId,
+                          mediaId: placeholderItem.id,
+                          startTime: seg.start,
+                        });
+                        failedSegNums.push(seg.seg);
+                      }
+                    }
+
+                    if (failedSegNums.length > 0) {
+                      const logMsg = `⚠️ Speaker "${sKey}": ${failedSegNums.length} segmento(s) sin audio TTS (error al generar) → #${failedSegNums.join(", #")}. Recupéralos desde el Bulk Editor.`;
+                      console.warn(`[V2V] ${logMsg}`);
+                      if (urlForLog) get().appendUrlLog(urlForLog, logMsg);
+                    }
+                  }
+
+                  if (allClipsToBatchAdd.length > 0) {
+                    const batchAddRes = await addMultipleClipsToDetachedProject(workingProject, allClipsToBatchAdd);
+                    workingProject = batchAddRes.project;
+                  }
+
+                  await autoSaveManager.forceSave(workingProject);
+
+                  const tTimelineMs = Math.round(performance.now() - tStartTimeline);
+                  if (urlForLog) {
+                    get().appendUrlLog(urlForLog, `⏱️ [Paso 4/4] Timeline montado: ${allClipsToBatchAdd.length} clips insertados en ${tTimelineMs}ms.`);
+                  }
+
+                  const audioSegmentsImported = workingProject.mediaLibrary.items.filter(
+                    m => m.type === "audio" && m.name.startsWith("tts_") && !m.waveformData && !m.isPlaceholder
+                  );
+                  
+                  if (audioSegmentsImported.length > 0) {
+                    generateWaveformsInBackground(workingProject.id, audioSegmentsImported);
+                  }
+                  
+                  const totalFilesCount = baseFilesToImport.length + ttsMediaItems.length;
+                  const nativeFiles = [...baseFilesToImport.map(f => f.name), ...ttsMediaItems.map(m => m.name)];
+                  
+                  get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index, outputName: v.output_name, nativeFiles, projectId: workingProject.id });
+                  
+                  const segsWithMediaInfo = downloadedSegs.map((d) => {
+                    const media = findSegmentMediaInLibrary(
+                      workingProject.mediaLibrary.items,
+                      d.seg,
+                    );
+                    const videoSegment = v.segments.find((s) => s.seg === d.seg.seg);
+                    return {
+                      seg: d.seg,
+                      mediaId: media?.id || "",
+                      logicalName: d.logicalName,
+                      text: videoSegment?.text || "",
+                      speaker: videoSegment?.speaker || d.seg.speaker,
+                    };
+                  });
+                  
+                  for (const segInfo of segsWithMediaInfo) {
+                    if (segInfo.mediaId) {
+                      const segmentData = createSegmentInfo({
+                        mediaId: segInfo.mediaId,
+                        jobId: state.jobId!,
+                        videoIndex: v.index,
+                        segIdx: segInfo.seg.seg,
+                        folder: folder,
+                        originalText: segInfo.text,
+                        speaker: segInfo.speaker,
+                      });
+                      get().setSegmentInfo(folder, segmentData);
+                    }
+                  }
+                  
+                  get().setImportStatus(key, "done");
+                  const importElapsedSec = ((performance.now() - importStartTime) / 1000).toFixed(1);
+                  if (urlForLog) {
+                    get().appendUrlLog(urlForLog, `⏱️ [Etapa: Importación Timeline] Completada en ${importElapsedSec}s (${totalFilesCount} archivos).`);
+                    get().appendUrlLog(urlForLog, `✅ Proyecto "${folder}" listo para editar en OpenReel.`);
+                  }
+
+                  const activeProject = useProjectStore.getState().project;
+                  if (activeProject.name === folder) {
+                    if (activeProject.id === workingProject.id) {
+                      useProjectStore.getState().loadProject(workingProject);
+                      toast.success(
+                        "Timeline V2V actualizado",
+                        "Video, instrumental y voces TTS montados en el timeline.",
+                      );
+                    } else {
+                      toast.info(
+                        "Importación lista",
+                        `El timeline de "${folder}" fue actualizado. Recárgalo desde el dropdown de video si no ves los cambios.`,
+                      );
+                    }
+                  } else {
+                    toast.info(
+                      "Importación guardada en autosave",
+                      `Abre el proyecto "${folder}" o recupera el autosave más reciente para ver el timeline completo.`,
+                    );
+                  }
+                }
+              } catch (err) {
+                console.error("V2V Background import error:", err);
+                const state = get();
+                const pendingKeys = Object.keys(state.importStatusByKey).filter(k => state.importStatusByKey[k] === "in_progress");
+                if (pendingKeys.length > 0) {
+                  set((st) => {
+                    const newStatus = { ...st.importStatusByKey };
+                    pendingKeys.forEach(k => { newStatus[k] = "error"; });
+                    return { importStatusByKey: newStatus };
+                  });
+                }
+              } finally {
+                isImportingBusy = false;
+              }
+            }
+          }
+        } catch (err) {
+          console.error("V2V Polling error:", err);
+        }
+      };
+
+      scheduleNext();
+    },
+
+    stopPolling: () => {
+      if (activeWebSocket) {
+        try { activeWebSocket.close(); } catch {}
+        activeWebSocket = null;
+      }
+      if (pollingTimer) {
+        clearInterval(pollingTimer);
+        pollingTimer = null;
+      }
+      currentPollPhase = "fast";
+      set({ isProcessing: false });
+    },
+
+    updateVideoOutputName: async (videoIndex: number, newOutputName: string, targetJobId?: string) => {
+      const state = get();
+      const newFolder = folderNameFromTitle(newOutputName);
+
+      const updatedVideos = (state.videos || []).map((v, i) => {
+        if (v.index === videoIndex || i === videoIndex) {
+          return { ...v, output_name: newOutputName };
+        }
+        return v;
+      });
+
+      const updatedUrlItems = (state.urlItems || []).map((it, i) => {
+        if (it.index === videoIndex || i === videoIndex) {
+          return { ...it, output_name: newOutputName };
+        }
+        return it;
+      });
+
+      let matchedOldFolderKey: string | null = null;
+      let matchedRef: SerializedFolderData | null = null;
+
+      for (const [fKey, ref] of Object.entries(state.folderRefs || {})) {
+        if (ref.videoIndex === videoIndex && (!targetJobId || ref.jobId === targetJobId)) {
+          matchedOldFolderKey = fKey;
+          matchedRef = ref;
+          break;
+        }
+      }
+
+      if (!matchedOldFolderKey && updatedVideos[videoIndex]) {
+        const oldTitle = updatedVideos[videoIndex]?.output_name;
+        if (oldTitle) {
+          const oldFold = folderNameFromTitle(oldTitle);
+          if (state.folderRefs[oldFold]) {
+            matchedOldFolderKey = oldFold;
+            matchedRef = state.folderRefs[oldFold];
+          }
+        }
+      }
+
+      const updatedFolderRefs = { ...state.folderRefs };
+      if (matchedOldFolderKey && matchedRef) {
+        const targetRef: SerializedFolderData = {
+          ...matchedRef,
+          outputName: newOutputName,
+          folderId: generateFolderId(newFolder, matchedRef.jobId),
+          updatedAt: Date.now(),
+        };
+
+        if (matchedOldFolderKey !== newFolder) {
+          delete updatedFolderRefs[matchedOldFolderKey];
+          updatedFolderRefs[newFolder] = targetRef;
+        } else {
+          updatedFolderRefs[matchedOldFolderKey] = targetRef;
+        }
+      }
+
+      set({
+        videos: updatedVideos,
+        urlItems: updatedUrlItems,
+        folderRefs: updatedFolderRefs,
+      });
+      saveJobStateToStorage({ videos: updatedVideos, urlItems: updatedUrlItems });
+      saveFolderRefsToStorage(updatedFolderRefs);
+
+      try {
+        const projectStore = useProjectStore.getState();
+        const activeProj = projectStore.project;
+        const isActive =
+          (matchedOldFolderKey && activeProj.name === matchedOldFolderKey) ||
+          (matchedRef?.projectId && activeProj.id === matchedRef.projectId) ||
+          (matchedRef?.nativeFiles &&
+            activeProj.timeline.tracks.some((t) =>
+              t.clips.some((c) => {
+                const base = c.mediaName?.split("/").pop() || "";
+                return matchedRef!.nativeFiles.includes(base);
+              }),
+            )) ||
+          activeProj.name === folderNameFromTitle(matchedRef?.outputName || "");
+
+        if (isActive) {
+          await projectStore.renameProject(newFolder);
+          await autoSaveManager.initialize();
+          const curr = useProjectStore.getState().project;
+          await autoSaveManager.forceSave(curr);
+        }
+
+        await autoSaveManager.initialize();
+        const saves = await autoSaveManager.checkForRecovery();
+        for (const s of saves) {
+          if (
+            (matchedRef?.projectId && s.projectId === matchedRef.projectId) ||
+            (matchedOldFolderKey && s.projectName === matchedOldFolderKey)
+          ) {
+            const p = await autoSaveManager.loadProject(s.id);
+            if (p) {
+              p.name = newFolder;
+              await autoSaveManager.saveProject(p);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[V2V] Error actualizando proyecto tras regenerar título:", err);
+      }
+    },
+
+    reset: () => {
+      get().stopPolling();
+      saveFolderRefsToStorage({});
+      localStorage.removeItem(JOB_STATE_STORAGE_KEY);
+      set({
+        urls: "",
+        translateLang: "None",
+        speaker: "mrbeast",
+        jobId: null,
+        progress: 0,
+        error: null,
+        videos: [],
+        selectedVideoIndex: 0,
+        segments: [],
+        selectedRowIndex: null,
+        isProcessing: false,
+        regenStatus: "",
+        shareUrl: null,
+        log: "",
+        importStatusByKey: {},
+        urlItems: [],
+        folderRefs: {},
+        selectedUrlForLogs: null,
+        urlLogs: {},
+        jobPhase: "idle",
+        lastUrlsSignature: null,
+        isV2VOpen: false,
+        bulkEditorOpen: false,
+      });
+    },
+  };
+};

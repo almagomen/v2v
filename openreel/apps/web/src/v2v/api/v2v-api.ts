@@ -61,6 +61,7 @@ export interface Segment {
   end: number;
   text: string;
   speaker?: string;
+  original_speaker?: string;
 }
 
 export interface VideoResult {
@@ -297,17 +298,21 @@ export const v2vApi = {
     emotion?: string | null,
     options?: {
       forceReprocess?: boolean;
-    }
+      speakerMap?: Record<string, string>;
+    },
+    signal?: AbortSignal,
   ): Promise<ProcessUrlsResponse> {
     const res = await fetch(url("/api/process-urls"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal,
       body: JSON.stringify({
         urls,
         translate_lang: translateLang,
         speaker,
         emotion: emotion || null,
         force_reprocess: options?.forceReprocess ?? false,
+        speaker_map: options?.speakerMap,
       }),
     });
     if (!res.ok) {
@@ -315,6 +320,43 @@ export const v2vApi = {
       throw new Error(err.detail || res.statusText || "Error al procesar");
     }
     return readJsonOrThrow<ProcessUrlsResponse>(res);
+  },
+
+  getJobWebSocketUrl(jobId: string): string {
+    const httpUrl = url(`/ws/job/${jobId}`);
+    if (httpUrl.startsWith("http://")) {
+      return httpUrl.replace("http://", "ws://");
+    } else if (httpUrl.startsWith("https://")) {
+      return httpUrl.replace("https://", "wss://");
+    }
+    if (typeof window !== "undefined") {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return `${proto}//${window.location.host}${httpUrl}`;
+    }
+    return `ws://localhost:8000/ws/job/${jobId}`;
+  },
+
+  async getVideoSpeakers(
+    jobId: string,
+    videoIndex: number,
+  ): Promise<{ job_id: string; video_index: number; detected_speakers: string[]; speaker_map: Record<string, string> }> {
+    const res = await fetch(url(`/api/job/${jobId}/speakers/${videoIndex}`));
+    if (!res.ok) throw new Error("Error al obtener speakers del video");
+    return readJsonOrThrow(res);
+  },
+
+  async updateSpeakerMap(
+    jobId: string,
+    videoIndex: number,
+    speakerMap: Record<string, string>,
+  ): Promise<{ job_id: string; video_index: number; detected_speakers: string[]; speaker_map: Record<string, string> }> {
+    const res = await fetch(url(`/api/job/${jobId}/speakers/${videoIndex}/map`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ speaker_map: speakerMap }),
+    });
+    if (!res.ok) throw new Error("Error al actualizar speaker map");
+    return readJsonOrThrow(res);
   },
 
   async getJobStatus(jobId: string): Promise<JobStatusResponse> {
@@ -380,11 +422,15 @@ export const v2vApi = {
       top_p?: number;
       repetition_penalty?: number;
       volume?: number;
+      signal?: AbortSignal;
     },
+    signal?: AbortSignal,
   ): Promise<Blob> {
+    const abortSignal = signal || options?.signal;
     const res = await fetch(url("/api/regenerate-segment"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: abortSignal,
       body: JSON.stringify({
         job_id: jobId,
         video_index: videoIndex,
@@ -651,10 +697,11 @@ export const v2vApi = {
    * Render a single project timeline on Colab via FFmpeg.
    * Returns a Blob (MP4) for direct download, or CatboxUploadResult if upload_to_catbox is true.
    */
-  async renderTimeline(payload: RenderTimelinePayload): Promise<Blob | CatboxUploadResult> {
+  async renderTimeline(payload: RenderTimelinePayload, signal?: AbortSignal): Promise<Blob | CatboxUploadResult> {
     const res = await fetch(url("/api/render/timeline"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal,
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
@@ -694,10 +741,11 @@ export const v2vApi = {
    * Render multiple projects on Colab via FFmpeg.
    * Returns a Blob (ZIP) for direct download, or BatchCatboxResult if upload_to_catbox is true.
    */
-  async renderBatch(payload: RenderBatchPayload): Promise<Blob | BatchCatboxResult> {
+  async renderBatch(payload: RenderBatchPayload, signal?: AbortSignal): Promise<Blob | BatchCatboxResult> {
     const res = await fetch(url("/api/render/batch"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal,
       body: JSON.stringify(payload),
     });
     if (!res.ok) {

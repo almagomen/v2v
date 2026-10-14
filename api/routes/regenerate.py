@@ -1,6 +1,5 @@
 """Regenerate segment and apply speed endpoints."""
 
-import pickle
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -13,6 +12,7 @@ from api.schemas import (
     GenerateAudioSegmentRequest,
 )
 from api.service import SPEAKER_OPTIONS, resolve_speaker_key
+from src.result_store import load_result, save_result, update_result_segments
 
 router = APIRouter(prefix="/api", tags=["regenerate"])
 
@@ -89,22 +89,12 @@ def _do_regenerate_segment(
     from src.audio_utils import clone_voice_segments
     from src.tts import model_tts
 
-    pkl_path = path.with_name("result.pkl")
-    if not pkl_path.exists():
-        raise HTTPException(status_code=404, detail="result.pkl no encontrado")
+    result_data = load_result(path.parent)
+    if not result_data:
+        raise HTTPException(status_code=404, detail="result.json no encontrado")
 
-    with open(pkl_path, "rb") as f:
-        # Carga directa de la nueva estructura de 7 campos (limpia, sin fallbacks)
-        (
-            texts_original,
-            output_name,
-            url,
-            result,
-            transcription,
-            diarization,
-            info,
-            *extra,
-        ) = pickle.load(f)
+    texts_original = result_data.get("segments", [])
+    source_lang = result_data.get("source_lang", "es")
 
     if seg_idx < 1 or seg_idx > len(texts_original):
         raise HTTPException(status_code=400, detail="Índice de segmento inválido")
@@ -131,7 +121,7 @@ def _do_regenerate_segment(
     lang = (
         translate_lang
         if translate_lang and translate_lang != "None"
-        else getattr(transcription, "language", None) or "es"
+        else source_lang or "es"
     )
 
     paths_es, _, _ = clone_voice_segments(
@@ -152,11 +142,8 @@ def _do_regenerate_segment(
     if not paths_es:
         raise HTTPException(status_code=500, detail="No se pudo generar el audio")
 
-    with open(pkl_path, "wb") as f:
-        pickle.dump(
-            (texts_edited, output_name, url, result, transcription, diarization, info),
-            f,
-        )
+    # Guardar segmentos actualizados en result.json
+    update_result_segments(path.parent, texts_edited)
 
     return FileResponse(paths_es[0], filename=paths_es[0].name, media_type="audio/wav")
 
@@ -214,22 +201,18 @@ async def apply_speed(req: ApplySpeedRequest):
 
     torchaudio.save(str(audio_path), arr_new, sample_rate=rate)
 
-    # Actualizar end del segmento en result.pkl
-    pkl_path = path.with_name("result.pkl")
-    if pkl_path.exists():
+    # Actualizar end del segmento en result.json
+    result_data = load_result(path.parent)
+    if result_data:
         try:
-            with open(pkl_path, "rb") as f:
-                pkl_data = list(pickle.load(f))
-            texts_list = pkl_data[0]
+            texts_list = result_data.get("segments", [])
             if 1 <= req.seg_idx <= len(texts_list):
                 new_dur = arr_new.shape[-1] / rate
                 texts_list[req.seg_idx - 1]["end"] = round(texts_list[req.seg_idx - 1]["start"] + new_dur, 3)
                 texts_list[req.seg_idx - 1]["duration"] = round(new_dur, 3)
-                pkl_data[0] = texts_list
-                with open(pkl_path, "wb") as f:
-                    pickle.dump(tuple(pkl_data), f)
-        except Exception as pkl_err:
-            print(f"⚠️ Error actualizando result.pkl tras apply-speed: {pkl_err}")
+                update_result_segments(path.parent, texts_list)
+        except Exception as e:
+            print(f"⚠️ Error actualizando result.json tras apply-speed: {e}")
 
     return FileResponse(audio_path, filename=audio_path.name, media_type="audio/wav")
 
@@ -244,30 +227,18 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     else:
         raise HTTPException(status_code=400, detail="Proporciona job_id o video_path")
 
-    pkl_path = path.with_name("result.pkl")
-    if not pkl_path.exists():
-        raise HTTPException(status_code=404, detail="result.pkl no encontrado")
+    result_data = load_result(path.parent)
+    if not result_data:
+        raise HTTPException(status_code=404, detail="result.json no encontrado")
 
-    import pickle
-
-    with open(pkl_path, "rb") as f:
-        (
-            texts_original,
-            output_name,
-            url,
-            result,
-            transcription,
-            diarization,
-            info,
-            *extra,
-        ) = pickle.load(f)
+    texts_original = list(result_data.get("segments", []))
 
     from src.tts import model_tts
     from src.audio_utils import adjust_audio_duration
     import torchaudio
 
     speaker_audio = SPEAKER_OPTIONS.get(req.speaker, req.speaker)
-    lang = getattr(transcription, "language", None) or "es"
+    lang = result_data.get("source_lang") or "es"
     speaker_key = resolve_speaker_key(req.speaker)
     safe_speaker = speaker_key.replace(" ", "_").replace("/", "_").replace("\\", "_")
 
@@ -287,7 +258,6 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     seqs_trg_dir.mkdir(exist_ok=True)
 
     # El nuevo segmento es N + 1 con respecto a texts_original
-    texts_original = list(texts_original)
     new_seg_idx = len(texts_original) + 1
 
     audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}.wav"
@@ -306,7 +276,7 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
 
     duration = float(arr.shape[-1]) / float(rate)
 
-    # Registrar el nuevo segmento en result.pkl al final (N + 1)
+    # Registrar el nuevo segmento en result.json al final (N + 1)
     new_segment = {
         "start": round(float(req.start or 0.0), 3),
         "end": round(float(req.start or 0.0) + duration, 3),
@@ -314,12 +284,7 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
         "speaker": speaker_key,
     }
     texts_original.append(new_segment)
-
-    with open(pkl_path, "wb") as f:
-        pickle.dump(
-            (texts_original, output_name, url, result, transcription, diarization, info),
-            f,
-        )
+    update_result_segments(path.parent, texts_original)
 
     # Registrar en el manifiesto de activos físicos
     from src.assets import register_segment, update_assets

@@ -34,6 +34,7 @@ def process_urls(req: ProcessUrlsRequest):
         req.speaker,
         emotion=req.emotion,
         force_reprocess=bool(req.force_reprocess),
+        speaker_map=req.speaker_map,
     )
     return ProcessUrlsResponse(job_id=job_id, message="Procesamiento iniciado")
 
