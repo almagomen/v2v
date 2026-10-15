@@ -54,7 +54,43 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
       v2vApi.setBackendUrl(backendUrl);
       const res = await v2vApi.checkHealth();
       if (res.ok) {
-        setTestResult({ ok: true, message: "Conexión exitosa con el backend (GPU activa)" });
+        let syncedMsg = "Conexión exitosa con el backend (GPU activa)";
+        try {
+          const remoteTokens = await v2vApi.getTokens();
+          let syncedCount = 0;
+          if (remoteTokens.fish_api_key) {
+            setFishApiKey(remoteTokens.fish_api_key);
+            syncedCount++;
+          }
+          if (remoteTokens.google_api_key) {
+            setGoogleApiKey(remoteTokens.google_api_key);
+            syncedCount++;
+          }
+          if (remoteTokens.title_model) {
+            const known = ["gemini-flash-lite-latest", "gemma-4-26b-a4b-it"];
+            if (known.includes(remoteTokens.title_model)) {
+              setTitleModel(remoteTokens.title_model);
+            } else {
+              setTitleModel("custom");
+              setCustomTitleModel(remoteTokens.title_model);
+            }
+          }
+          if (remoteTokens.translation_model) {
+            const known = ["gemini-flash-lite-latest", "gemma-4-26b-a4b-it"];
+            if (known.includes(remoteTokens.translation_model)) {
+              setTranslationModel(remoteTokens.translation_model);
+            } else {
+              setTranslationModel("custom");
+              setCustomTranslationModel(remoteTokens.translation_model);
+            }
+          }
+          if (syncedCount > 0) {
+            syncedMsg += " — Tokens de Fish Audio y Google sincronizados automáticamente desde Kaggle Secrets.";
+          }
+        } catch {
+          // Mantener mensaje principal si la lectura de tokens no responde
+        }
+        setTestResult({ ok: true, message: syncedMsg });
       } else {
         setTestResult({ ok: false, message: res.error || "El servidor no respondió /health" });
       }
