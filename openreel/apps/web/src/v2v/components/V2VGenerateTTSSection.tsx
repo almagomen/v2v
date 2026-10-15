@@ -1,20 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
-  Mic,
-  Sparkles,
-  Play,
-  Square,
-  Loader2,
   Plus,
   RefreshCw,
-  Clock,
-  ListChecks,
-  X,
-  SlidersHorizontal,
-  ChevronDown,
-  ChevronUp,
 } from "lucide-react";
-import { Button } from "@openreel/ui";
+// Button imported via sub-components
 
 import { v2vApi, type GeneratedAudioResult } from "../api/v2v-api";
 import { useV2VStore } from "../stores/v2v-store";
@@ -22,14 +11,14 @@ import { useProjectStore } from "@/stores/project-store";
 import { useTimelineStore } from "@/stores/timeline-store";
 import { useUIStore } from "@/stores/ui-store";
 import { toast } from "@/stores/notification-store";
-import { folderNameFromTitle, parseV2VSegmentFromName, toSafeToken } from "../utils/v2v-utils";
+import { folderNameFromTitle, parseV2VSegmentFromName } from "../utils/v2v-utils";
 import { applyRegeneratedSegmentToTimeline } from "../utils/v2v-segment-regen";
 import { TTSBatchControls } from "./TTSBatchControls";
 import { TTSSegmentCard } from "./TTSSegmentCard";
 
 
 export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
-  inDrawer = false,
+  inDrawer: _inDrawer = false,
 }) => {
   const { project, importMedia, addClip, addTrack, getClip, getMediaItem, moveClip } = useProjectStore();
   const {
@@ -374,6 +363,11 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       return;
     }
 
+    if (!jobId) {
+      toast.error("Error", "No hay un trabajo V2V activo.");
+      return;
+    }
+
     try {
       setIsProcessing(true);
       let audioResult: GeneratedAudioResult;
@@ -447,8 +441,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
 
   // Acción: Ajustar solo velocidad al clip existente sin regenerar TTS
   const handleApplySpeedOnly = useCallback(async () => {
-    if (!isEditingExistingSegment || !parsedSelectedSegment || !selectedClip || !selectedMediaItem) {
-      toast.error("Selección requerida", "Debes tener seleccionado un segmento del timeline.");
+    if (!isEditingExistingSegment || !parsedSelectedSegment || !selectedClip || !selectedMediaItem || !jobId) {
+      toast.error("Selección requerida", "Debes tener seleccionado un segmento del timeline y un trabajo V2V activo.");
       return;
     }
 
@@ -523,6 +517,11 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     const finalText = computeFinalText();
     if (!finalText.trim()) {
       toast.error("Texto requerido", "Por favor escribe un texto para sintetizar.");
+      return;
+    }
+
+    if (!jobId) {
+      toast.error("Error", "No hay un trabajo V2V activo.");
       return;
     }
 

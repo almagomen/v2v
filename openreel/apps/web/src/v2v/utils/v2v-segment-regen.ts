@@ -131,7 +131,7 @@ export async function applyRegeneratedSegmentToTimeline(
     };
   }
 
-  const { importMedia, forceSave, loadProject, getClip, getMediaItem } =
+  const { importMedia, forceSave, loadProject } =
     useProjectStore.getState();
 
   const { updateSegmentText, updateSegmentSpeaker, updateSegmentSpeed } = useV2VStore.getState();

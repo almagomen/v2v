@@ -39,7 +39,6 @@ import {
   saveJobStateToStorage,
 } from "./v2v-storage";
 import {
-  loadFolderRefsFromStorage,
   saveFolderRefsToStorage,
 } from "./v2v-folders-slice";
 
@@ -79,11 +78,13 @@ async function generateWaveformsInBackground(projectId: string, mediaItems: Medi
           const match = results.find((r) => r && r.id === m.id);
           return match && match.peaks ? { ...m, waveformData: match.peaks } : m;
         });
-        currentStore.setProject({
-          ...currentStore.project,
-          mediaLibrary: {
-            ...currentStore.project.mediaLibrary,
-            items: updatedItems,
+        useProjectStore.setState({
+          project: {
+            ...currentStore.project,
+            mediaLibrary: {
+              ...currentStore.project.mediaLibrary,
+              items: updatedItems,
+            },
           },
         });
       }
@@ -939,7 +940,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
           (matchedRef?.nativeFiles &&
             activeProj.timeline.tracks.some((t) =>
               t.clips.some((c) => {
-                const base = c.mediaName?.split("/").pop() || "";
+                const base = (c as any).mediaName?.split("/").pop() || "";
                 return matchedRef!.nativeFiles.includes(base);
               }),
             )) ||
@@ -959,10 +960,10 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
             (matchedRef?.projectId && s.projectId === matchedRef.projectId) ||
             (matchedOldFolderKey && s.projectName === matchedOldFolderKey)
           ) {
-            const p = await autoSaveManager.loadProject(s.id);
+            const p = await autoSaveManager.recover(s.id);
             if (p) {
-              p.name = newFolder;
-              await autoSaveManager.saveProject(p);
+              const updatedP = { ...p, name: newFolder };
+              await autoSaveManager.forceSave(updatedP);
             }
           }
         }

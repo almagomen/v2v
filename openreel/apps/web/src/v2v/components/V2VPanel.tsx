@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, Trash2, ListChecks, Settings, Eye, EyeOff, ChevronDown, Terminal, Copy, Check, Zap, RefreshCw } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Settings, RefreshCw } from "lucide-react";
 import {
   ScrollArea,
   Button,
@@ -44,24 +44,6 @@ const STATUS_LABEL: Record<string, string> = {
   error: "Error",
 };
 
-function statusToBadgeClass(status: string): string {
-  switch (status) {
-    case "done":
-      return "bg-primary/15 text-primary border border-primary/30";
-    case "audio_ready":
-    case "tts":
-    case "transcribing":
-    case "downloading":
-      return "bg-blue-500/10 text-blue-400 border border-blue-500/20";
-    case "cached":
-      return "bg-purple-500/10 text-purple-400 border border-purple-500/20";
-    case "error":
-      return "bg-red-500/10 text-red-400 border border-red-500/20";
-    default:
-      return "bg-background-tertiary text-text-muted border border-border";
-  }
-}
-
 export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   embedInDrawer: _embedInDrawer = false,
 }) => {
@@ -95,7 +77,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     getFolderRef,
     bulkEditorOpen,
     setBulkEditorOpen,
-    setIsV2VOpen,
   } = useV2VStore();
 
   const [backendUrl, setBackendUrl] = React.useState<string>(() => v2vApi.getBackendUrl());

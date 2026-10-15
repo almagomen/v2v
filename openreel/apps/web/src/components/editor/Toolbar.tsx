@@ -62,7 +62,6 @@ export const Toolbar: React.FC = () => {
     setExportState: setGlobalExportState,
     setDesktopPage,
     activeModal,
-    openModal,
     closeModal,
   } = useUIStore();
   const { navigate } = useRouter();

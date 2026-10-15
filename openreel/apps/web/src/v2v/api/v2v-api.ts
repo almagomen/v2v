@@ -155,6 +155,7 @@ export interface SegmentEditorRow {
   original_text: string;
   tts_text: string;
   speaker?: string | null;
+  original_speaker?: string | null;
   filename?: string | null;
 }
 

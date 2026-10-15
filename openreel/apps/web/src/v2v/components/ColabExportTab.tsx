@@ -3,17 +3,12 @@ import {
   Server,
   Download,
   Archive,
-  CheckSquare,
-  Square,
   Loader2,
   AlertTriangle,
   CheckCircle,
   Upload,
   Link as LinkIcon,
-  Copy,
-  ExternalLink,
   Sparkles,
-  RefreshCw,
   Save,
 } from "lucide-react";
 import { Button, Switch, Label, Input } from "@openreel/ui";
@@ -216,7 +211,7 @@ export const ColabExportTab: React.FC = () => {
     status,
     setStatus,
     statusMsg,
-    setStatusMsg,
+    setStatusMsg: _setStatusMsg,
     errorMsg,
     setErrorMsg,
     progress,
@@ -230,7 +225,7 @@ export const ColabExportTab: React.FC = () => {
     catboxVideos,
     setCatboxVideos,
     getActiveGeminiModel,
-    exportLogs,
+    exportLogs: _exportLogs,
     appendExportLog,
     clearExportLogs,
     openExportLogs,
@@ -352,8 +347,8 @@ export const ColabExportTab: React.FC = () => {
     const vClips = vTracks.flatMap((t) => t.clips || []);
     return (
       vClips.length === 1 &&
-      (vClips[0].start || 0) <= 0.05 &&
-      (vClips[0].trackStart || 0) <= 0.05
+      (vClips[0].startTime || 0) <= 0.05 &&
+      (vClips[0].inPoint || 0) <= 0.05
     );
   }, [project]);
 
@@ -514,9 +509,9 @@ export const ColabExportTab: React.FC = () => {
   const handleBatchRegenerateViralTitle = async (sp: SavedProject) => {
     setBatchRegeneratingId(sp.meta.id);
     try {
-      const fullProj = await autoSaveManager.loadProject(sp.meta.id);
+      const fullProj = await autoSaveManager.recover(sp.meta.id);
       const mediaMap = new Map<string, MediaItem>(
-        (fullProj?.mediaLibrary?.items || []).map((m) => [m.id, m]),
+        (fullProj?.mediaLibrary?.items || []).map((m: MediaItem) => [m.id, m]),
       );
       let targetJobId: string | undefined;
       let targetVideoIndex: number | undefined;

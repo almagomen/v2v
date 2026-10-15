@@ -1,17 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
-  AlertTriangle,
-  ChevronDown,
-  ChevronUp,
-  Clock,
   Loader2,
   ListChecks,
-  RefreshCw,
-  RotateCcw,
-  SlidersHorizontal,
-  Sparkles,
-  Volume2,
 } from "lucide-react";
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openreel/ui";
 
@@ -29,16 +20,13 @@ import {
 import { toSafeToken } from "../utils/v2v-utils";
 import { autoSaveManager } from "@/services/auto-save";
 import {
-  V2V_EMOTIONS,
   DEFAULT_EMOTION_TAG,
   EMOTION_CATEGORIES,
   getEmotionsByCategory,
   formatEmotionLabel,
   applyEmotionToText,
-  extractEmotionFromText,
 } from "../utils/v2v-emotions";
 import { SegmentRow, type BulkSegmentRow } from "./SegmentRow";
-import { EmotionSelector } from "./EmotionSelector";
 
 export type { BulkSegmentRow };
 
