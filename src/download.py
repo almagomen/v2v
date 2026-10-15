@@ -362,12 +362,6 @@ def download_video(
         "keepvideo": True,
         "logger": OneLineLogger(),
         "quiet": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "ios", "mweb", "web"],
-                "player_skip": ["configs", "webpage"],
-            }
-        },
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "referer": "https://www.google.com/",
     }
@@ -376,47 +370,32 @@ def download_video(
         opts["cookiefile"] = str(cookies_file)
 
     t_start_dl = time.perf_counter()
-    info = None
-    media_path = None
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        title = info.get("title", "video")
+        base_name = to_safe_name(title)
 
-    def _execute_extraction_and_download(current_opts):
-        nonlocal info, media_path
-        with YoutubeDL(current_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get("title", "video")
-            base_name = to_safe_name(title)
-
-            target_name = base_name
-            if force_new and (output_dir / base_name).exists():
-                counter = 2
+        target_name = base_name
+        if force_new and (output_dir / base_name).exists():
+            counter = 2
+            candidate = f"{base_name}_v{counter}"
+            while (output_dir / candidate).exists():
+                counter += 1
                 candidate = f"{base_name}_v{counter}"
-                while (output_dir / candidate).exists():
-                    counter += 1
-                    candidate = f"{base_name}_v{counter}"
-                target_name = candidate
-                print(f"📁 [Versión Nueva] Creando carpeta no destructiva: {target_name} (proyecto original protegido)")
+            target_name = candidate
+            print(f"📁 [Versión Nueva] Creando carpeta no destructiva: {target_name} (proyecto original protegido)")
 
-            info["safe_name"] = target_name
-            info["output_name"] = target_name
+        info["safe_name"] = target_name
+        info["output_name"] = target_name
 
-            ydl.params["outtmpl"] = {"default": str(output_dir / target_name / f"{target_name}.%(ext)s")}
-            media = ydl.prepare_filename(info)
-            print(f"✅ {title}")
-            print_codecs(info)
-            ydl.download([url])
-            media_path = Path(media)
+        # Ajustar outtmpl de forma compatible con yt-dlp (espera un dict o objeto con .get)
+        ydl.params["outtmpl"] = {"default": str(output_dir / target_name / f"{target_name}.%(ext)s")}
 
-    try:
-        _execute_extraction_and_download(opts)
-    except Exception as e_dl:
-        err_msg = str(e_dl).lower()
-        if "cookiefile" in opts and ("reloaded" in err_msg or "cookie" in err_msg or "challenge" in err_msg or "bot" in err_msg):
-            print(f"⚠️ [yt-dlp] Falló la descarga con cookies ({e_dl}). Reintentando automáticamente sin cookies con clientes móviles...", flush=True)
-            fallback_opts = dict(opts)
-            fallback_opts.pop("cookiefile", None)
-            _execute_extraction_and_download(fallback_opts)
-        else:
-            raise e_dl
+        media = ydl.prepare_filename(info)
+        print(f"✅ {title}") # Mostramos título real en log
+        print_codecs(info)
+        ydl.download([url])
+        media_path = Path(media)
 
     dl_elapsed = time.perf_counter() - t_start_dl
     info["_download_time"] = dl_elapsed
