@@ -89,6 +89,23 @@ function importAction(): Action {
   } as unknown as Action;
 }
 
+describe("trim-to-playhead history", () => {
+  it.each([true, false])("restores timeline and source bounds after trimStart=%s", async trimStart => {
+    const executor = new ActionExecutor();
+    const project = makeProjectWithClip({ startTime: 2, duration: 4, inPoint: 1, outPoint: 9, speed: 2 });
+    const before = { ...project.timeline.tracks[0].clips[0] };
+    const action: Action = { id: `trim-${trimStart}`, timestamp: Date.now(), type: "clip/trimToPlayhead",
+      params: { clipId: "c1", playheadTime: 4, trimStart } };
+    expect((await executor.execute(action, project)).success).toBe(true);
+    const trimmed = project.timeline.tracks[0].clips[0];
+    expect(trimmed.duration).toBe(2);
+    expect((await executor.undo(project)).success).toBe(true);
+    expect(project.timeline.tracks[0].clips[0]).toEqual(before);
+    expect((await executor.redo(project)).success).toBe(true);
+    expect(project.timeline.tracks[0].clips[0]).toEqual(trimmed);
+  });
+});
+
 describe("ActionExecutor media/import undo", () => {
   it("adds media on execute and removes it on undo", async () => {
     const executor = new ActionExecutor();
@@ -217,6 +234,56 @@ describe("ActionExecutor transform/update", () => {
         (clip) => clip.id === "c1",
       ),
     ).toHaveLength(0);
+  });
+});
+
+describe("ActionExecutor AI timeline editing actions", () => {
+  it("computes duration from the new in and out points in one trim", async () => {
+    const executor = new ActionExecutor();
+    const project = makeProjectWithClip();
+
+    const result = await executor.execute({
+      id: "trim-both",
+      type: "clip/trim",
+      params: { clipId: "c1", inPoint: 0.5, outPoint: 4.5 },
+      timestamp: Date.now(),
+    } as Action, project);
+
+    expect(result.success).toBe(true);
+    expect(project.timeline.tracks[0].clips[0]).toMatchObject({
+      inPoint: 0.5,
+      outPoint: 4.5,
+      duration: 4,
+    });
+  });
+
+  it("preserves requested easing and creates stable unique keyframe ids", async () => {
+    const executor = new ActionExecutor();
+    const project = makeProjectWithClip();
+
+    for (const [id, time, value] of [
+      ["zoom-start", 0, 1],
+      ["zoom-end", 2, 1.3],
+    ] as const) {
+      const result = await executor.execute({
+        id,
+        type: "keyframe/add",
+        params: {
+          clipId: "c1",
+          property: "scale.x",
+          time,
+          value,
+          easing: "ease-in-out",
+        },
+        timestamp: Date.now(),
+      } as Action, project);
+      expect(result.success).toBe(true);
+    }
+
+    expect(project.timeline.tracks[0].clips[0].keyframes).toMatchObject([
+      { id: "keyframe-zoom-start", easing: "ease-in-out" },
+      { id: "keyframe-zoom-end", easing: "ease-in-out" },
+    ]);
   });
 });
 
