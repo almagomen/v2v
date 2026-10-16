@@ -196,3 +196,7 @@ git merge openreel-upstream/main --allow-unrelated-histories -m "chore(openreel)
    // ...
    <V2VToolbarEntry />
    ```
+
+
+Compilar .exe
+$env:OPENREEL_DESKTOP="1"; pnpm --filter @openreel/web build; pnpm --filter @openreel/desktop run build:main; pnpm --filter @openreel/desktop exec electron-builder --dir
