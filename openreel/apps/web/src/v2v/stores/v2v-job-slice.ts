@@ -145,13 +145,84 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
         return;
       }
 
-      const saved = loadJobStateForProject(projectId);
-      const hasSavedData = !!(
+      // Si hay un trabajo en progreso en la sesión actual, preservar la memoria
+      if (get().isProcessing) {
+        set({ currentProjectId: projectId });
+        return;
+      }
+
+      // 1. Intentar cargar el estado guardado para este projectId exacto
+      let saved = loadJobStateForProject(projectId);
+      let hasSavedData = !!(
         saved.urls ||
         (saved.videos && saved.videos.length > 0) ||
         saved.jobId ||
         (saved.urlLogs && Object.keys(saved.urlLogs).length > 0)
       );
+
+      // 2. Si no tiene datos por ID directo, verificar si el proyecto coincide con algún folderRef conocido
+      if (!hasSavedData) {
+        const currentProject = useProjectStore.getState().project;
+        const folderRefs = get().folderRefs;
+        const matchingRef = Object.values(folderRefs).find(
+          (ref) =>
+            ref.projectId === projectId ||
+            (currentProject && currentProject.name && folderNameFromTitle(ref.outputName || "") === currentProject.name),
+        );
+
+        if (matchingRef) {
+          if (matchingRef.projectId && matchingRef.projectId !== projectId) {
+            saved = loadJobStateForProject(matchingRef.projectId);
+            hasSavedData = !!(saved.urls || (saved.videos && saved.videos.length > 0) || saved.jobId);
+          }
+          if (!hasSavedData && get().jobId === matchingRef.jobId && get().videos.length > 0) {
+            saveJobStateForProject(projectId, {
+              urls: get().urls,
+              jobId: get().jobId,
+              progress: get().progress,
+              videos: get().videos,
+              selectedVideoIndex: matchingRef.videoIndex ?? get().selectedVideoIndex,
+              segments: get().segments,
+              urlItems: get().urlItems,
+              urlLogs: get().urlLogs,
+              log: get().log,
+              jobPhase: get().jobPhase,
+              importStatusByKey: get().importStatusByKey,
+              shareUrl: get().shareUrl,
+              lastUrlsSignature: get().lastUrlsSignature,
+            });
+            set({ currentProjectId: projectId, selectedVideoIndex: matchingRef.videoIndex ?? get().selectedVideoIndex });
+            return;
+          }
+        }
+      }
+
+      // 3. Si aún así no hay datos guardados pero el estado actual en memoria tiene videos y el proyecto activo coincide
+      if (!hasSavedData && get().videos.length > 0) {
+        const activeProject = useProjectStore.getState().project;
+        const match = get().videos.find(
+          (v: any) => folderNameFromTitle(v.output_name || `video_${v.index}`) === activeProject?.name,
+        );
+        if (match) {
+          saveJobStateForProject(projectId, {
+            urls: get().urls,
+            jobId: get().jobId,
+            progress: get().progress,
+            videos: get().videos,
+            selectedVideoIndex: match.index ?? 0,
+            segments: get().segments,
+            urlItems: get().urlItems,
+            urlLogs: get().urlLogs,
+            log: get().log,
+            jobPhase: get().jobPhase,
+            importStatusByKey: get().importStatusByKey,
+            shareUrl: get().shareUrl,
+            lastUrlsSignature: get().lastUrlsSignature,
+          });
+          set({ currentProjectId: projectId, selectedVideoIndex: match.index ?? 0 });
+          return;
+        }
+      }
 
       if (hasSavedData) {
         set({
@@ -907,20 +978,44 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     get().appendUrlLog(urlForLog, `✅ Proyecto "${folder}" listo para editar en OpenReel.`);
                   }
 
+                  // Persistir estado de V2V directamente vinculado al nuevo workingProject.id
+                  const currentState = get();
+                  const jobSnapshotToPersist = {
+                    urls: v.url || currentState.urls,
+                    jobId: state.jobId!,
+                    progress: 100,
+                    videos: state.videos,
+                    selectedVideoIndex: v.index,
+                    segments: currentState.segments,
+                    urlItems: currentState.urlItems,
+                    urlLogs: currentState.urlLogs,
+                    log: currentState.log,
+                    jobPhase: "done" as const,
+                    importStatusByKey: { ...currentState.importStatusByKey, [key]: "done" as const },
+                    shareUrl: currentState.shareUrl,
+                    lastUrlsSignature: currentState.lastUrlsSignature,
+                  };
+                  saveJobStateForProject(workingProject.id, jobSnapshotToPersist);
+
                   const activeProject = useProjectStore.getState().project;
-                  if (activeProject.name === folder) {
-                    if (activeProject.id === workingProject.id) {
-                      useProjectStore.getState().loadProject(workingProject);
-                      toast.success(
-                        "Timeline V2V actualizado",
-                        "Video, instrumental y voces TTS montados en el timeline.",
-                      );
-                    } else {
-                      toast.info(
-                        "Importación lista",
-                        `El timeline de "${folder}" fue actualizado. Recárgalo desde el dropdown de video si no ves los cambios.`,
-                      );
-                    }
+                  const tracks = activeProject.timeline?.tracks || [];
+                  const isCurrentProjectEmpty =
+                    tracks.length === 0 ||
+                    tracks.every((t) => !t.clips || t.clips.length === 0);
+
+                  const shouldAutoLoad =
+                    activeProject.id === workingProject.id ||
+                    activeProject.name === folder ||
+                    isCurrentProjectEmpty ||
+                    ["Vertical", "Horizontal", "Square", "Untitled"].includes(activeProject.name);
+
+                  if (shouldAutoLoad) {
+                    useProjectStore.getState().loadProject(workingProject);
+                    set({ currentProjectId: workingProject.id });
+                    toast.success(
+                      "Timeline V2V listo",
+                      `Video "${folder}" montado con instrumental y voces en el timeline.`,
+                    );
                   } else {
                     toast.info(
                       "Importación guardada en autosave",
