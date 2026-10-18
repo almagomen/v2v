@@ -71,12 +71,13 @@ def fish_tts(
         if not Path(v_str).exists():
             payload["reference_id"] = v_str
 
-    prosody: dict[str, Any] = {"normalize_loudness": True}
+    prosody: dict[str, Any] = {}
     if speed and speed != 1.0:
         prosody["speed"] = float(speed)
-    if volume is not None:
+    if volume is not None and volume != 0.0:
         prosody["volume"] = float(volume)
-    payload["prosody"] = prosody
+    if prosody:
+        payload["prosody"] = prosody
 
     try:
         # Timeout proporcional a la longitud del texto: base 30s, +30s por cada 100 chars, máx 3 min
