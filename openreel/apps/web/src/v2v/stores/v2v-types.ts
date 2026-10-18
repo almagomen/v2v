@@ -100,12 +100,14 @@ export interface JobState {
   isV2VOpen: boolean;
   bulkEditorOpen: boolean;
   timelineHeight: number;
+  currentProjectId: string | null;
 }
 
 export interface JobActions {
   setIsV2VOpen: (open: boolean) => void;
   setBulkEditorOpen: (open: boolean) => void;
   setTimelineHeight: (height: number) => void;
+  syncWithProject: (projectId: string | null) => void;
 
   setUrls: (urls: string) => void;
   setJobId: (jobId: string | null) => void;

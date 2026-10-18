@@ -35,8 +35,10 @@ import { getMediaBridge, initializeMediaBridge } from "@/bridges/media-bridge";
 import type { V2VState, JobSlice, SerializedFolderData } from "./v2v-types";
 import {
   JOB_STATE_STORAGE_KEY,
-  loadJobStateFromStorage,
   saveJobStateToStorage,
+  loadJobStateForProject,
+  saveJobStateForProject,
+  clearJobStateForProject,
 } from "./v2v-storage";
 import {
   saveFolderRefsToStorage,
@@ -102,23 +104,30 @@ async function generateWaveformsInBackground(projectId: string, mediaItems: Medi
 }
 
 export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, get) => {
-  const saved = loadJobStateFromStorage();
+  const saveProjectPatch = (patch: Partial<any>) => {
+    const pid = get().currentProjectId || useProjectStore.getState().project?.id;
+    if (pid) {
+      saveJobStateForProject(pid, patch);
+    }
+  };
+
   return {
-    urls: saved.urls ?? "",
-    jobId: saved.jobId ?? null,
-    progress: saved.progress ?? 0,
+    currentProjectId: null,
+    urls: "",
+    jobId: null,
+    progress: 0,
     error: null,
-    videos: saved.videos ?? [],
-    selectedVideoIndex: saved.selectedVideoIndex ?? 0,
+    videos: [],
+    selectedVideoIndex: 0,
     isProcessing: false,
-    shareUrl: saved.shareUrl ?? null,
-    log: saved.log ?? "",
-    importStatusByKey: saved.importStatusByKey ?? {},
-    urlItems: saved.urlItems ?? [],
+    shareUrl: null,
+    log: "",
+    importStatusByKey: {},
+    urlItems: [],
     selectedUrlForLogs: null,
-    urlLogs: saved.urlLogs ?? {},
-    jobPhase: saved.jobPhase ?? "idle",
-    lastUrlsSignature: saved.lastUrlsSignature ?? null,
+    urlLogs: {},
+    jobPhase: "idle",
+    lastUrlsSignature: null,
 
     isV2VOpen: false,
     setIsV2VOpen: (isV2VOpen) => set({ isV2VOpen }),
@@ -127,47 +136,104 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
     timelineHeight: 320,
     setTimelineHeight: (timelineHeight) => set({ timelineHeight }),
 
+    syncWithProject: (projectId: string | null) => {
+      if (!projectId) {
+        set({ currentProjectId: null });
+        return;
+      }
+      if (get().currentProjectId === projectId) {
+        return;
+      }
+
+      const saved = loadJobStateForProject(projectId);
+      const hasSavedData = !!(
+        saved.urls ||
+        (saved.videos && saved.videos.length > 0) ||
+        saved.jobId ||
+        (saved.urlLogs && Object.keys(saved.urlLogs).length > 0)
+      );
+
+      if (hasSavedData) {
+        set({
+          currentProjectId: projectId,
+          urls: saved.urls ?? "",
+          jobId: saved.jobId ?? null,
+          progress: saved.progress ?? 0,
+          videos: saved.videos ?? [],
+          selectedVideoIndex: saved.selectedVideoIndex ?? 0,
+          segments: saved.segments ?? [],
+          urlItems: saved.urlItems ?? [],
+          urlLogs: saved.urlLogs ?? {},
+          log: saved.log ?? "",
+          jobPhase: (saved.jobPhase as any) ?? "idle",
+          importStatusByKey: (saved.importStatusByKey as any) ?? {},
+          shareUrl: saved.shareUrl ?? null,
+          lastUrlsSignature: saved.lastUrlsSignature ?? null,
+          isProcessing: false,
+        });
+      } else {
+        // Proyecto nuevo o sin corrida de V2V: iniciar completamente limpio
+        set({
+          currentProjectId: projectId,
+          urls: "",
+          jobId: null,
+          progress: 0,
+          videos: [],
+          selectedVideoIndex: 0,
+          segments: [],
+          urlItems: [],
+          urlLogs: {},
+          log: "",
+          jobPhase: "idle",
+          importStatusByKey: {},
+          shareUrl: null,
+          lastUrlsSignature: null,
+          isProcessing: false,
+        });
+      }
+    },
+
     setUrls: (urls) => {
       set({ urls });
-      saveJobStateToStorage({ urls });
+      saveProjectPatch({ urls });
     },
     setJobId: (jobId) => {
       set({ jobId });
-      saveJobStateToStorage({ jobId });
+      saveProjectPatch({ jobId });
     },
     setProgress: (progress) => {
       set({ progress });
-      saveJobStateToStorage({ progress });
+      saveProjectPatch({ progress });
     },
     setError: (error) => set({ error }),
 
     setVideos: (videos) => {
       set({ videos });
-      saveJobStateToStorage({ videos });
+      saveProjectPatch({ videos });
     },
     setSelectedVideoIndex: (selectedVideoIndex) => {
       set({ selectedVideoIndex });
-      saveJobStateToStorage({ selectedVideoIndex });
+      saveProjectPatch({ selectedVideoIndex });
     },
 
     setIsProcessing: (isProcessing) => set({ isProcessing }),
     setShareUrl: (shareUrl) => {
       set({ shareUrl });
-      saveJobStateToStorage({ shareUrl });
+      saveProjectPatch({ shareUrl });
     },
     setLog: (log) => {
       set({ log });
-      saveJobStateToStorage({ log });
+      saveProjectPatch({ log });
     },
     setImportStatus: (key, status) =>
       set((state) => {
         const next = { ...state.importStatusByKey, [key]: status };
-        saveJobStateToStorage({ importStatusByKey: next });
+        saveProjectPatch({ importStatusByKey: next });
         return { importStatusByKey: next };
       }),
     setUrlItems: (urlItems) => {
       set({ urlItems });
-      saveJobStateToStorage({ urlItems });
+      saveProjectPatch({ urlItems });
     },
     setSelectedUrlForLogs: (selectedUrlForLogs) => set({ selectedUrlForLogs }),
     appendUrlLog: (url, line) =>
@@ -175,19 +241,22 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
         const prev = state.urlLogs[url] || "";
         const next = prev ? `${prev}\n${line}` : line;
         const updated = { ...state.urlLogs, [url]: next };
-        saveJobStateToStorage({ urlLogs: updated });
+        saveProjectPatch({ urlLogs: updated });
         return { urlLogs: updated };
       }),
     setJobPhase: (jobPhase) => {
       set({ jobPhase });
-      saveJobStateToStorage({ jobPhase });
+      saveProjectPatch({ jobPhase });
     },
 
     clearJobRunState: (opts) =>
       set((state) => {
         const keepImports = opts?.keepImports ?? false;
         const keepItems = opts?.keepItems ?? false;
-        if (!keepItems) localStorage.removeItem(JOB_STATE_STORAGE_KEY);
+        if (!keepItems) {
+          const pid = get().currentProjectId || useProjectStore.getState().project?.id;
+          if (pid) clearJobStateForProject(pid);
+        }
         return {
           jobId: null,
           progress: 0,
@@ -212,7 +281,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
     setLastUrlsSignature: (lastUrlsSignature) => {
       set({ lastUrlsSignature });
-      saveJobStateToStorage({ lastUrlsSignature });
+      saveProjectPatch({ lastUrlsSignature });
     },
 
     startPolling: (jobId) => {

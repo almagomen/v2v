@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, Settings, RefreshCw } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Settings, RefreshCw, Trash2 } from "lucide-react";
 import {
   ScrollArea,
   Button,
@@ -77,6 +77,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     getFolderRef,
     bulkEditorOpen,
     setBulkEditorOpen,
+    clearJobRunState,
+    syncWithProject,
   } = useV2VStore();
 
   const [backendUrl, setBackendUrl] = React.useState<string>(() => v2vApi.getBackendUrl());
@@ -171,9 +173,12 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     }
   }, [fishApiKey, googleApiKey, titleModel, customTitleModel, translationModel, customTranslationModel]);
 
-
-
-  // Calcula cuál índice de video corresponde al proyecto activo.
+  // Sincroniza el estado de V2V con el proyecto activo en OpenReel:
+  // Si es un proyecto nuevo, el panel inicia 100% limpio.
+  // Si es un proyecto existente con V2V, restaura sus links, videos y logs.
+  useEffect(() => {
+    syncWithProject(project?.id || null);
+  }, [project?.id, syncWithProject]);
   // Si el proyecto no es V2V (no coincide con ninguno), retorna -1 para mostrar el placeholder.
   const effectiveDropdownValue = useMemo(() => {
     for (let i = 0; i < videos.length; i++) {
@@ -434,9 +439,26 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         )}
 
         <div>
-          <label className="text-[10px] text-text-muted block mb-1">
-            URLs de YouTube (una por línea)
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[10px] text-text-muted block">
+              URLs de YouTube (una por línea)
+            </label>
+            {(urls || videos.length > 0) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setUrls("");
+                  clearJobRunState();
+                }}
+                disabled={isProcessing}
+                className="text-[10px] text-text-muted hover:text-red-400 flex items-center gap-1 transition-colors disabled:opacity-50"
+                title="Limpiar URLs y estado de la cola"
+              >
+                <Trash2 className="w-3 h-3" />
+                Limpiar
+              </button>
+            )}
+          </div>
           <textarea
             className="w-full h-24 px-3 py-2 text-xs bg-background-tertiary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary whitespace-pre overflow-x-auto"
             placeholder="https://www.youtube.com/watch?v=..."
