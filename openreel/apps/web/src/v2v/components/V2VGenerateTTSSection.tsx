@@ -91,7 +91,6 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
   const [text, setText] = useState("");
   const [selectedVoice, setSelectedVoice] = useState(defaultSpeaker || "mrbeast");
   const [temperature, setTemperature] = useState(0.7);
-  const [volume, setVolume] = useState(6.0);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Estados para ajuste de velocidad sin regenerar TTS
@@ -110,7 +109,6 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
     result: GeneratedAudioResult;
     finalText: string;
     voice: string;
-    volume: number;
   } | null>(null);
 
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -377,8 +375,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       if (
         cachedAudio &&
         cachedAudio.finalText === finalText &&
-        cachedAudio.voice === selectedVoice &&
-        cachedAudio.volume === volume
+        cachedAudio.voice === selectedVoice
       ) {
         audioResult = cachedAudio.result;
       } else {
@@ -395,14 +392,12 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           {
             start: effectivePreviewStart,
             temperature,
-            volume,
           },
         );
         setCachedAudio({
           result: audioResult,
           finalText,
           voice: selectedVoice,
-          volume,
         });
       }
 
@@ -557,14 +552,13 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
 
         const end = start + (targetDuration ?? selectedClip.duration);
 
-        // Si ya se presionó "Reproducir" previamente y coincide el texto, voz y volumen,
+        // Si ya se presionó "Reproducir" previamente y coincide el texto y voz,
         // reutilizamos ese resultado exacto para no alterar el audio escuchado.
         // Si no se reprodujo primero, se genera una nueva versión con la IA.
         const hasCachedAudio = Boolean(
           cachedAudio &&
           cachedAudio.finalText === finalText &&
           cachedAudio.voice === selectedVoice &&
-          cachedAudio.volume === volume &&
           cachedAudio.result?.blob
         );
 
@@ -584,7 +578,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             selectedVoice,
             effectiveSpeed,
             targetDuration,
-            { temperature, volume },
+            { temperature },
           );
         }
 
@@ -623,8 +617,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         if (
           cachedAudio &&
           cachedAudio.finalText === finalText &&
-          cachedAudio.voice === selectedVoice &&
-          cachedAudio.volume === volume
+          cachedAudio.voice === selectedVoice
         ) {
           audioResult = cachedAudio.result;
         } else {
@@ -636,7 +629,6 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             {
               start: targetStart,
               temperature,
-              volume,
             },
           );
         }
@@ -779,8 +771,6 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         setShowAdvanced={setShowAdvanced}
         temperature={temperature}
         setTemperature={setTemperature}
-        volume={volume}
-        setVolume={setVolume}
         speedMode={speedMode}
         setSpeedMode={setSpeedMode}
         speedInput={speedInput}

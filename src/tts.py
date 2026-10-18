@@ -28,17 +28,14 @@ def fish_tts(
     voice_id: Optional[str] = None,
     format: str = "wav",
     temperature: float = 0.7,
-    top_p: float = 0.7,
     sample_rate: Optional[int] = 44100,
-    speed: float = 1.0,
-    volume: float = 6.0,
-    repetition_penalty: float = 1.2,
     model: str = DEFAULT_MODEL,
     **kwargs,
 ) -> Tuple[Any, Optional[int]]:
     """
     Genera audio con Fish Audio usando el modelo s2.1-pro-free.
     voice_id puede ser un ID de modelo de Fish Audio (reference_id) o None para voz por defecto.
+    Parámetros opcionales vía **kwargs: top_p (0.7), repetition_penalty (1.2), speed (1.0).
     Returns: (waveform, sample_rate) o (None, None) en caso de error.
     """
     api_key = get_fish_api_key()
@@ -52,12 +49,16 @@ def fish_tts(
         "model": model or DEFAULT_MODEL,
     }
 
+    top_p = float(kwargs.get("top_p", 0.7))
+    repetition_penalty = float(kwargs.get("repetition_penalty", 1.2))
+    speed = float(kwargs.get("speed", 1.0))
+
     payload: dict[str, Any] = {
         "text": text,
         "format": format,
         "temperature": float(temperature),
-        "top_p": float(top_p),
-        "repetition_penalty": float(repetition_penalty),
+        "top_p": top_p,
+        "repetition_penalty": repetition_penalty,
         "normalize": True,
     }
 
@@ -71,12 +72,11 @@ def fish_tts(
         if not Path(v_str).exists():
             payload["reference_id"] = v_str
 
-    prosody: dict[str, Any] = {}
-    if speed and speed != 1.0:
-        prosody["speed"] = float(speed)
-    if volume is not None and volume != 0.0:
-        prosody["volume"] = float(volume)
-    if prosody:
+    # No enviar "volume" al servidor: su API aplica un compresor/fade-in inicial si se envía ese parámetro.
+    prosody: dict[str, Any] = {"normalize_loudness": True}
+    if speed != 1.0:
+        prosody["speed"] = speed
+    if len(prosody) > 1 or prosody.get("speed"):
         payload["prosody"] = prosody
 
     try:
@@ -91,6 +91,15 @@ def fish_tts(
             raise RuntimeError("torchaudio no está disponible en el entorno")
 
         waveform, sr = torchaudio.load(io.BytesIO(response.content))
+
+        # Ganancia +6 dB post-respuesta: se aplica directamente aquí porque el servidor con el
+        # parámetro volumen aplica un fade inicial; en local el aumento es instantáneo y sin rampa.
+        gain_factor = 10.0 ** (6.0 / 20.0)  # +6.0 dB ≈ 1.995x
+        if torch is not None:
+            waveform = torch.clamp(waveform * gain_factor, -0.99, 0.99)
+        else:
+            waveform = waveform * gain_factor
+
         return waveform, sr
 
     except requests.exceptions.HTTPError as e:

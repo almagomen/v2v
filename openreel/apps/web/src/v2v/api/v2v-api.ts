@@ -517,7 +517,7 @@ export const v2vApi = {
         temperature: options?.temperature ?? 0.7,
         top_p: options?.top_p ?? 0.7,
         repetition_penalty: options?.repetition_penalty ?? 1.2,
-        volume: options?.volume ?? 6.0,
+        volume: options?.volume ?? 0.0,
       }),
     });
     if (!res.ok) {
@@ -548,7 +548,7 @@ export const v2vApi = {
         temperature: options?.temperature ?? 0.7,
         top_p: options?.top_p ?? 0.7,
         repetition_penalty: options?.repetition_penalty ?? 1.2,
-        volume: options?.volume ?? 6.0,
+        volume: options?.volume ?? 0.0,
       }),
     });
     if (!res.ok) {

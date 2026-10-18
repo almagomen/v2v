@@ -73,8 +73,7 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
   const [showSettings, setShowSettings] = useState(false);
   const [playing, setPlaying] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const hasCustomFishAudio =
-    Math.abs(row.temperature - 0.7) > 0.01 || Math.abs((row.volume ?? 6.0) - 6.0) > 0.1;
+  const hasCustomFishAudio = Math.abs(row.temperature - 0.7) > 0.01;
 
   const currentClip = useProjectStore((state) => {
     for (const track of state.project.timeline.tracks) {
@@ -279,9 +278,7 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
         <SegmentAudioSliders
           temperature={row.temperature}
           onTemperatureChange={(t) => updateRow(row.seg, { temperature: t })}
-          volume={row.volume ?? 6.0}
-          onVolumeChange={(v) => updateRow(row.seg, { volume: v })}
-          onReset={() => updateRow(row.seg, { temperature: 0.7, volume: 6.0 })}
+          onReset={() => updateRow(row.seg, { temperature: 0.7 })}
         />
       )}
 
