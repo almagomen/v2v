@@ -37,6 +37,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Compresión GZIP automática para transferencias HTTP ultrarrápidas
+from starlette.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 @app.on_event("startup")
 async def startup_event():
     loop = asyncio.get_running_loop()

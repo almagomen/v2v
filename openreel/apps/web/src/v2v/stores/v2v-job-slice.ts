@@ -408,6 +408,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   interface V2VAssetDef {
                     id: string;
+                    assetKey: string;
                     serverFn: string;
                     logicalName: string;
                     type: 'video' | 'audio';
@@ -420,15 +421,17 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   const assets: V2VAssetDef[] = [
                     { 
                       id: 'video_only', 
+                      assetKey: 'video_only',
                       serverFn: v.video_only_path?.split(/[\\/]/).pop() || "", 
                       logicalName: v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4", 
                       type: 'video', 
                       toTimeline: true, 
                       trackPrefix: 'Video',
-                      enabled: !!v.video_only_path 
+                      enabled: !!(v.video_only_path || v.video_path) 
                     },
                     { 
                       id: 'instrumental', 
+                      assetKey: 'instrumental',
                       serverFn: v.instrumental_path?.split(/[\\/]/).pop() || "no_vocals.wav", 
                       logicalName: "no_vocals.wav", 
                       type: 'audio', 
@@ -438,37 +441,56 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     },
                     { 
                       id: 'merged_video', 
+                      assetKey: 'merged',
                       serverFn: v.video_path?.split(/[\\/]/).pop() || "", 
                       logicalName: v.video_path?.split(/[\\/]/).pop() || "merged.mp4", 
                       type: 'video', 
                       toTimeline: false, 
-                      enabled: !!v.video_path 
+                      enabled: false // Deshabilitado en auto-import para evitar sobrecarga del túnel Cloudflare
                     },
                     { 
                       id: 'original_audio', 
+                      assetKey: 'original_audio',
                       serverFn: v.original_audio_path?.split(/[\\/]/).pop() || "", 
                       logicalName: v.original_audio_path?.split(/[\\/]/).pop() || "original_audio.webm", 
                       type: 'audio', 
                       toTimeline: false, 
-                      enabled: !!v.original_audio_path 
+                      enabled: false 
                     },
                     { 
                       id: 'vocals_original', 
+                      assetKey: 'vocals',
                       serverFn: v.vocals_path?.split(/[\\/]/).pop() || "vocals.wav", 
                       logicalName: "vocals.wav", 
                       type: 'audio', 
                       toTimeline: false, 
-                      enabled: !!v.vocals_path 
+                      enabled: false 
                     }
                   ];
 
                   const fetchAssetBlob = async (asset: V2VAssetDef) => {
                     if (!asset.enabled) return null;
+                    if (urlForLog) {
+                      get().appendUrlLog(urlForLog, `📥 [Paso 1/4] Descargando ${asset.trackPrefix || asset.id}...`);
+                    }
                     try {
-                      const blob = await v2vApi.fetchFileBlob(jobId, v.index, asset.serverFn);
+                      let blob: Blob | null = null;
+                      try {
+                        blob = await v2vApi.fetchAssetBlob(jobId, v.index, asset.assetKey);
+                      } catch {
+                        if (asset.id === 'video_only') {
+                          try {
+                            blob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
+                          } catch {}
+                        }
+                        if (!blob && asset.serverFn) {
+                          blob = await v2vApi.fetchFileBlob(jobId, v.index, asset.serverFn);
+                        }
+                      }
+                      if (!blob) throw new Error(`No se pudo obtener el blob de ${asset.id}`);
                       return { asset, blob };
                     } catch (e) {
-                      console.warn(`[V2V] Asset opcional no disponible: ${asset.serverFn}`, e);
+                      console.warn(`[V2V] Asset opcional no disponible: ${asset.serverFn || asset.id}`, e);
                       return null;
                     }
                   };
@@ -486,6 +508,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     (async () => {
                       if (audioSegs.length === 0) return [];
                       try {
+                        if (urlForLog) {
+                          get().appendUrlLog(urlForLog, `📦 [Paso 1/4] Descargando paquete TAR de audios TTS (${audioSegs.length} segmentos)...`);
+                        }
                         const tTarStart = performance.now();
                         const tarMap = await v2vApi.fetchAudioSegmentsTar(jobId, v.index);
                         const segsFromTar: Array<{ isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob }> = [];
@@ -513,7 +538,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                           isTarSuccessful = true;
                           const tTarSec = ((performance.now() - tTarStart) / 1000).toFixed(1);
                           if (urlForLog) {
-                            get().appendUrlLog(urlForLog, `📦 [Paso 1/4] Descarga TAR consolidada completada en ${tTarSec}s (${segsFromTar.length} audios).`);
+                            get().appendUrlLog(urlForLog, `📦 [Paso 1/4] Paquete TAR descargado en ${tTarSec}s (${segsFromTar.length} audios).`);
                           }
                           return segsFromTar;
                         }
@@ -523,7 +548,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                       const tIndivStart = performance.now();
                       if (urlForLog) {
-                        get().appendUrlLog(urlForLog, `⚠️ [Paso 1/4] Endpoint TAR no disponible en servidor. Descargando ${audioSegs.length} audios individualmente...`);
+                        get().appendUrlLog(urlForLog, `⚠️ [Paso 1/4] Descargando ${audioSegs.length} audios individualmente...`);
                       }
                       const segmentTasks = audioSegs.map((seg) => {
                         const logicalName = segmentLogicalName(seg);
@@ -563,9 +588,12 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   }
 
                   const tStartBaseMedia = performance.now();
-                  const baseFilesToImport = downloadedAssets.map(d => 
-                    new File([d.blob], d.asset.logicalName, { type: d.asset.type === 'video' ? 'video/mp4' : 'audio/wav' })
-                  );
+                  const baseFilesToImport = downloadedAssets.map(d => {
+                    const isM4A = d.blob.type.includes("mp4") && d.asset.type === 'audio';
+                    const fileName = isM4A ? d.asset.logicalName.replace(/\.wav$/i, ".m4a") : d.asset.logicalName;
+                    const mimeType = d.blob.type || (d.asset.type === 'video' ? 'video/mp4' : isM4A ? 'audio/mp4' : 'audio/wav');
+                    return new File([d.blob], fileName, { type: mimeType });
+                  });
 
                   if (urlForLog) {
                     get().appendUrlLog(urlForLog, `⏱️ [Paso 2/4] Analizando video base e instrumental (${baseFilesToImport.length} archivos)...`);
@@ -651,7 +679,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   for (const { asset } of downloadedAssets) {
                     if (!asset.toTimeline) continue;
-                    const media = workingProject.mediaLibrary.items.find(m => m.name === asset.logicalName);
+                    const media = workingProject.mediaLibrary.items.find(
+                      m => m.name === asset.logicalName || m.name === asset.logicalName.replace(/\.wav$/i, ".m4a")
+                    );
                     if (!media) continue;
 
                     const { project: p1, trackId } = await addTrackAndGetId(workingProject, asset.type);

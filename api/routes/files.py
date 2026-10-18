@@ -48,6 +48,83 @@ def _get_video_output_path(job_id: str, video_index: int) -> Path:
     return Path(out)
 
 
+def _safe_header_filename(filename: str) -> str:
+    """Retorna un nombre seguro para headers HTTP (sin emojis ni caracteres que rompan latin-1)."""
+    clean = filename.encode("ascii", "ignore").decode("ascii").strip()
+    if not clean or len(clean) < 3:
+        clean = "file"
+    return clean
+
+
+def _get_or_create_compressed_audio(wav_path: Path) -> Path:
+    """Convierte un WAV pesado a AAC (.m4a) a 192k para acelerar la descarga en un 90%+."""
+    if wav_path.suffix.lower() == ".m4a":
+        return wav_path
+    m4a_path = wav_path.with_suffix(".m4a")
+    if m4a_path.exists() and m4a_path.stat().st_size > 0:
+        return m4a_path
+    import subprocess
+    cmd = [
+        "ffmpeg", "-y", "-i", str(wav_path),
+        "-c:a", "aac", "-b:a", "192k",
+        str(m4a_path)
+    ]
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        if m4a_path.exists() and m4a_path.stat().st_size > 0:
+            return m4a_path
+    except Exception:
+        pass
+    return wav_path
+
+
+@router.get("/job/{job_id}/asset/{video_index}/{asset_key}")
+def serve_asset(job_id: str, video_index: int, asset_key: str):
+    """Sirve un activo específico (video_only, instrumental, vocals, etc.) por clave determinista."""
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    videos = job.get("videos", [])
+    if video_index < 0 or video_index >= len(videos):
+        raise HTTPException(status_code=404, detail="Video no encontrado")
+
+    video_info = videos[video_index]
+    folder = _get_video_folder(job_id, video_index)
+    from src.assets import load_assets
+    assets = load_assets(folder)
+
+    key_map = {
+        "video_only": ["video_only", "output_video_path", "video_path"],
+        "instrumental": ["no_vocals"],
+        "no_vocals": ["no_vocals"],
+        "vocals": ["vocals"],
+        "merged": ["merged", "video_path", "output_video_path"],
+        "original_audio": ["audio_only"],
+    }
+    candidates = key_map.get(asset_key, [asset_key])
+    target_path = None
+    for cand in candidates:
+        p = assets.get(cand) or video_info.get(f"{cand}_path") or video_info.get(cand)
+        if p and Path(p).is_file():
+            target_path = Path(p)
+            break
+
+    if not target_path or not target_path.exists():
+        raise HTTPException(status_code=404, detail=f"Activo '{asset_key}' no encontrado")
+
+    # Si es instrumental o audio pesado, comprimimos automáticamente a AAC (.m4a)
+    # para reducir el tamaño de 25MB a 1.5MB sin pérdida audible.
+    if asset_key in ("instrumental", "no_vocals") and target_path.suffix.lower() == ".wav":
+        target_path = _get_or_create_compressed_audio(target_path)
+        media_type = "audio/mp4" if target_path.suffix == ".m4a" else "audio/wav"
+        safe_name = f"no_vocals{target_path.suffix}"
+        return FileResponse(target_path, filename=safe_name, media_type=media_type)
+
+    media_type = "video/mp4" if target_path.suffix == ".mp4" else None
+    safe_name = f"{asset_key}{target_path.suffix}"
+    return FileResponse(target_path, filename=safe_name, media_type=media_type)
+
+
 @router.get("/job/{job_id}/files/{video_index}/{filename}")
 def serve_file(job_id: str, video_index: int, filename: str):
     """Serve a file from the job's video folder."""
@@ -65,9 +142,9 @@ def serve_file(job_id: str, video_index: int, filename: str):
     if not file_path.exists() or not file_path.is_file():
         seqs_file = (base_dir / "Seqs_trg" / filename).resolve()
         if seqs_file.exists() and seqs_file.is_file():
-            return FileResponse(seqs_file, filename=filename)
+            return FileResponse(seqs_file, filename=_safe_header_filename(filename))
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
-    return FileResponse(file_path, filename=filename)
+    return FileResponse(file_path, filename=_safe_header_filename(filename))
 
 
 @router.get("/job/{job_id}/files/{video_index}")
@@ -80,7 +157,7 @@ def serve_file_by_index(job_id: str, video_index: int):
     file_path = _get_video_output_path(job_id, video_index)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
-    return FileResponse(file_path, filename=file_path.name)
+    return FileResponse(file_path, filename=_safe_header_filename(file_path.name))
 
 
 @router.get("/job/{job_id}/audio-segments/{video_index}")
@@ -180,10 +257,14 @@ def serve_audio_segments_tar(job_id: str, video_index: int):
     if not tar_bytes:
         raise HTTPException(status_code=404, detail="No hay segmentos WAV disponibles para empaquetar")
 
+    import gzip
+    compressed_bytes = gzip.compress(tar_bytes, compresslevel=5)
+
     return Response(
-        content=tar_bytes,
+        content=compressed_bytes,
         media_type="application/x-tar",
         headers={
-            "Content-Disposition": f'attachment; filename="audio_segments_{video_index}.tar"'
+            "Content-Disposition": f'attachment; filename="audio_segments_{video_index}.tar"',
+            "Content-Encoding": "gzip",
         },
     )

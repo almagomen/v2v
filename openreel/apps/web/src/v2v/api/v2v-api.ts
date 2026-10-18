@@ -411,21 +411,60 @@ export const v2vApi = {
     return url(`/api/job/${jobId}/files/${videoIndex}/${encodeURIComponent(filename)}`);
   },
 
+  async fetchAssetBlob(
+    jobId: string,
+    videoIndex: number,
+    assetKey: string,
+    timeoutMs = 60000
+  ): Promise<Blob> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/asset/${videoIndex}/${assetKey}`), {
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        throw new Error(`Error al descargar activo ${assetKey}: ${res.status}`);
+      }
+      return await res.blob();
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+
   async fetchFileBlob(
     jobId: string,
     videoIndex: number,
-    filename: string
+    filename: string,
+    timeoutMs = 60000
   ): Promise<Blob> {
-    const res = await fetch(url(`/api/job/${jobId}/files/${videoIndex}/${encodeURIComponent(filename)}`));
-    if (!res.ok) throw new Error(`Error al descargar ${filename}`);
-    return res.blob();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(
+        url(`/api/job/${jobId}/files/${videoIndex}/${encodeURIComponent(filename)}`),
+        { signal: controller.signal }
+      );
+      if (!res.ok) throw new Error(`Error al descargar ${filename} (${res.status})`);
+      return await res.blob();
+    } finally {
+      clearTimeout(timer);
+    }
   },
 
-  async fetchOutputVideoBlob(jobId: string, videoIndex: number): Promise<Blob> {
+  async fetchOutputVideoBlob(jobId: string, videoIndex: number, timeoutMs = 60000): Promise<Blob> {
     // Endpoint nuevo: evita pasar `filename` (unicode/largo) en la URL.
-    const res = await fetch(url(`/api/job/${jobId}/files/${videoIndex}`));
-    if (!res.ok) throw new Error(`Error al descargar el video (${videoIndex})`);
-    return res.blob();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/files/${videoIndex}`), {
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`Error al descargar el video (${videoIndex})`);
+      return await res.blob();
+    } finally {
+      clearTimeout(timer);
+    }
   },
 
   async getSpeakers(): Promise<SpeakerOption[]> {
@@ -629,14 +668,26 @@ export const v2vApi = {
    * Descarga todos los segmentos WAV de un video en una sola petición empaquetada (TAR).
    * Reduce radicalmente el tiempo de descarga a través de túneles (de 30s a 1s).
    */
-  async fetchAudioSegmentsTar(jobId: string, videoIndex: number): Promise<Map<string, Blob>> {
-    const res = await fetch(url(`/api/job/${jobId}/audio-segments-tar/${videoIndex}`));
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `Error al descargar paquete TAR de segmentos (${res.status})`);
+  async fetchAudioSegmentsTar(
+    jobId: string,
+    videoIndex: number,
+    timeoutMs = 60000
+  ): Promise<Map<string, Blob>> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/audio-segments-tar/${videoIndex}`), {
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Error al descargar paquete TAR de segmentos (${res.status})`);
+      }
+      const buffer = await res.arrayBuffer();
+      return parseTarArchive(buffer);
+    } finally {
+      clearTimeout(timer);
     }
-    const buffer = await res.arrayBuffer();
-    return parseTarArchive(buffer);
   },
 
   async downloadZipBlob(jobId: string): Promise<Blob> {
