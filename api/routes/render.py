@@ -891,8 +891,9 @@ async def render_batch(req: RenderBatchRequest):
             desired_mode = getattr(item, "mode", None) or getattr(req, "mode", "auto") or "auto"
             force_reencode = (desired_mode == "reencode")
 
+            output_path = folder / f"_export_{safe_name}.mp4"
             existing_file: Optional[Path] = None
-            for cand in [output_path, folder / f"_export_{safe_name}.mp4"]:
+            for cand in [output_path, folder / f"_render_{safe_name}.mp4"]:
                 if cand.exists() and cand.stat().st_size > 50000:
                     if _is_render_cache_valid(folder, cand, item.clips, item.job_id, item.video_index, mode=desired_mode):
                         existing_file = cand

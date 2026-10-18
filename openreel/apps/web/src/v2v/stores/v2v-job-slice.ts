@@ -494,6 +494,10 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
             scheduleNext();
           }
 
+          const pendingVideos = currentVideos.filter(
+            (v) => !get().importStatusByKey[importKeyFor(v.url, v.index)],
+          );
+
           if (s.status === "done" || s.status === "error" || s.status === "interrupted") {
             if (s.status === "interrupted") {
               console.warn(`[V2V] Job ${jobId} fue interrumpido por reinicio del servidor`);
@@ -502,7 +506,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                 isProcessing: false,
                 error: "El servidor se reinició durante el procesamiento. Revisa los jobs completados o reinicia.",
               });
-            } else if (!isImportingBusy) {
+            } else if (!isImportingBusy && pendingVideos.length === 0) {
               const stillPending = get().videos.filter(v => !get().importStatusByKey[importKeyFor(v.url, v.index)]);
               if (stillPending.length === 0) {
                 get().stopPolling();
@@ -511,35 +515,34 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
             }
           }
 
-          if (!isImportingBusy) {
-            const pendingVideos = currentVideos.filter(
-              (v) => !get().importStatusByKey[importKeyFor(v.url, v.index)],
-            );
+          if (!isImportingBusy && pendingVideos.length > 0) {
+            isImportingBusy = true;
+            try {
+              const baseProjectSettings = useProjectStore.getState().project.settings;
+              for (const v of pendingVideos) {
+                const key = importKeyFor(v.url, v.index);
+                if (get().importStatusByKey[key]) continue;
 
-            if (pendingVideos.length > 0) {
-              isImportingBusy = true;
-              try {
-                const baseProjectSettings = useProjectStore.getState().project.settings;
-                for (const v of pendingVideos) {
-                  const key = importKeyFor(v.url, v.index);
-                  if (get().importStatusByKey[key]) continue;
+                set((st) => ({
+                  importStatusByKey: { ...st.importStatusByKey, [key]: "in_progress" }
+                }));
 
-                  set((st) => ({
-                    importStatusByKey: { ...st.importStatusByKey, [key]: "in_progress" }
-                  }));
+                const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
+                const urlForLog = v.url || "";
+                const importStartTime = performance.now();
 
-                  let audioSegs: AudioSegmentItem[] = [];
-                  try {
-                    audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
-                    audioSegs = audioSegs.filter((as, i, a) => a.findIndex(t => t.seg === as.seg) === i);
-                  } catch {
-                    get().setImportStatus(key, "error");
-                    continue;
+                let audioSegs: AudioSegmentItem[] = [];
+                try {
+                  audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
+                  audioSegs = audioSegs.filter((as, i, a) => a.findIndex(t => t.seg === as.seg) === i);
+                } catch (e) {
+                  console.error(`[V2V] Error obteniendo audio segments para video ${v.index}:`, e);
+                  get().setImportStatus(key, "error");
+                  if (urlForLog) {
+                    get().appendUrlLog(urlForLog, `❌ Error obteniendo segmentos de audio para video ${v.index}: ${e instanceof Error ? e.message : String(e)}`);
                   }
-
-                  const folder = folderNameFromTitle(v.output_name || `video_${v.index}`);
-                  const urlForLog = v.url || "";
-                  const importStartTime = performance.now();
+                  continue;
+                }
                   let workingProject = createEmptyProject(folder, {
                     width: baseProjectSettings.width,
                     height: baseProjectSettings.height,
@@ -1036,10 +1039,15 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                 }
               } finally {
                 isImportingBusy = false;
+                const remaining = get().videos.filter(
+                  (v) => !get().importStatusByKey[importKeyFor(v.url, v.index)],
+                );
+                if (remaining.length > 0) {
+                  setTimeout(() => { void pollOnce(); }, 200);
+                }
               }
             }
-          }
-        } catch (err) {
+          } catch (err) {
           console.error("V2V Polling error:", err);
         }
       };
