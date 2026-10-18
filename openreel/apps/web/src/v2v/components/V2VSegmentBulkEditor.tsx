@@ -184,7 +184,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         temperature: 0.7,
         topP: 0.7,
         repetitionPenalty: 1.2,
-        volume: 0.0,
+        volume: 6.0,
       };
       // Si el audio falta, forzamos dirty=true para que "Aplicar todos" lo incluya automáticamente
       const forceDirty = missingAudio && ttsText.trim().length > 0;

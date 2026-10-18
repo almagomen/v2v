@@ -143,12 +143,22 @@ def clone_voice_segments(
     times: list[int] = []
     path_es: list[Path] = []
 
-    # Obtener duración total del video si vocals.wav existe
+    # Obtener duración total del video de forma exhaustiva y precisa
     video_total_duration: Optional[float] = None
-    vocals_main_path = path.with_name("vocals.wav")
-    if vocals_main_path.exists():
+    for cand_name in ["no_vocals.wav", "no_vocals.m4a", "vocals.wav"]:
+        cand_p = path.with_name(cand_name)
+        if cand_p.exists():
+            try:
+                v_info = torchaudio.info(str(cand_p))
+                if v_info.sample_rate > 0:
+                    video_total_duration = v_info.num_frames / v_info.sample_rate
+                    break
+            except Exception:
+                pass
+
+    if video_total_duration is None and path.exists():
         try:
-            v_info = torchaudio.info(str(vocals_main_path))
+            v_info = torchaudio.info(str(path))
             if v_info.sample_rate > 0:
                 video_total_duration = v_info.num_frames / v_info.sample_rate
         except Exception:
@@ -209,8 +219,9 @@ def clone_voice_segments(
             safety_gap = min(0.15, max(0.05, original_gap * 0.1)) if original_gap > 0.1 else min(0.05, max(0.0, original_gap))
             max_allowed_dur = max(dur_en, available_space - safety_gap)
         elif video_total_duration is not None:
-            available_space = video_total_duration - start_time
-            max_allowed_dur = max(dur_en, available_space - 0.1)
+            # Es el último segmento: tope absoluto para no superar el final del video
+            available_space = max(0.1, video_total_duration - start_time - 0.05)
+            max_allowed_dur = available_space
         else:
             max_allowed_dur = None
 
@@ -280,6 +291,15 @@ def clone_voice_segments(
             target_samples = int(arr.shape[-1] / speed)
             print(f"Speed manual: {speed}x -> {target_samples} samples", end=" ")
             arr = adjust_audio_duration(arr, target_samples, rate)
+
+        # Tope final estricto: ningún segmento puede exceder la duración total del video
+        if video_total_duration is not None:
+            max_end = video_total_duration - 0.05
+            curr_dur = arr.shape[-1] / rate
+            if start_time + curr_dur > max_end:
+                allowed_sec = max(0.1, max_end - start_time)
+                target_samples = int(allowed_sec * rate)
+                arr = adjust_audio_duration(arr, target_samples, rate)
 
         # Actualizar metadatos de duración y fin real del segmento
         final_dur = arr.shape[-1] / rate

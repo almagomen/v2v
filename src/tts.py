@@ -31,7 +31,7 @@ def fish_tts(
     top_p: float = 0.7,
     sample_rate: Optional[int] = 44100,
     speed: float = 1.0,
-    volume: float = 0.0,
+    volume: float = 6.0,
     repetition_penalty: float = 1.2,
     model: str = DEFAULT_MODEL,
     **kwargs,
@@ -74,10 +74,9 @@ def fish_tts(
     prosody: dict[str, Any] = {"normalize_loudness": True}
     if speed and speed != 1.0:
         prosody["speed"] = float(speed)
-    if volume and volume != 0.0:
+    if volume is not None:
         prosody["volume"] = float(volume)
-    if len(prosody) > 1 or prosody.get("speed") or prosody.get("volume"):
-        payload["prosody"] = prosody
+    payload["prosody"] = prosody
 
     try:
         # Timeout proporcional a la longitud del texto: base 30s, +30s por cada 100 chars, máx 3 min

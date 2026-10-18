@@ -29,6 +29,8 @@ export interface TTSSegmentCardProps {
   setShowAdvanced: (val: boolean) => void;
   temperature: number;
   setTemperature: (val: number) => void;
+  volume: number;
+  setVolume: (val: number) => void;
   speedMode: "x" | "s";
   setSpeedMode: (val: "x" | "s") => void;
   speedInput: string;
@@ -62,6 +64,8 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
   setShowAdvanced,
   temperature,
   setTemperature,
+  volume,
+  setVolume,
   speedMode,
   setSpeedMode,
   speedInput,
@@ -300,6 +304,29 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
             <div className="flex justify-between text-[8px] text-fg-4">
               <span>Más consistente (0.1)</span>
               <span>Más variado / expresivo (1.0)</span>
+            </div>
+          </div>
+
+          <div className="space-y-1.5 pt-1 border-t border-border/50">
+            <div className="flex justify-between text-[10px] text-fg-3">
+              <span>Volumen Fish Audio</span>
+              <span className="font-mono text-fg font-semibold">
+                {volume > 0 ? `+${volume.toFixed(1)}` : volume.toFixed(1)} dB
+              </span>
+            </div>
+            <input
+              type="range"
+              min="-10"
+              max="15"
+              step="0.5"
+              value={volume}
+              onChange={(e) => setVolume(parseFloat(e.target.value))}
+              className="w-full accent-primary h-1 bg-border rounded-lg cursor-pointer"
+            />
+            <div className="flex justify-between text-[8px] text-fg-4">
+              <span>Suave (-10 dB)</span>
+              <span className="font-medium text-primary">Por defecto (+6 dB)</span>
+              <span>Potente (+15 dB)</span>
             </div>
           </div>
         </div>

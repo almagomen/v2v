@@ -263,6 +263,8 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}.wav"
     raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}_raw.wav"
 
+    from src.audio_utils import adjust_audio_duration
+
     # Guardar siempre el RAW sin ajustes
     torchaudio.save(str(raw_es_path), arr, sample_rate=rate)
 
