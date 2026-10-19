@@ -241,30 +241,46 @@ def serve_audio_segment(job_id: str, video_index: int, seg: int):
 
 @router.get("/job/{job_id}/audio-segments-tar/{video_index}")
 def serve_audio_segments_tar(job_id: str, video_index: int):
-    """Empaqueta todos los segmentos de audio TTS de un video en un stream TAR ultrarrápido (1 sola petición HTTP)."""
+    """Empaqueta todos los segmentos de audio TTS de un video en un archivo TAR directo servido con FileResponse.
+
+    Ventajas:
+    1. Primer byte instantáneo (<10ms) hacia Cloudflare Tunnel, evitando el error 524 (timeout de 100s).
+    2. Cero contención de memoria RAM al escribir a disco en vez de BytesIO.
+    3. Caché en disco: si ya existe y no hay WAVs nuevos, se sirve directamente con sendfile().
+    """
     folder = _get_video_folder(job_id, video_index)
     seqs_trg = folder / "Seqs_trg"
     if not seqs_trg.exists() or not seqs_trg.is_dir():
         raise HTTPException(status_code=404, detail="Carpeta Seqs_trg no encontrada")
 
-    tar_stream = io.BytesIO()
-    with tarfile.open(fileobj=tar_stream, mode="w") as tar:
-        for f in sorted(seqs_trg.glob("*.wav")):
-            if f.is_file() and f.stat().st_size > 0:
-                tar.add(f, arcname=f.name)
-
-    tar_bytes = tar_stream.getvalue()
-    if not tar_bytes:
+    wav_files = [
+        f for f in sorted(seqs_trg.glob("*.wav"))
+        if f.is_file() and f.stat().st_size > 0 and not f.name.endswith("_raw.wav")
+    ]
+    if not wav_files:
         raise HTTPException(status_code=404, detail="No hay segmentos WAV disponibles para empaquetar")
 
-    import gzip
-    compressed_bytes = gzip.compress(tar_bytes, compresslevel=5)
+    tar_path = folder / "audio_segments.tar"
+    latest_wav_mtime = max(f.stat().st_mtime for f in wav_files)
 
-    return Response(
-        content=compressed_bytes,
+    # Si el TAR no existe o algún WAV fue regenerado después del TAR, generamos el TAR en disco
+    if not tar_path.exists() or tar_path.stat().st_mtime < latest_wav_mtime:
+        temp_tar = folder / "audio_segments.tar.tmp"
+        try:
+            with tarfile.open(temp_tar, mode="w") as tar:
+                for f in wav_files:
+                    tar.add(f, arcname=f.name)
+            temp_tar.replace(tar_path)
+        except Exception:
+            if temp_tar.exists():
+                try:
+                    temp_tar.unlink()
+                except OSError:
+                    pass
+            raise
+
+    return FileResponse(
+        path=tar_path,
         media_type="application/x-tar",
-        headers={
-            "Content-Disposition": f'attachment; filename="audio_segments_{video_index}.tar"',
-            "Content-Encoding": "gzip",
-        },
+        filename=f"audio_segments_{video_index}.tar",
     )

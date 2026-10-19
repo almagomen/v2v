@@ -731,16 +731,28 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       }
 
                       if (urlForLog) {
-                        get().appendUrlLog(urlForLog, `⚠️ [Fallback] Descargando ${audioSegs.length} audios individualmente...`);
+                        get().appendUrlLog(urlForLog, `⚠️ [Fallback] Descargando ${audioSegs.length} audios en lotes controlados...`);
                       }
-                      const segmentTasks = audioSegs.map((seg) => {
-                        const logicalName = segmentLogicalName(seg);
-                        return v2vApi
-                          .fetchAudioSegmentBlob(jobId, v.index, seg.seg)
-                          .then((blob) => ({ isSegment: true as const, seg, logicalName, blob }))
-                          .catch(() => null);
-                      });
-                      const individualResults = await Promise.all(segmentTasks);
+                      const CONCURRENCY_LIMIT = 5;
+                      const individualResults: Array<{ isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } | null> = [];
+                      for (let i = 0; i < audioSegs.length; i += CONCURRENCY_LIMIT) {
+                        const chunk = audioSegs.slice(i, i + CONCURRENCY_LIMIT);
+                        const chunkResults = await Promise.all(
+                          chunk.map(async (seg) => {
+                            const logicalName = segmentLogicalName(seg);
+                            for (let attempt = 0; attempt < 2; attempt++) {
+                              try {
+                                const blob = await v2vApi.fetchAudioSegmentBlob(jobId, v.index, seg.seg);
+                                return { isSegment: true as const, seg, logicalName, blob };
+                              } catch {
+                                if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
+                              }
+                            }
+                            return null;
+                          })
+                        );
+                        individualResults.push(...chunkResults);
+                      }
                       const res = individualResults.filter((d): d is { isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } => d !== null);
                       return res;
                     })()

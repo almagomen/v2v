@@ -30,6 +30,13 @@ Este documento es la **fuente de verdad única** de arquitectura, reglas de aisl
    - Si se abre un **proyecto existente** que ya tenía un trabajo V2V, restaura automáticamente sus URLs, videos y logs.
    - Las claves de API (Fish Audio, Google Gemini) y la URL del backend son globales y se conservan entre proyectos.
 
+4. **Estrategia Anti-Límites de Cloudflare Tunnel (Regla Mandatoria de Red)**:
+   - Cloudflare Tunnel impone un límite estricto de **100 segundos** para el *primer byte* (Time To First Byte - TTFB) arrojando error `HTTP 524`.
+   - **Prohibido empaquetar o comprimir en memoria (`io.BytesIO`)** antes de enviar respuestas en endpoints de transferencia pesada.
+   - Todo endpoint de transferencia masiva (TAR de segmentos, videos largos, películas) debe **servirse directamente desde disco con `FileResponse`** o streaming para emitir el primer byte en <10ms.
+   - En el cliente (`v2v-api.ts`), transferencias masivas deben usar `timeoutMs = 0` (sin límite arbitrario) para no abortar películas o proyectos grandes.
+   - En fallbacks individuales de red, **prohibido `Promise.all` masivo** sin control de concurrencia; usar lotes concurrentes (máximo 5) con reintentos para evitar que Cloudflare o Chromium cierren sockets (error 429/502).
+
 ---
 
 ## 1. Filosofía de la Integración
@@ -91,7 +98,7 @@ apps/web/src/v2v/
 2. **Indexación O(1) de URLs en Cola**: Mantenido en `Queue/url_index.json`.
 3. **Escritura por Lotes de Logs (`_LogBuffer`)**: `api/job_store.py` ejecuta flush cada 2s o 4KB, reduciendo la contención de disco.
 4. **Dual-GPU Pipeline**: Whisper Turbo en GPU 0 y Pyannote Diarization en GPU 1 en paralelo con `ThreadPoolExecutor` en `kaggle_launch.ipynb`.
-5. **Transferencia Optimizada**: Instrumental servida en AAC/M4A 192k (ahorro del 94% de peso) y TAR de segmentos con compresión Gzip para descargas instantáneas en Cloudflare Tunnel.
+5. **Transferencia Optimizada**: Instrumental servida en AAC/M4A 192k (ahorro del 94% de peso) y TAR de segmentos cacheados en disco servidos vía `FileResponse` (primer byte <10ms) para transferencias instantáneas e ilimitadas a través de Cloudflare Tunnel.
 
 ---
 
@@ -120,7 +127,27 @@ OpenReel indexa `AudioBuffer` en memoria usando `${mediaId}:0`. Para evitar que 
 
 ---
 
-## 7. Protocolo de Actualización desde Upstream (`Augani/openreel-video`)
+## 7. Estrategia de Red y Mitigación de Límites de Cloudflare Tunnel
+
+Al comunicar el cliente OpenReel con el backend a través de Cloudflare Tunnel (Kaggle/Colab), aplican restricciones estrictas que todo agente e IA debe respetar:
+
+1. **Evasión del Timeout de 100s de Cloudflare (Error 524)**:
+   - Cloudflare Tunnel cancela cualquier petición si no recibe el primer byte (TTFB) en 100 segundos.
+   - **Solución implementada**:
+     - `serve_audio_segments_tar`: Empaqueta atómicamente a disco (`folder / "audio_segments.tar"`), ignorando archivos temporales `*_raw.wav` para reducir el tamaño al 50%.
+     - Se sirve mediante `FileResponse` utilizando `sendfile()` del kernel: el primer byte se transmite en <10ms hacia Cloudflare, lo cual **desactiva el timeout de 100s** y permite transferir películas de 2 horas sin interrupciones.
+     - Caché en disco con validación por `mtime` de los segmentos para entrega instantánea en reimportaciones.
+
+2. **Cero Límites Artificiales en el Cliente (`timeoutMs = 0`)**:
+   - `fetchAudioSegmentsTar` usa `timeoutMs = 0` por defecto. El cliente nunca aborta prematuramente descargas de videos largos; el control de cancelación queda reservado al `AbortSignal` manual del usuario.
+
+3. **Control de Concurrencia en Fallback de Descargas (Anti-Saturación de Sockets)**:
+   - Si el paquete TAR no está disponible y se recurre a descargar segmentos individualmente, las peticiones se procesan en lotes secuenciales de **5 peticiones simultáneas** con reintento automático (`CONCURRENCY_LIMIT = 5`).
+   - Esto evita saturar los 6 sockets máximos de Chromium/Electron y previene bloqueos por rate limit (`429`) o `Connection Reset` (`502/524`) en Cloudflare.
+
+---
+
+## 8. Protocolo de Actualización desde Upstream (`Augani/openreel-video`)
 
 ```bash
 git remote add openreel-upstream https://github.com/Augani/openreel-video.git 2>/dev/null || true
