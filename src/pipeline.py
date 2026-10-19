@@ -42,13 +42,12 @@ def process_video_queue(
         t_url_pipeline_start = time.perf_counter()
         display_idx = current_idx if current_idx is not None else idx
         display_total = total_count if total_count is not None else len(urls)
-        print(f"⚙️ Procesando: {u}  [{display_idx}/{display_total}]")
         if on_stage:
             try:
                 on_stage(
                     u,
                     "downloading",
-                    f"⚙️ Procesando: {u}  [{display_idx}/{display_total}]",
+                    f"🚀 [Link {display_idx}/{display_total}] Descargando: {u}",
                 )
             except Exception:
                 pass
@@ -111,13 +110,12 @@ def process_video_queue(
                     continue
             # -----------------------
 
-            print("📝 Transcribiendo (Whisper + diarización)...")
             if on_stage:
                 try:
                     on_stage(
                         u,
                         "transcribing",
-                        "📝 Transcribiendo (Whisper + diarización)...",
+                        "📝 Transcribiendo...",
                     )
                 except Exception:
                     pass

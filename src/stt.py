@@ -77,8 +77,6 @@ def transcribe_and_process(
             return d_segs, t_taken
 
         gpu_count = torch.cuda.device_count() if (torch is not None and torch.cuda.is_available()) else 0
-        if gpu_count >= 2:
-            print("⚡ [STT + Diarización Dual-GPU] Modo: Whisper (GPU 0) + Pyannote (GPU 1) en paralelo...")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="v2v_stt_diarize") as executor:
             fut_whisper = executor.submit(_run_whisper)
@@ -86,8 +84,10 @@ def transcribe_and_process(
             segments, t_whisper = fut_whisper.result()
             diarize_segments, t_diarize = fut_diarize.result()
 
-        print(f"⏱️ [Etapa: Transcripción (Whisper)] Completada en {t_whisper:.1f}s")
-        print(f"⏱️ [Etapa: Diarización (Pyannote)] Completada en {t_diarize:.1f}s")
+        wh_gpu_tag = " | GPU 0" if gpu_count >= 2 else ""
+        dia_gpu_tag = " | GPU 1" if gpu_count >= 2 else ""
+        print(f"⏱️ [Transcripción (Whisper{wh_gpu_tag})] Completada en {t_whisper:.1f}s")
+        print(f"⏱️ [Diarización (Pyannote{dia_gpu_tag})] Completada en {t_diarize:.1f}s")
 
         # Extraer idioma detectado antes de procesar
         detected_language = getattr(segments, "language", "es") if segments else "es"
@@ -102,7 +102,7 @@ def transcribe_and_process(
         )
         t_group = time.perf_counter() - t0_group
         total_stt_wall = time.perf_counter() - t0_stt_wall
-        print(f"⏱️ [Etapa: STT + Diarización Total] {total_stt_wall:.1f}s ({len(result)} segmentos generados)")
+        print(f"⏱️ [Whisper + Diarización] {len(result)} segmentos generados en {total_stt_wall:.1f}s")
         return result, detected_language, {"whisper": t_whisper, "diarization": t_diarize}
 
     raise ValueError("Pasando segments sin media_path no soportado aquí.")

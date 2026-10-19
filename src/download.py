@@ -23,6 +23,7 @@ from src.models import get_or_load_model
 from src.assets import update_assets
 
 ROFORMER_DIR = DRIVE_DIR / "bs-roformer-revive3e" if DRIVE_DIR else None
+_COOKIES_LOGGED: bool = False
 
 
 def find_youtube_cookies_file() -> Path | None:
@@ -290,15 +291,13 @@ def _demix_dual_gpu(
 
 
 class OneLineLogger:
-    """Solo imprime una línea por descarga (al 100%%) para no saturar el log."""
+    """Silencia los logs verbosos de progreso de yt-dlp."""
 
     def debug(self, msg):
-        if msg.startswith("[download]"):
-            if "100%" in msg:
-                print(msg)
+        pass
 
     def info(self, msg):
-        print(f"\nℹ️ {msg}")
+        pass
 
     def warning(self, msg):
         print(f"\n⚠️ {msg}")
@@ -349,6 +348,7 @@ def download_video(
 
     from yt_dlp import YoutubeDL
 
+    global _COOKIES_LOGGED
     cookies_file = find_youtube_cookies_file()
 
     # Configuración de video/audio única
@@ -366,7 +366,9 @@ def download_video(
         "referer": "https://www.google.com/",
     }
     if cookies_file and cookies_file.exists():
-        print(f"🍪 [yt-dlp] Usando cookies de YouTube: {cookies_file}", flush=True)
+        if not _COOKIES_LOGGED:
+            print(f"🍪 [yt-dlp] Cookies de YouTube: {cookies_file}", flush=True)
+            _COOKIES_LOGGED = True
         opts["cookiefile"] = str(cookies_file)
 
     t_start_dl = time.perf_counter()
@@ -392,22 +394,18 @@ def download_video(
         ydl.params["outtmpl"] = {"default": str(output_dir / target_name / f"{target_name}.%(ext)s")}
 
         media = ydl.prepare_filename(info)
-        print(f"✅ {title}") # Mostramos título real en log
-        print_codecs(info)
+        print(f"✅ {title}")
         ydl.download([url])
         media_path = Path(media)
 
     dl_elapsed = time.perf_counter() - t_start_dl
     info["_download_time"] = dl_elapsed
-    print(f"⏱️ [Etapa: Descarga] Completada en {dl_elapsed:.1f}s")
 
     # --- Registro determinista en manifiesto ---
     folder = media_path.parent
     asset_update: dict = {"merged": str(media_path)}
 
     requested = info.get("requested_formats") or []
-    # yt-dlp requested_formats[0] suele ser el video y [1] el audio en modo dash.
-    # Si bajó un solo archivo (ej format 18), 'requested' podría estar vacío.
     
     v_cand = None
     a_cand = None
@@ -433,12 +431,52 @@ def download_video(
             import subprocess
             print(f"📦 Separando flujos del video merged (fallback ffmpeg -c copy)...")
             try:
-                # Extraer video sin audio (copy)
                 subprocess.run(["ffmpeg", "-y", "-i", str(media_path), "-map", "0:v", "-c:v", "copy", "-an", str(v_cand)], check=True, capture_output=True)
-                # Extraer audio sin video (copy)
                 subprocess.run(["ffmpeg", "-y", "-i", str(media_path), "-map", "0:a", "-c:a", "copy", "-vn", str(a_cand)], check=True, capture_output=True)
             except Exception as e:
                 print(f"⚠️ Error en fallback de separación: {e}")
+
+    # Mostrar información formateada de video y audio con sus tamaños reales
+    def _fmt_size(p: Path | None, fallback_bytes: int | float | None = None) -> str:
+        sz = 0
+        if p and p.exists():
+            try:
+                sz = p.stat().st_size
+            except Exception:
+                pass
+        if sz <= 0 and fallback_bytes:
+            sz = fallback_bytes
+        return f"{sz / (1024 * 1024):.2f}MiB" if sz > 0 else "0.00MiB"
+
+    v_size_str = _fmt_size(v_cand, v_info.get("filesize") or v_info.get("filesize_approx") if requested else None)
+    a_size_str = _fmt_size(a_cand, a_info.get("filesize") or a_info.get("filesize_approx") if requested else None)
+
+    dur = info.get("duration")
+    dur_text = ""
+    if dur:
+        m, s = divmod(int(dur), 60)
+        dur_text = f" | {m}m {s:02d}s" if m > 0 else f" | {s}s"
+    elif info.get("duration_string"):
+        dur_text = f" | {info.get('duration_string')}"
+
+    if requested:
+        v_ext = v_info.get("ext", "mp4")
+        v_cod = v_info.get("vcodec", "avc1")
+        v_h = v_info.get("height", "1080")
+        v_fps = v_info.get("fps", 30)
+        print(f"📹 Video: {v_ext} | {v_cod} | {v_h}p | {v_fps}fps{dur_text} | {v_size_str}")
+
+        a_ext = a_info.get("ext", "webm")
+        a_cod = a_info.get("acodec", "opus")
+        a_asr = a_info.get("asr", 48000)
+        a_abr = a_info.get("abr", 128)
+        print(f"🎵 Audio: {a_ext} | {a_cod} | {a_asr}Hz | {a_abr}kbps | {a_size_str}")
+
+    tot_bytes = 0
+    if v_cand and v_cand.exists(): tot_bytes += v_cand.stat().st_size
+    if a_cand and a_cand.exists(): tot_bytes += a_cand.stat().st_size
+    dl_speed = (tot_bytes / (1024 * 1024)) / dl_elapsed if dl_elapsed > 0 else 0
+    print(f"⏱️ [Descarga] Completada en {dl_elapsed:.1f}s ({dl_speed:.1f}MiB/s)")
 
     if v_cand and v_cand.exists():
         asset_update["video_only"] = str(v_cand)
@@ -513,11 +551,9 @@ def separate_vocals(
 
     # 3) Separar stems: Dual-GPU o Single-GPU
     if enable_dual:
-        print("⚡ [BS-RoFormer Dual-GPU] Modo: GPU 0 + GPU 1")
         model_0 = get_or_load_model("bs_roformer_gpu0", _get_roformer_gpu0, config, model)
         result = _demix_dual_gpu(config, model_0, model, mixture, sr)
     else:
-        print(f"⚡ [BS-RoFormer Single-GPU] Modo: {device}")
         saved_stdout = sys.stdout
         try:
             sys.stdout = io.StringIO()
@@ -547,7 +583,7 @@ def separate_vocals(
         torchaudio.save(str(no_vocals_path), instrumental, sr)
 
     sep_elapsed = time.perf_counter() - t_start_sep
-    print(f"⏱️ [Etapa: Separación Stems (BS-RoFormer)] Completada en {sep_elapsed:.1f}s")
+    print(f"⏱️ [Separación BS-RoFormer | {'Dual-GPU' if enable_dual else 'Single-GPU'}] Completada en {sep_elapsed:.1f}s")
 
     # --- Registro determinista en manifiesto ---
     update_assets(

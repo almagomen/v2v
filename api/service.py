@@ -124,7 +124,7 @@ def _run_pipeline(
         t_all_start = time.perf_counter()
         for idx, u in enumerate(urls):
             t_link_start = time.perf_counter()
-            print(f"\n🚀 [Link {idx + 1}/{len(urls)}] Iniciando procesamiento: {u}")
+            print(f"\n🚀 [Link {idx + 1}/{len(urls)}] Descargando: {u}")
             res_list = process_video_queue(
                 [u],
                 translate_lang=translate_lang,
@@ -191,7 +191,7 @@ def _run_pipeline(
             t0_split = time.perf_counter()
             split_all_sequences([path])
             t_split = time.perf_counter() - t0_split
-            print(f"⏱️ [Etapa: Corte de Secuencias] Completado en {t_split:.1f}s")
+            print(f"⏱️ [Corte de Secuencias] Completado en {t_split:.1f}s")
 
             # Preservar el tag 'original_speaker' devuelto por la diarización (ej: SPEAKER_00)
             # y asignar la voz correspondiente según speaker_map o speaker_name por defecto.
@@ -219,7 +219,7 @@ def _run_pipeline(
                 speaker_map=speaker_map,
             )
             t_tts = time.perf_counter() - t0_tts
-            print(f"⏱️ [Etapa: Síntesis TTS (Fish Audio)] Completada en {t_tts:.1f}s ({len(paths_es)} audios generados)\n")
+            print(f"⏱️ [Síntesis TTS (Fish Audio)] Completada en {t_tts:.1f}s ({len(paths_es)} audios generados)\n")
 
             if not paths_es:
                 set_url_state(r.get("url", ""), "error", "Error en TTS")
@@ -254,18 +254,18 @@ def _run_pipeline(
             if t_dl > 0:
                 print(f"• 📥 Descarga: {t_dl:.1f}s")
             if t_stems > 0:
-                print(f"• 🎵 Separación Stems (BS-RoFormer): {t_stems:.1f}s")
+                print(f"• 🎵 Separación: {t_stems:.1f}s")
             if t_whisper > 0:
-                print(f"• 📝 Transcripción (Whisper): {t_whisper:.1f}s")
+                print(f"• 📝 Transcripción: {t_whisper:.1f}s")
             if t_diar > 0:
-                print(f"• 👥 Diarización (Pyannote): {t_diar:.1f}s")
+                print(f"• 👥 Diarización: {t_diar:.1f}s")
             if t_trans > 0:
-                print(f"• 🌐 Traducción (Gemini): {t_trans:.1f}s ({len(texts)} segmentos)")
+                print(f"• 🌐 Traducción: {t_trans:.1f}s ({len(texts)} segmentos)")
             if t_title > 0:
-                print(f"• ✨ Título Viral (Gemini): {t_title:.1f}s")
-            print(f"• ✂️ Corte de secuencias: {t_split:.1f}s")
-            print(f"• 🗣️ Síntesis TTS (Fish Audio): {t_tts:.1f}s ({len(paths_es)} audios)")
-            print(f"🏁 TIEMPO TOTAL LINK: {fmt_total}")
+                print(f"• ✨ Título Viral: {t_title:.1f}s")
+            print(f"• ✂️ Corte secuencias: {t_split:.1f}s")
+            print(f"• 🗣️ TTS: {t_tts:.1f}s ({len(paths_es)} segmentos)")
+            print(f"🏁 TIEMPO TOTAL: {fmt_total}")
             print("=" * 60 + "\n")
 
         if len(urls) > 1 and videos_data:
@@ -274,7 +274,7 @@ def _run_pipeline(
             secs_all = int(t_total_all % 60)
             fmt_all = f"{t_total_all:.1f}s ({mins_all}m {secs_all:02d}s)" if mins_all > 0 else f"{t_total_all:.1f}s"
             print("=" * 60)
-            print(f"🏁 RESUMEN TOTAL DE LA COLA: {len(videos_data)} de {len(urls)} videos completados")
+            print(f"🏁 RESUMEN TOTAL: {len(videos_data)} videos completados")
             print(f"🏁 TIEMPO TOTAL ACUMULADO: {fmt_all}")
             print("=" * 60 + "\n")
 

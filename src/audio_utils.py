@@ -228,38 +228,36 @@ def clone_voice_segments(
         if slowdown_range and stretch_target_ratio != 1.0:
             if duration_ratio > 1.0:
                 if max_allowed_dur is not None and dur_es > max_allowed_dur:
-                    # Choca con el siguiente segmento del mismo hablante:
-                    # Ajustamos únicamente lo necesario para encajar en max_allowed_dur
+                    # Choca con el siguiente segmento: acelerar a max_allowed_dur
                     ratio_needed = dur_es / max_allowed_dur
                     print(
-                        f"⚠️ Choque ({ratio_needed:.2f}x): {dur_es:5.2f}s → {max_allowed_dur:5.2f}s (tope sig: {next_speaker_start:.2f}s)",
+                        f"⚠️ {ratio_needed:.2f}x: {max_allowed_dur:5.2f}s → {dur_en:5.2f}s",
                         end=" ",
                     )
                     target_samples = int(max_allowed_dur * rate)
                     arr = adjust_audio_duration(arr, target_samples, rate)
                 else:
-                    # Cabe perfectamente en el silencio/pausa sin chocar:
-                    limit_str = f"tope: {max_allowed_dur:5.2f}s" if max_allowed_dur else "sin tope"
+                    # Cabe en la pausa natural sin chocar (1.00x)
                     print(
-                        f"✨ 1.00x (natural, cabe en pausa): {dur_es:5.2f}s (orig: {dur_en:5.2f}s | {limit_str})",
+                        f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s",
                         end=" ",
                     )
             elif slowdown_range[0] < duration_ratio < slowdown_range[1]:
-                # Estiramiento suave con tope estricto de 0.85x mínimo (evita distorsión / voz arrastrada)
+                # Estiramiento suave
                 desired_dur = dur_es + (dur_en - dur_es) * stretch_target_ratio
-                max_slow_dur = dur_es / 0.85  # Nunca ralentizar a menos de 0.85x
+                max_slow_dur = dur_es / 0.85
                 target_dur_sec = min(desired_dur, max_slow_dur, dur_en)
                 effective_slow_speed = dur_es / target_dur_sec if target_dur_sec > 0 else 1.0
 
                 print(
-                    f"🔉 {effective_slow_speed:.2f}x (estiramiento suave): {dur_es:5.2f}s → {target_dur_sec:5.2f}s",
+                    f"🔉 {effective_slow_speed:.2f}x: {target_dur_sec:5.2f}s ← {dur_en:5.2f}s",
                     end=" ",
                 )
                 target_samples = int(target_dur_sec * rate)
                 arr = adjust_audio_duration(arr, target_samples, rate)
             else:
                 print(
-                    f"✨ 1.00x: {dur_es:5.2f}s (orig: {dur_en:5.2f}s)",
+                    f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s",
                     end=" ",
                 )
 

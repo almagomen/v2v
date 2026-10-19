@@ -276,7 +276,7 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
 
                 if raw_title:
                     title = raw_title.replace("\n", " ").strip("\"'")
-                    print(f"⏱️ [Etapa: Título Viral (Gemini)] Generado con '{model}' en {duration:.1f}s: {title}", flush=True)
+                    print(f"⏱️ [Título Viral '{model}'] Generado en {duration:.1f}s: {title}", flush=True)
                     return title
 
             except Exception as e:

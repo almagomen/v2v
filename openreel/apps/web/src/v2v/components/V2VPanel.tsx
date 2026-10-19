@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo } from "react";
-import { Youtube, Loader2, AlertCircle, Settings, RefreshCw, Trash2 } from "lucide-react";
+import { Youtube, Loader2, AlertCircle, Settings, Trash2 } from "lucide-react";
 import {
   ScrollArea,
   Button,
@@ -89,9 +89,29 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [translationModel, setTranslationModel] = React.useState<string>("gemini-flash-lite-latest");
   const [customTranslationModel, setCustomTranslationModel] = React.useState<string>("");
   const [initialEmotion, setInitialEmotion] = React.useState<string>(DEFAULT_EMOTION_TAG);
-  const [forceReprocess, setForceReprocess] = React.useState<boolean>(false);
+  const [reprocessUrls, setReprocessUrls] = React.useState<Set<string>>(new Set());
   const [showTokenSettings, setShowTokenSettings] = React.useState(false);
   const [isSavingTokens, setIsSavingTokens] = React.useState(false);
+
+  const handleToggleReprocess = useCallback((targetUrl: string) => {
+    setReprocessUrls((prev) => {
+      const next = new Set(prev);
+      if (next.has(targetUrl)) {
+        next.delete(targetUrl);
+        toast.info("Re-inferencia desactivada", "Se usará el comportamiento normal (reimportar desde caché si ya existe).");
+      } else {
+        next.add(targetUrl);
+        // Si la URL no está en el cuadro de texto `urls`, la añadimos automáticamente
+        const currentUrls = useV2VStore.getState().urls || "";
+        const lines = currentUrls.split("\n").map((u: string) => u.trim()).filter(Boolean);
+        if (!lines.includes(targetUrl)) {
+          setUrls(currentUrls.trim() ? `${currentUrls.trim()}\n${targetUrl}` : targetUrl);
+        }
+        toast.success("Re-inferencia activada", "Al presionar el botón de procesar se volverá a procesar este enlace (+Versión) en vez de reimportar.");
+      }
+      return next;
+    });
+  }, [setUrls]);
 
   const loadTokensAndModels = useCallback(async () => {
     try {
@@ -236,21 +256,19 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       return;
     }
 
-    let urlsToProcess = normalized;
-    if (!forceReprocess) {
-      const currentUrls = new Set(urlItems.map((it) => it.url));
-      const newUrls = normalized.filter((u) => !currentUrls.has(u));
-      if (newUrls.length > 0) {
-        urlsToProcess = newUrls;
-      } else {
-        toast.info(
-          "URL ya procesada",
-          "Esta URL ya fue procesada previamente. Marca la casilla 'Re-inferir (nueva versión)' para procesarla de nuevo creando un proyecto nuevo (_v2, _v3) sin sobrescribir el original."
-        );
-        return;
-      }
+    const currentUrls = new Set(urlItems.map((it) => it.url));
+    const urlsWithReprocess = normalized.filter((u) => reprocessUrls.has(u));
+    const urlsToProcess = normalized.filter((u) => !currentUrls.has(u) || reprocessUrls.has(u));
+
+    if (urlsToProcess.length === 0) {
+      toast.info(
+        "URL ya procesada",
+        "Esta URL ya fue procesada previamente. Haz clic en el ícono 🔄 (Re-inferir) en la columna 'Acción' para volver a procesarla (+Versión) en vez de reimportar."
+      );
+      return;
     }
 
+    const isForcingReprocess = urlsWithReprocess.length > 0;
     const signature = normalized.map((u: string) => encodeURIComponent(u)).join("|");
     const keepItems = true; 
 
@@ -267,11 +285,19 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         speaker,
         initialEmotion === "none" ? null : initialEmotion,
         {
-          forceReprocess: forceReprocess,
+          forceReprocess: isForcingReprocess,
         }
       );
       setJobId(res.job_id);
       startPolling(res.job_id);
+
+      if (isForcingReprocess) {
+        setReprocessUrls((prev) => {
+          const next = new Set(prev);
+          urlsWithReprocess.forEach((u) => next.delete(u));
+          return next;
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al iniciar");
       setIsProcessing(false);
@@ -282,7 +308,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     translateLang,
     speaker,
     initialEmotion,
-    forceReprocess,
+    reprocessUrls,
     startPolling,
     setJobId,
     setError,
@@ -374,6 +400,14 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           importStatusByKey: nextStatus,
         };
       });
+
+      if (urlToRemove) {
+        setReprocessUrls((prev) => {
+          const next = new Set(prev);
+          next.delete(urlToRemove);
+          return next;
+        });
+      }
 
       if (jobId) startPolling(jobId);
     } catch (e) {
@@ -494,33 +528,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           />
         </div>
 
-        {/* Opciones modulares de inferencia */}
-        <div className="bg-background-tertiary/60 border border-border/80 rounded-lg p-2.5 space-y-2">
-          <div className="text-[10px] font-semibold text-text-muted flex items-center justify-between">
-            <span>Opciones de Inferencia</span>
-            <span className="text-[9px] text-primary/80 font-mono">Configuración</span>
-          </div>
 
-          <div className="pt-0.5">
-            {/* Re-inferir sin sobrescribir */}
-            <label
-              className="flex items-center gap-2 p-1 rounded-md hover:bg-background/50 cursor-pointer select-none text-[11px] text-text-secondary transition-colors"
-              title="Permite volver a inferir una URL ya procesada creando una carpeta/proyecto nuevo (_v2, _v3) sin alterar el original."
-            >
-              <input
-                type="checkbox"
-                checked={forceReprocess}
-                onChange={(e) => setForceReprocess(e.target.checked)}
-                disabled={isProcessing}
-                className="rounded border-border text-primary focus:ring-0 focus:ring-offset-0 cursor-pointer w-3.5 h-3.5 accent-primary"
-              />
-              <span className="flex items-center gap-1 truncate">
-                <RefreshCw size={12} className="text-emerald-400 shrink-0" />
-                <span>Re-inferir (+Versión)</span>
-              </span>
-            </label>
-          </div>
-        </div>
 
         <Button
           onClick={handleProcess}
@@ -607,6 +615,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           onDeleteFolder={handleDeleteFolder}
           log={log}
           urlLogs={urlLogs}
+          reprocessUrls={reprocessUrls}
+          onToggleReprocess={handleToggleReprocess}
         />
 
         {videos.length > 0 && (

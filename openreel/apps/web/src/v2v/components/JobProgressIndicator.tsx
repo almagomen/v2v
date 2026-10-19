@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Terminal, ChevronDown, Copy, Check, Trash2 } from "lucide-react";
+import { Terminal, ChevronDown, Copy, Check, Trash2, RefreshCw } from "lucide-react";
 import { toast } from "@/stores/notification-store";
 import { folderNameFromTitle, importKeyFor } from "../utils/v2v-utils";
 import { useColabExportStore } from "../stores/colab-export-store";
@@ -41,6 +41,8 @@ export interface JobProgressIndicatorProps {
   onDeleteFolder: (displayName: string, folderName?: string, urlToRemove?: string) => Promise<void>;
   log: string;
   urlLogs: Record<string, string>;
+  reprocessUrls?: Set<string>;
+  onToggleReprocess?: (url: string) => void;
 }
 
 export const JobProgressIndicator: React.FC<JobProgressIndicatorProps> = ({
@@ -50,6 +52,8 @@ export const JobProgressIndicator: React.FC<JobProgressIndicatorProps> = ({
   onDeleteFolder,
   log,
   urlLogs,
+  reprocessUrls,
+  onToggleReprocess,
 }) => {
   const [titleDisplayModes, setTitleDisplayModes] = useState<Record<string, number>>({});
   const [copiedUrlKey, setCopiedUrlKey] = useState<string | null>(null);
@@ -169,6 +173,27 @@ export const JobProgressIndicator: React.FC<JobProgressIndicatorProps> = ({
                               <Copy size={12} />
                             )}
                           </button>
+                          {onToggleReprocess && (
+                            <button
+                              className={`transition-colors p-1 rounded hover:bg-background-tertiary ${
+                                reprocessUrls?.has(it.url)
+                                  ? "text-emerald-400 bg-emerald-500/15 ring-1 ring-emerald-500/30"
+                                  : "text-text-muted hover:text-emerald-400"
+                              }`}
+                              title={
+                                reprocessUrls?.has(it.url)
+                                  ? "Re-inferencia activada (+Versión): al ejecutar se volverá a procesar creando una nueva versión en vez de reimportar (Clic para desactivar)"
+                                  : "Activar re-inferencia (+Versión): al volver a ejecutar este enlace se procesará desde cero creando una nueva versión en vez de reimportar"
+                              }
+                              disabled={isProcessing}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleReprocess(it.url);
+                              }}
+                            >
+                              <RefreshCw size={12} />
+                            </button>
+                          )}
                           <button
                             className="text-text-muted hover:text-red-500 transition-colors p-1 rounded hover:bg-background-tertiary"
                             title="Borrar carpeta y permitir re-intento"

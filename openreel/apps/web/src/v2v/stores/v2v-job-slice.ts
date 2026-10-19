@@ -225,18 +225,28 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
       }
 
       if (hasSavedData) {
-        // Preservar la lista de videos más completa entre memoria y storage si corresponden a la misma corrida o job
+        // Preservar la lista de videos y URLs más completa entre memoria y storage si corresponden a la misma corrida o job
         let effectiveVideos = saved.videos ?? [];
         let effectiveUrlItems = saved.urlItems ?? [];
+        let effectiveUrls = saved.urls ?? "";
+
+        // Si la lista de URLs guardada tiene menos links que urlItems o que la memoria, usar la lista completa
+        const savedUrlCount = effectiveUrls.trim().split("\n").filter(Boolean).length;
+        const memoryUrlCount = get().urls.trim().split("\n").filter(Boolean).length;
+        if (memoryUrlCount > savedUrlCount && (!saved.jobId || saved.jobId === get().jobId)) {
+          effectiveUrls = get().urls;
+        } else if (effectiveUrlItems.length > savedUrlCount) {
+          effectiveUrls = effectiveUrlItems.map((it: any) => it.url).filter(Boolean).join("\n");
+        }
 
         if (get().videos.length > effectiveVideos.length && (!saved.jobId || saved.jobId === get().jobId)) {
           effectiveVideos = get().videos;
           if (get().urlItems.length > effectiveUrlItems.length) {
             effectiveUrlItems = get().urlItems;
           }
-          saveJobStateForProject(projectId, { videos: effectiveVideos, urlItems: effectiveUrlItems });
+          saveJobStateForProject(projectId, { urls: effectiveUrls, videos: effectiveVideos, urlItems: effectiveUrlItems });
         } else if (saved.jobId) {
-          // Buscar en otros folderRefs del mismo job si hay una lista de videos más completa
+          // Buscar en otros folderRefs del mismo job si hay una lista de videos o URLs más completa
           for (const ref of Object.values(get().folderRefs)) {
             if (ref.projectId && ref.jobId === saved.jobId && ref.projectId !== projectId) {
               const otherSaved = loadJobStateForProject(ref.projectId);
@@ -245,7 +255,11 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                 if (otherSaved.urlItems && otherSaved.urlItems.length > effectiveUrlItems.length) {
                   effectiveUrlItems = otherSaved.urlItems;
                 }
-                saveJobStateForProject(projectId, { videos: effectiveVideos, urlItems: effectiveUrlItems });
+                const otherUrlCount = (otherSaved.urls || "").trim().split("\n").filter(Boolean).length;
+                if (otherUrlCount > effectiveUrls.trim().split("\n").filter(Boolean).length) {
+                  effectiveUrls = otherSaved.urls!;
+                }
+                saveJobStateForProject(projectId, { urls: effectiveUrls, videos: effectiveVideos, urlItems: effectiveUrlItems });
                 break;
               }
             }
@@ -265,7 +279,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
         set({
           currentProjectId: projectId,
-          urls: saved.urls ?? "",
+          urls: effectiveUrls,
           jobId: saved.jobId ?? null,
           progress: saved.progress ?? 0,
           videos: effectiveVideos,
@@ -651,9 +665,6 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   const fetchAssetBlob = async (asset: V2VAssetDef) => {
                     if (!asset.enabled) return null;
-                    if (urlForLog) {
-                      get().appendUrlLog(urlForLog, `📥 [Paso 1/4] Descargando ${asset.trackPrefix || asset.id}...`);
-                    }
                     try {
                       let blob: Blob | null = null;
                       try {
@@ -677,22 +688,19 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   };
 
                   if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `🚀 Iniciando importación al timeline para "${folder}"...`);
+                    get().appendUrlLog(urlForLog, `\n${"=".repeat(60)}`);
+                    get().appendUrlLog(urlForLog, `🚀 [Importación Timeline] Iniciando: "${folder}"`);
+                    get().appendUrlLog(urlForLog, `• 📥 Descargando medios (${audioSegs.length} audios TTS + video e instrumental)...`);
                   }
 
                   const tStartDownload = performance.now();
                   const assetTasks = assets.map(fetchAssetBlob);
 
-                  let isTarSuccessful = false;
                   const [downloadedAssetsRaw, downloadedSegs] = await Promise.all([
                     Promise.all(assetTasks),
                     (async () => {
                       if (audioSegs.length === 0) return [];
                       try {
-                        if (urlForLog) {
-                          get().appendUrlLog(urlForLog, `📦 [Paso 1/4] Descargando paquete TAR de audios TTS (${audioSegs.length} segmentos)...`);
-                        }
-                        const tTarStart = performance.now();
                         const tarMap = await v2vApi.fetchAudioSegmentsTar(jobId, v.index);
                         const segsFromTar: Array<{ isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob }> = [];
                         for (const seg of audioSegs) {
@@ -716,20 +724,14 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                           }
                         }
                         if (segsFromTar.length > 0) {
-                          isTarSuccessful = true;
-                          const tTarSec = ((performance.now() - tTarStart) / 1000).toFixed(1);
-                          if (urlForLog) {
-                            get().appendUrlLog(urlForLog, `📦 [Paso 1/4] Paquete TAR descargado en ${tTarSec}s (${segsFromTar.length} audios).`);
-                          }
                           return segsFromTar;
                         }
                       } catch (e) {
                         console.warn(`[V2V] Fallback a descargas individuales de audio para ${folder}:`, e);
                       }
 
-                      const tIndivStart = performance.now();
                       if (urlForLog) {
-                        get().appendUrlLog(urlForLog, `⚠️ [Paso 1/4] Descargando ${audioSegs.length} audios individualmente...`);
+                        get().appendUrlLog(urlForLog, `⚠️ [Fallback] Descargando ${audioSegs.length} audios individualmente...`);
                       }
                       const segmentTasks = audioSegs.map((seg) => {
                         const logicalName = segmentLogicalName(seg);
@@ -740,18 +742,14 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       });
                       const individualResults = await Promise.all(segmentTasks);
                       const res = individualResults.filter((d): d is { isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } => d !== null);
-                      const tIndivSec = ((performance.now() - tIndivStart) / 1000).toFixed(1);
-                      if (urlForLog) {
-                        get().appendUrlLog(urlForLog, `⏱️ [Paso 1/4] Descargas individuales completadas en ${tIndivSec}s (${res.length} audios recibidos).`);
-                      }
                       return res;
                     })()
                   ]);
 
                   const downloadedAssets = downloadedAssetsRaw.filter((d): d is { asset: V2VAssetDef, blob: Blob } => d !== null);
                   const tTotalDlSec = ((performance.now() - tStartDownload) / 1000).toFixed(1);
-                  if (urlForLog && isTarSuccessful) {
-                    get().appendUrlLog(urlForLog, `⏱️ [Paso 1/4] Total descarga (Video + audios): ${tTotalDlSec}s.`);
+                  if (urlForLog) {
+                    get().appendUrlLog(urlForLog, `• 📦 Medios descargados en ${tTotalDlSec}s (${downloadedAssets.length + downloadedSegs.length} archivos)`);
                   }
 
                   if (audioSegs.length > 0 && downloadedSegs.length === 0) {
@@ -768,17 +766,12 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     continue;
                   }
 
-                  const tStartBaseMedia = performance.now();
                   const baseFilesToImport = downloadedAssets.map(d => {
                     const isM4A = d.blob.type.includes("mp4") && d.asset.type === 'audio';
                     const fileName = isM4A ? d.asset.logicalName.replace(/\.wav$/i, ".m4a") : d.asset.logicalName;
                     const mimeType = d.blob.type || (d.asset.type === 'video' ? 'video/mp4' : isM4A ? 'audio/mp4' : 'audio/wav');
                     return new File([d.blob], fileName, { type: mimeType });
                   });
-
-                  if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `⏱️ [Paso 2/4] Analizando video base e instrumental (${baseFilesToImport.length} archivos)...`);
-                  }
 
                   const batchRes = await importMultipleMediaIntoProject(workingProject, baseFilesToImport, { quick: true });
                   if (!batchRes.success || !batchRes.project) {
@@ -791,22 +784,12 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   }
 
                   workingProject = batchRes.project;
-                  const tBaseSec = ((performance.now() - tStartBaseMedia) / 1000).toFixed(1);
-                  if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `⏱️ [Paso 2/4] Video base e instrumental listos en ${tBaseSec}s.`);
-                  }
-
                   const vMedia = workingProject.mediaLibrary.items.find(m => m.name === (v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4"));
                   if (vMedia?.metadata.width && vMedia?.metadata.height) {
                     workingProject = {
                       ...workingProject,
                       settings: { ...workingProject.settings, width: vMedia.metadata.width, height: vMedia.metadata.height },
                     };
-                  }
-
-                  const tStartReg = performance.now();
-                  if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `⏱️ [Paso 3/4] Registrando ${downloadedSegs.length} segmentos TTS en la biblioteca de medios...`);
                   }
 
                   const ttsMediaItems: MediaItem[] = [];
@@ -848,15 +831,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     modifiedAt: Date.now(),
                   };
 
-                  const tRegMs = Math.round(performance.now() - tStartReg);
-                  if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `⏱️ [Paso 3/4] ${ttsMediaItems.length} segmentos TTS registrados en biblioteca en ${tRegMs}ms.`);
-                  }
-
                   const tStartTimeline = performance.now();
-                  if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `⏱️ [Paso 4/4] Montando pistas y posicionando clips en el timeline...`);
-                  }
 
                   for (const { asset } of downloadedAssets) {
                     if (!asset.toTimeline) continue;
@@ -966,7 +941,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   const tTimelineMs = Math.round(performance.now() - tStartTimeline);
                   if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `⏱️ [Paso 4/4] Timeline montado: ${allClipsToBatchAdd.length} clips insertados en ${tTimelineMs}ms.`);
+                    get().appendUrlLog(urlForLog, `• 🎬 Montaje: ${allClipsToBatchAdd.length} clips sincronizados en ${tTimelineMs}ms`);
                   }
 
                   const audioSegmentsImported = workingProject.mediaLibrary.items.filter(
@@ -1015,16 +990,21 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   get().setImportStatus(key, "done");
                   const importElapsedSec = ((performance.now() - importStartTime) / 1000).toFixed(1);
                   if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `⏱️ [Etapa: Importación Timeline] Completada en ${importElapsedSec}s (${totalFilesCount} archivos).`);
-                    get().appendUrlLog(urlForLog, `✅ Proyecto "${folder}" listo para editar en OpenReel.`);
+                    get().appendUrlLog(urlForLog, `⏱️ [Importación Timeline] Completada en ${importElapsedSec}s (${totalFilesCount} archivos)`);
+                    get().appendUrlLog(urlForLog, `✅ Proyecto "${folder}" listo para editar en OpenReel`);
+                    get().appendUrlLog(urlForLog, `${"=".repeat(60)}\n`);
                   }
 
                   // Persistir estado de V2V directamente vinculado al nuevo workingProject.id
                   const currentState = get();
                   const allVideosToPersist = currentState.videos.length > 0 ? currentState.videos : (state.videos || []);
                   const allUrlItemsToPersist = currentState.urlItems.length > 0 ? currentState.urlItems : (state.urlItems || []);
+                  const fullBatchUrls = (currentState.urls && currentState.urls.trim().split("\n").filter(Boolean).length > 1)
+                    ? currentState.urls
+                    : (allUrlItemsToPersist.length > 0 ? allUrlItemsToPersist.map(it => it.url).filter(Boolean).join("\n") : (currentState.urls || v.url || ""));
+
                   const jobSnapshotToPersist = {
-                    urls: v.url || currentState.urls,
+                    urls: fullBatchUrls,
                     jobId: state.jobId!,
                     progress: 100,
                     videos: allVideosToPersist,
@@ -1040,11 +1020,12 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   };
                   saveJobStateForProject(workingProject.id, jobSnapshotToPersist);
 
-                  // Propagar la lista acumulada de videos y urlItems a todos los proyectos de este job
+                  // Propagar la lista acumulada de videos, urlItems y URLs a todos los proyectos de este job
                   if (allVideosToPersist.length > 0) {
                     for (const ref of Object.values(currentState.folderRefs || {})) {
                       if (ref.projectId && ref.jobId === state.jobId) {
                         saveJobStateForProject(ref.projectId, {
+                          urls: fullBatchUrls,
                           videos: allVideosToPersist,
                           urlItems: allUrlItemsToPersist,
                         });
@@ -1101,9 +1082,13 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   const finalVideos = get().videos;
                   const finalUrlItems = get().urlItems;
                   if (finalVideos.length > 0) {
+                    const finalFullUrls = (get().urls && get().urls.trim().split("\n").filter(Boolean).length > 1)
+                      ? get().urls
+                      : (finalUrlItems.length > 0 ? finalUrlItems.map(it => it.url).filter(Boolean).join("\n") : get().urls);
                     for (const ref of Object.values(get().folderRefs || {})) {
                       if (ref.projectId && ref.jobId === state.jobId) {
                         saveJobStateForProject(ref.projectId, {
+                          urls: finalFullUrls,
                           videos: finalVideos,
                           urlItems: finalUrlItems,
                         });

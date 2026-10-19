@@ -776,7 +776,7 @@ export const ColabExportTab: React.FC = () => {
 
         const outName = ((ctx as any).longName || fullProject.name || sp.meta.projectName || "export").replace(/^\d+[._\s]*/, "");
         const tProjSec = ((performance.now() - tProjStart) / 1000).toFixed(1);
-        appendExportLog(`📁 [${currentNum}/${totalSelected}] Preparado: "${outName}" (${tProjSec}s)`);
+        appendExportLog(`📁 [${currentNum}/${totalSelected}] Preparado: "${outName}" (${clips.length} clips, ${tProjSec}s)`);
 
         renders.push({
           job_id: ctx.jobId,
@@ -852,6 +852,19 @@ export const ColabExportTab: React.FC = () => {
         progressInterval = null;
       }
 
+      // Vaciar cualquier log restante emitido por el backend
+      try {
+        const finalP = await v2vApi.getBatchProgress(batchId);
+        if (finalP?.logs && Array.isArray(finalP.logs)) {
+          for (const line of finalP.logs) {
+            if (!seenBackendLogs.has(line)) {
+              seenBackendLogs.add(line);
+              appendExportLog(line);
+            }
+          }
+        }
+      } catch {}
+
       // Check if result is Catbox upload response
       if (uploadToCatbox && result && typeof result === "object" && "videos" in result) {
         const batchResult = result as { videos: CatboxVideoResult[]; logs?: string[]; total_time?: number };
@@ -864,6 +877,7 @@ export const ColabExportTab: React.FC = () => {
         });
       } else {
         // Normal download
+        appendExportLog(`📦 [Descarga ZIP] Paquete "batch_export.zip" recibido con éxito`);
         downloadBlob(result as Blob, "batch_export.zip");
         setStatus("done");
         setProgressData({

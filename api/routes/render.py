@@ -946,7 +946,7 @@ async def render_batch(req: RenderBatchRequest):
 
             t_ff = 0.0
             if cache_valid and existing_file:
-                log_render = f"⏩ [{idx + 1}/{total}] {item.output_name}: Reutilizado de caché ({desired_mode}) (0.0s)"
+                log_render = f"♻️ [{idx + 1}/{total}] Modo: [{desired_mode} (caché)] | 0.0s | {item.output_name}"
                 print(log_render)
                 output_final = existing_file
             else:
@@ -970,8 +970,8 @@ async def render_batch(req: RenderBatchRequest):
 
                 _save_render_cache_hash(output_path, item.clips, mode=desired_mode)
                 t_ff = time.perf_counter() - t0_ff
-                mode_str = "Stream Copy" if "-c:v copy" in " ".join(cmd) else f"GPU {gpu_id}"
-                log_render = f"⏱️ [{idx + 1}/{total}] {item.output_name}: Renderizado FFmpeg en {t_ff:.1f}s ({mode_str})"
+                mode_str = "Stream Copy" if "-c:v copy" in " ".join(cmd) else f"NVENC GPU {gpu_id}"
+                log_render = f"⏱️ [{idx + 1}/{total}] Modo: [{mode_str}] | FFmpeg: {t_ff:.2f}s | {item.output_name}"
                 print(log_render)
                 output_final = output_path
 
@@ -981,7 +981,7 @@ async def render_batch(req: RenderBatchRequest):
                 t0_cb = time.perf_counter()
                 catbox_url = upload_to_catbox(output_final)
                 t_cb = time.perf_counter() - t0_cb
-                log_cb = f"⏱️ [{idx + 1}/{total}] {item.output_name}: Subido a Catbox en {t_cb:.1f}s"
+                log_cb = f"☁️ [{idx + 1}/{total}] Catbox: {t_cb:.1f}s | {item.output_name}"
                 print(log_cb)
 
             t_item_total = time.perf_counter() - t_item_start
