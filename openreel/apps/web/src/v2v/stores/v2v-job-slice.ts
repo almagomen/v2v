@@ -160,16 +160,16 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
         (saved.urlLogs && Object.keys(saved.urlLogs).length > 0)
       );
 
-      // 2. Si no tiene datos por ID directo, verificar si el proyecto coincide con algún folderRef conocido
-      if (!hasSavedData) {
-        const currentProject = useProjectStore.getState().project;
-        const folderRefs = get().folderRefs;
-        const matchingRef = Object.values(folderRefs).find(
-          (ref) =>
-            ref.projectId === projectId ||
-            (currentProject && currentProject.name && folderNameFromTitle(ref.outputName || "") === currentProject.name),
-        );
+      // 2. Resolver proyecto actual y folderRef coincidente
+      const currentProject = useProjectStore.getState().project;
+      const folderRefs = get().folderRefs;
+      const matchingRef = Object.values(folderRefs).find(
+        (ref) =>
+          ref.projectId === projectId ||
+          (currentProject && currentProject.name && folderNameFromTitle(ref.outputName || "") === currentProject.name),
+      );
 
+      if (!hasSavedData) {
         if (matchingRef) {
           if (matchingRef.projectId && matchingRef.projectId !== projectId) {
             saved = loadJobStateForProject(matchingRef.projectId);
@@ -225,15 +225,53 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
       }
 
       if (hasSavedData) {
+        // Preservar la lista de videos más completa entre memoria y storage si corresponden a la misma corrida o job
+        let effectiveVideos = saved.videos ?? [];
+        let effectiveUrlItems = saved.urlItems ?? [];
+
+        if (get().videos.length > effectiveVideos.length && (!saved.jobId || saved.jobId === get().jobId)) {
+          effectiveVideos = get().videos;
+          if (get().urlItems.length > effectiveUrlItems.length) {
+            effectiveUrlItems = get().urlItems;
+          }
+          saveJobStateForProject(projectId, { videos: effectiveVideos, urlItems: effectiveUrlItems });
+        } else if (saved.jobId) {
+          // Buscar en otros folderRefs del mismo job si hay una lista de videos más completa
+          for (const ref of Object.values(get().folderRefs)) {
+            if (ref.projectId && ref.jobId === saved.jobId && ref.projectId !== projectId) {
+              const otherSaved = loadJobStateForProject(ref.projectId);
+              if (otherSaved.videos && otherSaved.videos.length > effectiveVideos.length) {
+                effectiveVideos = otherSaved.videos;
+                if (otherSaved.urlItems && otherSaved.urlItems.length > effectiveUrlItems.length) {
+                  effectiveUrlItems = otherSaved.urlItems;
+                }
+                saveJobStateForProject(projectId, { videos: effectiveVideos, urlItems: effectiveUrlItems });
+                break;
+              }
+            }
+          }
+        }
+
+        // Determinar selectedVideoIndex óptimo para este proyecto
+        let targetVideoIndex = saved.selectedVideoIndex ?? 0;
+        if (matchingRef?.videoIndex !== undefined) {
+          targetVideoIndex = matchingRef.videoIndex;
+        } else if (currentProject?.name) {
+          const matchIdx = effectiveVideos.findIndex(
+            (v: any) => folderNameFromTitle(v.output_name || `video_${v.index}`) === currentProject.name,
+          );
+          if (matchIdx >= 0) targetVideoIndex = matchIdx;
+        }
+
         set({
           currentProjectId: projectId,
           urls: saved.urls ?? "",
           jobId: saved.jobId ?? null,
           progress: saved.progress ?? 0,
-          videos: saved.videos ?? [],
-          selectedVideoIndex: saved.selectedVideoIndex ?? 0,
+          videos: effectiveVideos,
+          selectedVideoIndex: targetVideoIndex,
           segments: saved.segments ?? [],
-          urlItems: saved.urlItems ?? [],
+          urlItems: effectiveUrlItems,
           urlLogs: saved.urlLogs ?? {},
           log: saved.log ?? "",
           jobPhase: (saved.jobPhase as any) ?? "idle",
@@ -983,14 +1021,16 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   // Persistir estado de V2V directamente vinculado al nuevo workingProject.id
                   const currentState = get();
+                  const allVideosToPersist = currentState.videos.length > 0 ? currentState.videos : (state.videos || []);
+                  const allUrlItemsToPersist = currentState.urlItems.length > 0 ? currentState.urlItems : (state.urlItems || []);
                   const jobSnapshotToPersist = {
                     urls: v.url || currentState.urls,
                     jobId: state.jobId!,
                     progress: 100,
-                    videos: state.videos,
+                    videos: allVideosToPersist,
                     selectedVideoIndex: v.index,
                     segments: currentState.segments,
-                    urlItems: currentState.urlItems,
+                    urlItems: allUrlItemsToPersist,
                     urlLogs: currentState.urlLogs,
                     log: currentState.log,
                     jobPhase: "done" as const,
@@ -999,6 +1039,18 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     lastUrlsSignature: currentState.lastUrlsSignature,
                   };
                   saveJobStateForProject(workingProject.id, jobSnapshotToPersist);
+
+                  // Propagar la lista acumulada de videos y urlItems a todos los proyectos de este job
+                  if (allVideosToPersist.length > 0) {
+                    for (const ref of Object.values(currentState.folderRefs || {})) {
+                      if (ref.projectId && ref.jobId === state.jobId) {
+                        saveJobStateForProject(ref.projectId, {
+                          videos: allVideosToPersist,
+                          urlItems: allUrlItemsToPersist,
+                        });
+                      }
+                    }
+                  }
 
                   const activeProject = useProjectStore.getState().project;
                   const tracks = activeProject.timeline?.tracks || [];
@@ -1044,6 +1096,20 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                 );
                 if (remaining.length > 0) {
                   setTimeout(() => { void pollOnce(); }, 200);
+                } else {
+                  // Todos los videos terminaron de importarse: asegurar que cada proyecto tenga la lista completa
+                  const finalVideos = get().videos;
+                  const finalUrlItems = get().urlItems;
+                  if (finalVideos.length > 0) {
+                    for (const ref of Object.values(get().folderRefs || {})) {
+                      if (ref.projectId && ref.jobId === state.jobId) {
+                        saveJobStateForProject(ref.projectId, {
+                          videos: finalVideos,
+                          urlItems: finalUrlItems,
+                        });
+                      }
+                    }
+                  }
                 }
               }
             }

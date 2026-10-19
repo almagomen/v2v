@@ -211,8 +211,13 @@ def _resolve_media_path(
     # 2. Mapeo de nombres genéricos a claves del manifiesto
     name_to_asset_key = {
         "video.mp4": "video_only",
+        "video_only.mp4": "video_only",
         "instrumental.wav": "no_vocals",
+        "instrumental.m4a": "no_vocals",
+        "no_vocals.wav": "no_vocals",
+        "no_vocals.m4a": "no_vocals",
         "audio.wav": "audio_only",
+        "original_audio.webm": "audio_only",
         "vocals.wav": "vocals",
     }
 
@@ -220,10 +225,19 @@ def _resolve_media_path(
     asset_key = name_to_asset_key.get(file_name)
     if asset_key and assets.get(asset_key):
         path = Path(assets[asset_key])
+        if not path.is_absolute():
+            path = folder / path
         if path.exists():
             return path
+        # Probar extensiones equivalentes (.wav / .m4a / .mp4)
+        for ext in [".wav", ".m4a", ".mp4"]:
+            cand = path.with_suffix(ext)
+            if cand.exists():
+                return cand
         if asset_key == "video_only" and assets.get("merged"):
             path = Path(assets["merged"])
+            if not path.is_absolute():
+                path = folder / path
             if path.exists():
                 return path
 
@@ -250,20 +264,37 @@ def _resolve_media_path(
 
     # 2.6 Búsqueda exhaustiva en el manifiesto por nombre de archivo
     for val in assets.values():
-        if isinstance(val, str) and Path(val).name == file_name:
-            p_cand = Path(val)
-            if not p_cand.is_absolute():
-                p_cand = folder / p_cand
-            if p_cand.exists():
-                return p_cand
+        if isinstance(val, str):
+            p_val = Path(val)
+            if p_val.name == file_name or p_val.stem == Path(file_name).stem:
+                p_cand = p_val if p_val.is_absolute() else folder / p_val
+                if p_cand.exists():
+                    return p_cand
+                for ext in [".wav", ".m4a", ".mp4"]:
+                    cand_ext = p_cand.with_suffix(ext)
+                    if cand_ext.exists():
+                        return cand_ext
 
     for seg_path in segments_map.values():
-        if isinstance(seg_path, str) and Path(seg_path).name == file_name:
-            p_cand = Path(seg_path)
-            if not p_cand.is_absolute():
-                p_cand = folder / p_cand
-            if p_cand.exists():
-                return p_cand
+        if isinstance(seg_path, str):
+            p_seg = Path(seg_path)
+            if p_seg.name == file_name or p_seg.stem == Path(file_name).stem:
+                p_cand = p_seg if p_seg.is_absolute() else folder / p_seg
+                if p_cand.exists():
+                    return p_cand
+                for ext in [".wav", ".m4a", ".mp4"]:
+                    cand_ext = p_cand.with_suffix(ext)
+                    if cand_ext.exists():
+                        return cand_ext
+
+    # 2.7 Búsqueda directa en la carpeta del video en disco
+    cand_direct = folder / file_name
+    if cand_direct.exists():
+        return cand_direct
+    for ext in [".wav", ".m4a", ".mp4"]:
+        cand_ext = folder / Path(file_name).with_suffix(ext)
+        if cand_ext.exists():
+            return cand_ext
 
     # Fallback solo para rutas absolutas existentes
     p = Path(media_name)
