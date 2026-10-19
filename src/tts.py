@@ -79,38 +79,49 @@ def fish_tts(
     if len(prosody) > 1 or prosody.get("speed"):
         payload["prosody"] = prosody
 
-    try:
-        # Timeout proporcional a la longitud del texto: base 30s, +30s por cada 100 chars, máx 3 min
-        base_timeout = 30
-        chars_factor = max(1, len(text) / 100)
-        timeout = min(int(base_timeout * chars_factor), 180)
-        response = requests.post(FISH_TTS_URL, headers=headers, json=payload, timeout=timeout)
-        response.raise_for_status()
+    # Timeout proporcional a la longitud del texto: base 30s, +30s por cada 100 chars, máx 3 min
+    base_timeout = 30
+    chars_factor = max(1, len(text) / 100)
+    timeout = min(int(base_timeout * chars_factor), 180)
 
-        if torchaudio is None:
-            raise RuntimeError("torchaudio no está disponible en el entorno")
+    for attempt in range(3):
+        try:
+            response = requests.post(FISH_TTS_URL, headers=headers, json=payload, timeout=timeout)
+            if response.status_code == 429:
+                wait_time = 2.0 * (attempt + 1)
+                print(f"\n⚠️ [Fish Audio 429] Rate limit alcanzado. Esperando {wait_time:.1f}s antes de reintentar...")
+                time.sleep(wait_time)
+                continue
+            response.raise_for_status()
 
-        waveform, sr = torchaudio.load(io.BytesIO(response.content))
+            if torchaudio is None:
+                raise RuntimeError("torchaudio no está disponible en el entorno")
 
-        # Ganancia +6 dB post-respuesta: se aplica directamente aquí porque el servidor con el
-        # parámetro volumen aplica un fade inicial; en local el aumento es instantáneo y sin rampa.
-        gain_factor = 10.0 ** (6.0 / 20.0)  # +6.0 dB ≈ 1.995x
-        if torch is not None:
-            waveform = torch.clamp(waveform * gain_factor, -0.99, 0.99)
-        else:
-            waveform = waveform * gain_factor
+            waveform, sr = torchaudio.load(io.BytesIO(response.content))
 
-        return waveform, sr
+            # Ganancia +6 dB post-respuesta: se aplica directamente aquí porque el servidor con el
+            # parámetro volumen aplica un fade inicial; en local el aumento es instantáneo y sin rampa.
+            gain_factor = 10.0 ** (6.0 / 20.0)  # +6.0 dB ≈ 1.995x
+            if torch is not None:
+                waveform = torch.clamp(waveform * gain_factor, -0.99, 0.99)
+            else:
+                waveform = waveform * gain_factor
 
-    except requests.exceptions.HTTPError as e:
-        print(f"\nError HTTP Fish Audio: {e}")
-        if hasattr(response, "text") and response.text:
-            print(f"Respuesta Fish Audio: {response.text}")
-        return None, None
+            return waveform, sr
 
-    except Exception as e:
-        print(f"\nError Fish Audio: {e}")
-        return None, None
+        except requests.exceptions.RequestException as e:
+            if attempt < 2:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            print(f"\nError HTTP Fish Audio tras 3 intentos: {e}")
+            if "response" in locals() and hasattr(response, "text") and response.text:
+                print(f"Respuesta Fish Audio: {response.text}")
+            return None, None
+        except Exception as e:
+            print(f"\nError Fish Audio: {e}")
+            return None, None
+
+    return None, None
 
 
 def model_tts(text: str, language: str, audio_ref: str, **kwargs) -> tuple:

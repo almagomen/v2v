@@ -164,6 +164,41 @@ def clone_voice_segments(
         except Exception:
             pass
 
+    from concurrent.futures import ThreadPoolExecutor
+
+    # Preparamos las tareas de TTS para ejecución concurrente
+    tts_tasks = []
+    for idx, text_dict in enumerate(texts_to_process):
+        text = text_dict["text"]
+        speaker = text_dict.get("speaker", "SPEAKER_00")
+        orig_spk = text_dict.get("original_speaker") or speaker
+        target_spk = (speaker_map.get(orig_spk) if speaker_map else None) or speaker
+
+        from api.service import SPEAKER_OPTIONS
+        seg_audio_ref = SPEAKER_OPTIONS.get(target_spk, target_spk) if target_spk else audio_ref
+        if not seg_audio_ref:
+            seg_audio_ref = audio_ref
+
+        seq_num = only_indices[idx] if only_indices else idx + 1
+        tts_tasks.append((idx, text, seg_audio_ref, seq_num))
+
+    # Si hay múltiples segmentos, paralelizamos las solicitudes HTTP (hasta 5 hilos)
+    tts_results: dict[int, tuple] = {}
+    if len(tts_tasks) > 1:
+        max_workers = min(5, len(tts_tasks))
+        def _fetch_tts(item):
+            i, txt, voice_ref, s_num = item
+            try:
+                res = tts_fn(txt, language, voice_ref, **kwargs)
+                return i, res
+            except Exception as ex:
+                print(f"\n⚠️ Error en síntesis TTS #{s_num}: {ex}")
+                return i, (None, None)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for i, res in executor.map(_fetch_tts, tts_tasks):
+                tts_results[i] = res
+
     for idx, text_dict in enumerate(texts_to_process):
         text = text_dict["text"]
         start_time = text_dict["start"]
@@ -189,7 +224,11 @@ def clone_voice_segments(
         arr_en, rate_en = torchaudio.load(str(audio_en_path))
         dur_en = arr_en.shape[-1] / rate_en
 
-        arr, rate = tts_fn(text, language, seg_audio_ref, **kwargs)
+        if idx in tts_results:
+            arr, rate = tts_results[idx]
+        else:
+            arr, rate = tts_fn(text, language, seg_audio_ref, **kwargs)
+
         if arr is None or rate is None:
             continue
 

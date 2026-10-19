@@ -306,9 +306,13 @@ export function parseTarArchive(buffer: ArrayBuffer): Map<string, Blob> {
     offset += 512;
 
     if (fileSize > 0 && offset + fileSize <= bytes.length) {
-      if (filename.endsWith(".wav") || filename.includes(".wav")) {
+      const isWav = filename.endsWith(".wav") || filename.includes(".wav");
+      const isM4a = filename.endsWith(".m4a") || filename.includes(".m4a");
+      const isMp3 = filename.endsWith(".mp3") || filename.includes(".mp3");
+      if (isWav || isM4a || isMp3) {
         const fileContent = bytes.slice(offset, offset + fileSize);
-        result.set(filename, new Blob([fileContent], { type: "audio/wav" }));
+        const mimeType = isM4a ? "audio/mp4" : isMp3 ? "audio/mpeg" : "audio/wav";
+        result.set(filename, new Blob([fileContent], { type: mimeType }));
       }
       offset += Math.ceil(fileSize / 512) * 512;
     }

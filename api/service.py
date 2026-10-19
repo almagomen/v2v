@@ -177,6 +177,13 @@ def _run_pipeline(
                 update_job(job_id, videos=videos_data, progress=(idx + 0.5) / len(urls))
                 set_url_state(r.get("url", ""), "done", f"Listo (cache): {output_name}", index=idx, output_name=output_name, original_title=orig_title)
                 
+                # Pre-caching del paquete TAR en disco para entrega instantánea vía Cloudflare
+                try:
+                    from api.routes.files import ensure_audio_segments_tar
+                    ensure_audio_segments_tar(path.parent)
+                except Exception:
+                    pass
+
                 t_link_total = time.perf_counter() - t_link_start
                 print("=" * 60)
                 print(f"⏱️ RESUMEN DE TIEMPOS [Link {idx + 1}/{len(urls)}]: {output_name}")
@@ -227,6 +234,18 @@ def _run_pipeline(
 
             # Guardar segmentos actualizados (con emociones y duraciones TTS) — una sola escritura
             update_result_segments(path.parent, texts)
+
+            # Pre-empaquetado anticipado en background del TAR de segmentos para entrega instantánea vía Cloudflare
+            try:
+                t0_tar = time.perf_counter()
+                from api.routes.files import ensure_audio_segments_tar
+                tar_file = ensure_audio_segments_tar(path.parent)
+                t_tar = time.perf_counter() - t0_tar
+                if tar_file:
+                    sz_mb = tar_file.stat().st_size / (1024 * 1024)
+                    print(f"📦 [Pre-caching TAR] {len(paths_es)} segmentos empaquetados en {t_tar:.2f}s ({sz_mb:.1f}MB)")
+            except Exception as e:
+                print(f"⚠️ Error en pre-caching TAR: {e}")
 
             # El pipeline termina aquí. El render se hace desde Colab Export.
             # Recargar el manifiesto (register_segment lo actualizó iterativamente).
