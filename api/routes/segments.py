@@ -150,22 +150,26 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
     indices = sorted(set(req.seg_indices))
     sentences: list[str] = []
     valid_indices: list[int] = []
+    times_list: list[tuple[float, float]] = []
 
     for seg_idx in indices:
         if seg_idx < 1 or seg_idx > len(original_list):
             continue
+        orig_d = _segment_dict_at(original_list, seg_idx - 1)
         text = ""
         if req.custom_texts:
             text = str(req.custom_texts.get(str(seg_idx)) or req.custom_texts.get(seg_idx) or "").strip()
         if not text:
-            orig_d = _segment_dict_at(original_list, seg_idx - 1)
-            text = str(orig_d["text"]).strip()
+            text = str(orig_d.get("text", "")).strip()
         if not text:
             tts_d = _segment_dict_at(_tts_list, seg_idx - 1)
-            text = str(tts_d["text"]).strip()
+            text = str(tts_d.get("text", "")).strip()
         if text:
             sentences.append(text)
             valid_indices.append(seg_idx)
+            s_t = float(orig_d.get("start", 0.0))
+            e_t = float(orig_d.get("end", s_t + 2.0))
+            times_list.append((s_t, e_t))
 
     if not sentences:
         raise HTTPException(status_code=400, detail="No hay textos para retraducir")
@@ -176,6 +180,7 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
         sentences,
         target_lang=target_lang,
         source_lang=source_lang,
+        times=times_list if len(times_list) == len(sentences) else None,
     )
     if not translated or len(translated) != len(sentences):
         raise HTTPException(status_code=500, detail="Error al retraducir con Gemini")

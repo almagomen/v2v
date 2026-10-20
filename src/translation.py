@@ -63,10 +63,12 @@ def translate_text_list(
     source_lang: str = "en",
     model_name: Optional[str] = None,
     print_full_prompt: bool = False,
+    times: Optional[list[Tuple[float, float]]] = None,
 ) -> list[str] | None:
     """
     Traduce una lista de frases a un idioma objetivo usando Gemini (Interactions API).
-    Soporta cascada limpia de modelos (lite -> gemma) y rotación de API Keys.
+    Soporta traducción isométrica con presupuesto de palabras/tiempo estilo YouTube/DeepMind,
+    cascada limpia de modelos (lite -> gemma) y rotación de API Keys.
     """
     if not list_sentences:
         return []
@@ -80,17 +82,35 @@ def translate_text_list(
     target_lang_name = LANGUAGE_NAMES.get(target_lang, "español")
 
     total_count = len(list_sentences)
-    input_dict = {str(i + 1): s for i, s in enumerate(list_sentences)}
+    has_times = bool(times and len(times) == total_count)
+
+    input_dict = {}
+    for i, s in enumerate(list_sentences):
+        k = str(i + 1)
+        if has_times:
+            start_t, end_t = times[i]
+            dur = max(0.5, round(end_t - start_t, 1))
+            # Rango de palabras por segundo para habla humana natural en doblaje (~2.2 a 2.8 palabras/s)
+            min_w = max(1, int(dur * 2.2))
+            max_w = max(min_w + 1, int(dur * 2.8) + 1)
+            input_dict[k] = f"[{dur}s | ~{min_w}-{max_w} palabras]: {s}"
+        else:
+            input_dict[k] = s
+
+    pacing_instruction = """5. DOBLAJE ISOMÉTRICO (CONTROL DE PALABRAS Y TIEMPO):
+   Cada segmento incluye su duración estimada y rango objetivo de palabras: `[Xs | ~A-B palabras]: texto original`.
+   Ajusta la extensión de tu traducción en {target_lang_name} para situarte dentro de ese rango de palabras (`~A-B palabras`), garantizando que la síntesis de voz (TTS) hable a un ritmo 100% natural sin sonar acelerada ni arrastrada.
+   En tu JSON de salida entrega ÚNICAMENTE el texto limpio como string, SIN incluir las etiquetas de corchetes ni tiempos (no pongas `[Xs | ...]:`).""" if has_times else """5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
 
     prompt = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
 Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo.
 
 Directrices obligatorias:
-1. REGLA ESTRICTA 1-A-1: La entrada contiene EXACTAMENTE {total_count} frases indexadas con claves numéricas del "1" al "{total_count}". Tu salida DEBE ser un objeto JSON con EXACTAMENTE las mismas {total_count} claves numéricas (del "1" al "{total_count}").
-2. PROHIBIDO DIVIDIR O FUSIONAR: Cada clave numérica "N" representa un clip de audio individual fijado en el tiempo. NO agregues claves nuevas (ej. "{total_count + 1}"), NO omitas claves y NO dividas una frase en múltiples claves. Si una adaptación requiere dos oraciones, colócalas juntas dentro del mismo string de la clave correspondiente.
+1. REGLA ESTRICTA 1-A-1 E ISOMORFISMO: La entrada contiene EXACTAMENTE {total_count} frases indexadas con claves numéricas del "1" al "{total_count}". Tu salida DEBE ser un objeto JSON con EXACTAMENTE las mismas {total_count} claves numéricas (del "1" al "{total_count}").
+2. PROHIBIDO DIVIDIR, FUSIONAR O ADELANTAR FRASES: Cada clave numérica "N" representa un clip de audio individual fijado en el tiempo exacto del video original. NO agregues claves nuevas, NO omitas claves y NO traslades contenido entre claves. Si una frase original es una micro-expresión, conector o reacción (ej. "Y", "Listo", "Pronto", "Mira esto", "Funciona"), tradúcela de forma concisa y breve en SU PROPIA clave numérica "N". NUNCA tomes texto del segmento siguiente ("N+1") para rellenar la clave "N". La clave final "{total_count}" debe corresponder al cierre del video.
 3. REESCRIBE MANTENIENDO LA IDEA: No hagas una traducción literal o palabra por palabra. Reformula y reescribe preservando la misma idea central y sentido, usando expresiones coloquiales y naturales adecuadas al {target_lang_name}.
 4. VOZ HABLADA Y DOBLAJE: El texto será sintetizado por modelos de voz (TTS). La frase debe tener ritmo fonético natural, ser directa y sonar convincente y orgánica al ser escuchada.
-5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias.
+{pacing_instruction}
 6. COHERENCIA: Las frases forman parte de un diálogo o narración continua; preserva la coherencia temática y el flujo entre ellas.
 7. PRESERVACIÓN DE EMOCIONES: Si alguna frase original incluye marcadores de emoción entre corchetes como [happy], [whisper], [laughter], [sad], [excited], etc., CONSÉRVALOS en la posición correspondiente dentro de la frase reescrita.
 
@@ -176,13 +196,15 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         for i in range(1, total_count + 1):
                             val = parsed.get(str(i)) or parsed.get(i)
                             if val and isinstance(val, str) and val.strip():
-                                aligned_list.append(val.strip())
+                                clean_val = re.sub(r"^\[.*?\]:\s*", "", val).strip()
+                                aligned_list.append(clean_val if clean_val else list_sentences[i - 1])
                             else:
                                 aligned_list.append(list_sentences[i - 1])
                     elif isinstance(parsed, list):
                         for i in range(total_count):
                             if i < len(parsed) and isinstance(parsed[i], str) and parsed[i].strip():
-                                aligned_list.append(parsed[i].strip())
+                                clean_val = re.sub(r"^\[.*?\]:\s*", "", parsed[i]).strip()
+                                aligned_list.append(clean_val if clean_val else list_sentences[i])
                             else:
                                 aligned_list.append(list_sentences[i])
 

@@ -201,6 +201,7 @@ def run_main(
             texts,
             target_lang=translate,
             source_lang=detected_language,
+            times=times,
         )
         t_trans = time.perf_counter() - t0_trans
         if translated_texts and len(translated_texts) == len(result):

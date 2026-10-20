@@ -283,7 +283,7 @@ def clone_voice_segments(
             elif slowdown_range[0] < duration_ratio < slowdown_range[1]:
                 # Estiramiento para cubrir el espacio original (isocronía sin huecos de silencio)
                 desired_dur = dur_es + (dur_en - dur_es) * stretch_target_ratio
-                min_slow_speed = 0.65  # Límite de seguridad para evitar arrastre excesivo
+                min_slow_speed = 0.85  # Piso de seguridad de doblaje profesional: evita arrastre o voz ebria
                 max_slow_dur = dur_es / min_slow_speed
                 target_dur_sec = min(desired_dur, max_slow_dur, dur_en)
                 effective_slow_speed = dur_es / target_dur_sec if target_dur_sec > 0 else 1.0
