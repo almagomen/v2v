@@ -263,7 +263,7 @@ def clone_voice_segments(
         else:
             max_allowed_dur = None
 
-        if slowdown_range and stretch_target_ratio != 1.0:
+        if slowdown_range:
             if duration_ratio > 1.0:
                 if max_allowed_dur is not None and dur_es > max_allowed_dur:
                     # Choca con el siguiente segmento: acelerar a max_allowed_dur
@@ -281,9 +281,10 @@ def clone_voice_segments(
                         end=" ",
                     )
             elif slowdown_range[0] < duration_ratio < slowdown_range[1]:
-                # Estiramiento suave
+                # Estiramiento para cubrir el espacio original (isocronía sin huecos de silencio)
                 desired_dur = dur_es + (dur_en - dur_es) * stretch_target_ratio
-                max_slow_dur = dur_es / 0.85
+                min_slow_speed = 0.65  # Límite de seguridad para evitar arrastre excesivo
+                max_slow_dur = dur_es / min_slow_speed
                 target_dur_sec = min(desired_dur, max_slow_dur, dur_en)
                 effective_slow_speed = dur_es / target_dur_sec if target_dur_sec > 0 else 1.0
 
