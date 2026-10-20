@@ -22,6 +22,7 @@ from src.result_store import (
     create_result,
     register_url,
     lookup_folder_by_url,
+    is_complete_result,
 )
 
 
@@ -59,18 +60,25 @@ def process_video_queue(
                 if cached_folder_name:
                     folder = QUEUE_DIR / cached_folder_name
                     result_data = load_result(folder) if folder.exists() else None
-                    if result_data:
-                        video_files = [p for p in folder.glob("*.mp4") if not p.name.startswith("_")]
-                        if video_files:
-                            path = video_files[0]
+                    if is_complete_result(result_data):
+                        from src.assets import load_assets
+                        assets = load_assets(folder)
+                        merged_name = assets.get("merged") or assets.get("video_only")
+                        path = folder / merged_name if merged_name and (folder / merged_name).exists() else None
+                        if not path:
+                            video_files = [p for p in folder.glob("*.*") if p.suffix.lower() in (".mp4", ".mkv", ".webm") and not p.name.startswith("_")]
+                            if video_files:
+                                path = video_files[0]
+                        if path and path.exists():
                             t_cache = time.perf_counter() - t_url_pipeline_start
+                            out_title = result_data.get("output_name") or path.stem
                             results.append(
                                 {
                                     "path": path,
-                                    "output_name": result_data["output_name"],
+                                    "output_name": out_title,
                                     "url": u,
                                     "info": result_data.get("info", {}),
-                                    "texts": result_data["segments"],
+                                    "texts": result_data.get("segments", []),
                                     "src_lang": result_data.get("source_lang", "es"),
                                     "result": result_data.get("original_segments", []),
                                     "transcription_lang": result_data.get("source_lang", "es"),
@@ -78,7 +86,7 @@ def process_video_queue(
                                 }
                             )
                             found_in_cache = True
-                            print(f"♻️ Caché detectada por URL: {result_data['output_name']} ({t_cache:.2f}s)")
+                            print(f"♻️ Caché detectada por URL: {out_title} ({t_cache:.2f}s)")
 
             if found_in_cache:
                 continue
@@ -90,23 +98,24 @@ def process_video_queue(
             # --- Lógica de Caché por Path ---
             if not force_reprocess:
                 cached_data = load_result(path.parent)
-                if cached_data:
+                if is_complete_result(cached_data):
                     t_cache = time.perf_counter() - t_url_pipeline_start
+                    out_title = cached_data.get("output_name") or info.get("title") or path.stem
                     print(f"♻️ Cargando caché: {path.name}")
                     results.append(
                         {
                             "path": path,
-                            "output_name": cached_data["output_name"],
+                            "output_name": out_title,
                             "url": u,
                             "info": cached_data.get("info", {}),
-                            "texts": cached_data["segments"],
+                            "texts": cached_data.get("segments", []),
                             "src_lang": cached_data.get("source_lang", "es"),
                             "result": cached_data.get("original_segments", []),
                             "transcription_lang": cached_data.get("source_lang", "es"),
                             "cached": True,
                         }
                     )
-                    print(f"✅ {cached_data['output_name']} (cargado de caché en {t_cache:.2f}s)")
+                    print(f"✅ {out_title} (cargado de caché en {t_cache:.2f}s)")
                     continue
             # -----------------------
 

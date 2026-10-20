@@ -81,6 +81,14 @@ def load_result(folder: Path) -> Optional[dict]:
         return None
 
 
+def is_complete_result(data: Optional[dict]) -> bool:
+    """Verifica si los datos de result.json corresponden a un procesamiento completo (con segmentos e inferencia)."""
+    if not isinstance(data, dict):
+        return False
+    segments = data.get("segments")
+    return bool(segments and isinstance(segments, list) and len(segments) > 0 and data.get("output_name"))
+
+
 def save_result(folder: Path, data: dict) -> None:
     """Guarda result.json en la carpeta del job."""
     json_path = folder / RESULT_FILENAME
