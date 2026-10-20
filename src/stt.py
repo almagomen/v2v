@@ -199,7 +199,7 @@ def run_main(
             source_lang=detected_language,
         )
         t_trans = time.perf_counter() - t0_trans
-        if translated_texts:
+        if translated_texts and len(translated_texts) == len(result):
             translated_result = []
             for (s, e), txt, orig in zip(times, translated_texts, result):
                 seg_dict = dict(orig)
@@ -207,8 +207,17 @@ def run_main(
                 seg_dict["end"] = e
                 seg_dict["text"] = txt
                 translated_result.append(seg_dict)
+        elif translated_texts:
+            print(f"⚠️ Reconciliando {len(translated_texts)} traducciones con {len(result)} segmentos originales...", flush=True)
+            translated_result = []
+            for i, ((s, e), orig) in enumerate(zip(times, result)):
+                seg_dict = dict(orig)
+                seg_dict["start"] = s
+                seg_dict["end"] = e
+                seg_dict["text"] = translated_texts[i] if i < len(translated_texts) else orig.get("text", "")
+                translated_result.append(seg_dict)
         else:
-            print("⚠️ No se pudo traducir, usando texto original")
+            print("⚠️ No se pudo traducir, usando texto original", flush=True)
 
     # Inferencia asíncrona con resolución garantizada antes de retornar al pipeline
     fallback_summary = " ".join(t["text"] for t in (translated_result or result)) if (translated_result or result) else (title or "")

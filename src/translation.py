@@ -79,23 +79,33 @@ def translate_text_list(
     source_lang_name = LANGUAGE_NAMES.get(source_lang, "español")
     target_lang_name = LANGUAGE_NAMES.get(target_lang, "español")
 
+    total_count = len(list_sentences)
+    input_dict = {str(i + 1): s for i, s in enumerate(list_sentences)}
+
     prompt = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
 Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo.
 
 Directrices obligatorias:
-1. REESCRIBE LA FRASE MANTENIENDO LA IDEA: No hagas una traducción literal o palabra por palabra. Reformula y reescribe la oración preservando la misma idea central y sentido, usando expresiones coloquiales y naturales adecuadas al {target_lang_name}.
-2. VOZ HABLADA Y DOBLAJE: El texto será sintetizado por modelos de voz (TTS). La frase debe tener ritmo fonético natural, ser directa y sonar convincente y orgánica al ser escuchada.
-3. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias.
-4. COHERENCIA: Las frases forman parte de un diálogo o narración continua; preserva la coherencia temática y el flujo entre ellas.
-5. PRESERVACIÓN DE EMOCIONES: Si alguna frase original incluye marcadores de emoción entre corchetes como [happy], [whisper], [laughter], [sad], [excited], etc., CONSÉRVALOS en la posición correspondiente dentro de la frase reescrita.
+1. REGLA ESTRICTA 1-A-1: La entrada contiene EXACTAMENTE {total_count} frases indexadas con claves numéricas del "1" al "{total_count}". Tu salida DEBE ser un objeto JSON con EXACTAMENTE las mismas {total_count} claves numéricas (del "1" al "{total_count}").
+2. PROHIBIDO DIVIDIR O FUSIONAR: Cada clave numérica "N" representa un clip de audio individual fijado en el tiempo. NO agregues claves nuevas (ej. "{total_count + 1}"), NO omitas claves y NO dividas una frase en múltiples claves. Si una adaptación requiere dos oraciones, colócalas juntas dentro del mismo string de la clave correspondiente.
+3. REESCRIBE MANTENIENDO LA IDEA: No hagas una traducción literal o palabra por palabra. Reformula y reescribe preservando la misma idea central y sentido, usando expresiones coloquiales y naturales adecuadas al {target_lang_name}.
+4. VOZ HABLADA Y DOBLAJE: El texto será sintetizado por modelos de voz (TTS). La frase debe tener ritmo fonético natural, ser directa y sonar convincente y orgánica al ser escuchada.
+5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias.
+6. COHERENCIA: Las frases forman parte de un diálogo o narración continua; preserva la coherencia temática y el flujo entre ellas.
+7. PRESERVACIÓN DE EMOCIONES: Si alguna frase original incluye marcadores de emoción entre corchetes como [happy], [whisper], [laughter], [sad], [excited], etc., CONSÉRVALOS en la posición correspondiente dentro de la frase reescrita.
 
-Texto original ({source_lang_name}):
+Texto original ({source_lang_name}) indexado por segmento:
 ---
-{json.dumps(list_sentences, indent=2, ensure_ascii=False)}
+{json.dumps(input_dict, indent=2, ensure_ascii=False)}
 ---
 
-Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea la frase reescrita en el mismo orden:
-["frase 1 reescrita", "frase 2 reescrita", ...]"""
+Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves numéricas del "1" al "{total_count}":
+{{
+  "1": "frase 1 adaptada al {target_lang_name}",
+  "2": "frase 2 adaptada al {target_lang_name}",
+  ...
+  "{total_count}": "frase {total_count} adaptada al {target_lang_name}"
+}}"""
 
     # En la celda del cuaderno se puede activar el prompt completo; en el panel V2V mantenemos logs limpios y descriptivos
     if print_full_prompt:
@@ -153,13 +163,35 @@ Devuelve ÚNICAMENTE una lista JSON válida de strings, donde cada elemento sea 
 
                 if raw_text:
                     # Extraer bloque JSON si viene envuelto en markdown
-                    match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw_text, re.DOTALL)
-                    clean_json = match.group(1) if match else raw_text
+                    clean_json = raw_text.strip()
+                    match_obj = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
+                    if match_obj:
+                        clean_json = match_obj.group(1)
+                    else:
+                        match_arr = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw_text, re.DOTALL)
+                        if match_arr:
+                            clean_json = match_arr.group(1)
+
                     parsed = json.loads(clean_json)
 
-                    if isinstance(parsed, list):
-                        print(f"⏱️ [Etapa: Traducción (Gemini)] Completada con '{model}' en {duration:.1f}s ({len(parsed)} frases)", flush=True)
-                        return parsed
+                    aligned_list: list[str] = []
+                    if isinstance(parsed, dict):
+                        for i in range(1, total_count + 1):
+                            val = parsed.get(str(i)) or parsed.get(i)
+                            if val and isinstance(val, str) and val.strip():
+                                aligned_list.append(val.strip())
+                            else:
+                                aligned_list.append(list_sentences[i - 1])
+                    elif isinstance(parsed, list):
+                        for i in range(total_count):
+                            if i < len(parsed) and isinstance(parsed[i], str) and parsed[i].strip():
+                                aligned_list.append(parsed[i].strip())
+                            else:
+                                aligned_list.append(list_sentences[i])
+
+                    if aligned_list and len(aligned_list) == total_count:
+                        print(f"⏱️ [Etapa: Traducción (Gemini)] Completada con '{model}' en {duration:.1f}s ({len(aligned_list)} frases 1-a-1 verificadas)", flush=True)
+                        return aligned_list
 
             except Exception as e:
                 last_error = e

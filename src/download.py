@@ -1,6 +1,6 @@
 """
 Descarga de videos YouTube (yt-dlp) y separación de voces (BS-RoFormer).
-Los activos generados se registran en v2v_assets.json de la carpeta del job.
+Los activos generados se registran en result.json ('assets') de la carpeta del job.
 """
 
 import io
@@ -336,7 +336,7 @@ def download_video(
     """
     Descarga un video de YouTube con yt-dlp (keepvideo=True).
 
-    Registra en v2v_assets.json:
+    Registra en result.json ('assets'):
       - merged:     video resultante (video+audio mezclados por ffmpeg)
       - video_only: stream de video intermedio de yt-dlp (ej. f137.mp4)
       - audio_only: stream de audio intermedio de yt-dlp (ej. f251.webm)
@@ -403,7 +403,7 @@ def download_video(
 
     # --- Registro determinista en manifiesto ---
     folder = media_path.parent
-    asset_update: dict = {"merged": str(media_path)}
+    asset_update: dict = {"merged": media_path.name}
 
     requested = info.get("requested_formats") or []
     
@@ -479,9 +479,9 @@ def download_video(
     print(f"⏱️ [Descarga] Completada en {dl_elapsed:.1f}s ({dl_speed:.1f}MiB/s)")
 
     if v_cand and v_cand.exists():
-        asset_update["video_only"] = str(v_cand)
+        asset_update["video_only"] = v_cand.name
     if a_cand and a_cand.exists():
-        asset_update["audio_only"] = str(a_cand)
+        asset_update["audio_only"] = a_cand.name
 
     update_assets(folder, **asset_update)
     return media_path, info
@@ -500,7 +500,7 @@ def separate_vocals(
         (El solapamiento Dual-GPU se fija internamente en 2.0s con crossfade para garantizar
         que no exista ningún 'tic' o discontinuidad en el punto de corte).
 
-    Registra en v2v_assets.json:
+    Registra en result.json ('assets'):
       - vocals:    pista de voz extraída (vocals.wav)
       - no_vocals: pista instrumental sin voz (no_vocals.wav)
 
@@ -588,8 +588,8 @@ def separate_vocals(
     # --- Registro determinista en manifiesto ---
     update_assets(
         output_dir,
-        vocals=str(vocals_path) if vocals_path.exists() else None,
-        no_vocals=str(no_vocals_path) if no_vocals_path.exists() else None,
+        vocals=vocals_path.name if vocals_path.exists() else None,
+        no_vocals=no_vocals_path.name if no_vocals_path.exists() else None,
     )
 
     return vocals_path, no_vocals_path

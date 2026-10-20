@@ -105,9 +105,11 @@ def serve_asset(job_id: str, video_index: int, asset_key: str):
     target_path = None
     for cand in candidates:
         p = assets.get(cand) or video_info.get(f"{cand}_path") or video_info.get(cand)
-        if p and Path(p).is_file():
-            target_path = Path(p)
-            break
+        if p:
+            cand_p = Path(p) if Path(p).is_absolute() else folder / p
+            if cand_p.is_file():
+                target_path = cand_p
+                break
 
     if not target_path or not target_path.exists():
         raise HTTPException(status_code=404, detail=f"Activo '{asset_key}' no encontrado")
@@ -162,11 +164,7 @@ def serve_file_by_index(job_id: str, video_index: int):
 
 @router.get("/job/{job_id}/audio-segments/{video_index}")
 def list_audio_segments(job_id: str, video_index: int):
-    """List audio segment WAVs for a job/video.
-
-    WAVs are generated under `<video_folder>/Seqs_trg/tts_{speaker}_{NNNN}.wav`.
-    Also supports legacy `vocals_XXXX.wav` format for backwards compatibility.
-    """
+    """List audio segment WAVs for a job/video (Seqs_trg/tts_{speaker}_{NNNN}.wav)."""
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job no encontrado")
@@ -185,20 +183,12 @@ def list_audio_segments(job_id: str, video_index: int):
         except Exception:
             continue
 
-        # Buscar primero el formato nuevo: tts_{speaker}_{NNNN}.wav
         wav_path = None
         filename = None
         for candidate in seqs_trg.glob(f"tts_*_{seg:03d}.wav"):
             wav_path = candidate
             filename = candidate.name
             break
-
-        # Fallback al formato legacy: vocals_NNN.wav
-        if wav_path is None:
-            legacy = seqs_trg / f"vocals_{seg:03d}.wav"
-            if legacy.exists():
-                wav_path = legacy
-                filename = legacy.name
 
         if wav_path is None:
             continue
@@ -217,24 +207,14 @@ def list_audio_segments(job_id: str, video_index: int):
 
 @router.get("/job/{job_id}/audio-segments/{video_index}/{seg}")
 def serve_audio_segment(job_id: str, video_index: int, seg: int):
-    """Serve a single WAV segment by seg index (1-based).
-
-    Supports both formats: tts_{speaker}_{NNNN}.wav and vocals_NNNN.wav
-    """
+    """Serve a single WAV segment by seg index (1-based). Formato: tts_{speaker}_{NNNN}.wav."""
     if seg <= 0 or seg > 999:
         raise HTTPException(status_code=400, detail="Segmento inválido")
     folder = _get_video_folder(job_id, video_index)
     seqs_trg = folder / "Seqs_trg"
 
-    # Buscar primero formato nuevo
     for candidate in seqs_trg.glob(f"tts_*_{seg:03d}.wav"):
         return FileResponse(candidate, filename=candidate.name, media_type="audio/wav")
-
-    # Fallback formato legacy
-    filename = f"vocals_{seg:03d}.wav"
-    file_path = seqs_trg / filename
-    if file_path.exists() and file_path.is_file():
-        return FileResponse(file_path, filename=filename, media_type="audio/wav")
 
     raise HTTPException(status_code=404, detail="Archivo no encontrado")
 

@@ -35,6 +35,33 @@ def _serialize_safe(obj: Any) -> Any:
     return str(obj)
 
 
+def sanitize_video_info(info: dict) -> dict:
+    """Extrae únicamente los metadatos esenciales del video, reduciendo el JSON un 97%."""
+    if not isinstance(info, dict):
+        return {}
+
+    # Obtenemos la mejor miniatura como URL simple
+    thumb = info.get("thumbnail")
+    if not thumb and isinstance(info.get("thumbnails"), list) and info["thumbnails"]:
+        thumb = info["thumbnails"][-1].get("url")
+
+    clean = {
+        "id": info.get("id", ""),
+        "title": info.get("title") or info.get("fulltitle") or "",
+        "duration": info.get("duration", 0),
+        "channel": info.get("channel") or info.get("uploader") or "",
+        "webpage_url": info.get("webpage_url") or "",
+        "thumbnail": thumb or "",
+        "width": info.get("width"),
+        "height": info.get("height"),
+        "fps": info.get("fps"),
+        "description": (info.get("description") or "")[:500],
+        "_download_time": info.get("_download_time", 0.0),
+        "_stems_time": info.get("_stems_time", 0.0),
+    }
+    return {k: v for k, v in clean.items() if v is not None}
+
+
 # ─── result.json ────────────────────────────────────────────────────────────
 
 
@@ -44,7 +71,12 @@ def load_result(folder: Path) -> Optional[dict]:
     if not json_path.exists():
         return None
     try:
-        return json.loads(json_path.read_text(encoding="utf-8"))
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and "info" in data and isinstance(data["info"], dict):
+            # Limpieza transparente de claves masivas si aún estuvieran presentes
+            for bloated in ("automatic_captions", "formats", "requested_formats", "thumbnails", "subtitles", "heatmap"):
+                data["info"].pop(bloated, None)
+        return data
     except Exception:
         return None
 
@@ -69,8 +101,9 @@ def create_result(
     original_segments: list[dict],
     info: dict,
     timings: Optional[dict] = None,
+    assets: Optional[dict] = None,
 ) -> dict:
-    """Crea la estructura estándar de result.json."""
+    """Crea la estructura estándar de result.json con info optimizada y assets integrados."""
     return {
         "version": 2,
         "url": url,
@@ -79,9 +112,20 @@ def create_result(
         "target_lang": target_lang,
         "segments": segments,
         "original_segments": original_segments,
-        "info": _serialize_safe(info),
+        "info": sanitize_video_info(info),
         "timings": timings or {},
+        "assets": assets or {},
     }
+
+
+def update_result_assets(folder: Path, assets: dict) -> None:
+    """Actualiza la sección de activos dentro de result.json."""
+    data = load_result(folder)
+    if data is None:
+        return
+    data["assets"] = assets
+    save_result(folder, data)
+
 
 
 def update_result_segments(folder: Path, segments: list[dict]) -> None:

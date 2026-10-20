@@ -46,15 +46,9 @@ def _segment_dict_at(items: list, index: int) -> dict:
 
 
 def _find_tts_filename(folder: Path, seg: int) -> str | None:
-    seqs_trg = folder / "Seqs_trg"
-    if not seqs_trg.exists():
-        return None
-    for candidate in seqs_trg.glob(f"tts_*_{seg:03d}.wav"):
-        return candidate.name
-    legacy = seqs_trg / f"vocals_{seg:03d}.wav"
-    if legacy.exists():
-        return legacy.name
-    return None
+    from src.assets import get_segment
+    cand = get_segment(folder, seg)
+    return cand.name if cand else None
 
 
 @router.get("/job/{job_id}/segments-editor/{video_index}", response_model=SegmentsEditorResponse)

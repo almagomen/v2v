@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from api.job_store import get_job
 from src.config import QUEUE_DIR, TEMP_DIR, GPU_COUNT
-from src.assets import load_assets, update_assets, register_segment
+from src.assets import load_assets, update_assets, get_segment
 from src.download import to_safe_name
 from src.edit_utils import get_video_bitrate
 
@@ -138,20 +138,14 @@ def _validate_manifest_integrity(folder: Path) -> list[str]:
     for key in critical_keys:
         path_str = assets.get(key)
         if path_str:
-            p = Path(path_str)
+            p = Path(path_str) if Path(path_str).is_absolute() else folder / path_str
             if not p.exists():
                 warnings.append(f"Asset crítico '{key}' no existe en disco: {path_str}")
 
-    # Verificar segmentos TTS
-    segments = assets.get("segments", {})
-    if isinstance(segments, dict):
-        for seg_idx, seg_path_str in segments.items():
-            if seg_path_str:
-                p = Path(seg_path_str)
-                if not p.exists():
-                    warnings.append(
-                        f"Segmento TTS #{seg_idx} no existe: {seg_path_str}"
-                    )
+    # Verificar presencia de segmentos TTS en Seqs_trg
+    seqs_dir = folder / "Seqs_trg"
+    if not seqs_dir.is_dir() or not any(seqs_dir.glob("*.wav")):
+        warnings.append("No se encontraron segmentos TTS sintetizados en 'Seqs_trg/'")
 
     return warnings
 
@@ -199,8 +193,7 @@ def _resolve_media_path(
     folder: Path, media_name: str, job_id: str = None, video_index: int = None
 ) -> Path:
     """
-    Resolves a media_name to an absolute path.
-    Prioritizes the v2v_assets.json manifest (New Logic).
+    Resolves a media_name to an absolute path using result.json['assets'].
     """
     # 0. Normalizar media_name para extraer solo el nombre base (el frontend manda Carpeta/Archivo.mp4)
     file_name = Path(media_name).name
@@ -241,26 +234,19 @@ def _resolve_media_path(
             if path.exists():
                 return path
 
-    segments_map = assets.get("segments", {}) or {}
-
-    # 2.5 Segmentos TTS/gen por índice (antes que búsqueda por basename: evita copias
-    # obsoletas en claves sueltas del manifiesto tras upload o regeneración)
+    # 2.5 Segmentos TTS/gen por índice directo desde Seqs_trg
     import re
 
-    tts_match = re.search(r"(?:tts_|gen_).*_(\d+)\.wav$", file_name, re.I)
+    tts_match = re.search(r"tts_.*?_(\d+)\.wav$", file_name, re.I)
     seg_idx = (
-        str(int(tts_match.group(1)))
+        int(tts_match.group(1))
         if tts_match
-        else (file_name if file_name.isdigit() else None)
+        else (int(file_name) if file_name.isdigit() else None)
     )
-    if seg_idx:
-        seg_path_str = segments_map.get(seg_idx)
-        if seg_path_str:
-            path = Path(seg_path_str)
-            if not path.is_absolute():
-                path = folder / path
-            if path.exists():
-                return path
+    if seg_idx is not None:
+        seg_path = get_segment(folder, seg_idx)
+        if seg_path and seg_path.exists():
+            return seg_path
 
     # 2.6 Búsqueda exhaustiva en el manifiesto por nombre de archivo
     for val in assets.values():
@@ -275,17 +261,14 @@ def _resolve_media_path(
                     if cand_ext.exists():
                         return cand_ext
 
-    for seg_path in segments_map.values():
-        if isinstance(seg_path, str):
-            p_seg = Path(seg_path)
-            if p_seg.name == file_name or p_seg.stem == Path(file_name).stem:
-                p_cand = p_seg if p_seg.is_absolute() else folder / p_seg
-                if p_cand.exists():
-                    return p_cand
-                for ext in [".wav", ".m4a", ".mp4"]:
-                    cand_ext = p_cand.with_suffix(ext)
-                    if cand_ext.exists():
-                        return cand_ext
+    # 2.6 Búsqueda en Seqs_trg por nombre de archivo
+    seqs_cand = folder / "Seqs_trg" / file_name
+    if seqs_cand.exists():
+        return seqs_cand
+    for ext in [".wav", ".m4a", ".mp4"]:
+        cand_ext = seqs_cand.with_suffix(ext)
+        if cand_ext.exists():
+            return cand_ext
 
     # 2.7 Búsqueda directa en la carpeta del video en disco
     cand_direct = folder / file_name
@@ -380,16 +363,15 @@ async def upload_media(
     content = await file.read()
     dest.write_bytes(content)
 
-    # Si es un segmento de audio (tts_*, gen_*, vocals_*), sincronizarlo también en Seqs_trg
+    # Si es un segmento de audio (tts_*), sincronizarlo también en Seqs_trg
     import re
-    tts_match = re.search(r"(?:tts_|gen_|vocals_).*?_(\d+)\.wav$", safe_filename, re.I)
+    tts_match = re.search(r"tts_.*?_(\d+)\.wav$", safe_filename, re.I)
     if tts_match:
         seg_idx = int(tts_match.group(1))
         seqs_dir = folder / "Seqs_trg"
         seqs_dir.mkdir(parents=True, exist_ok=True)
         dest_seqs = seqs_dir / safe_filename
         dest_seqs.write_bytes(content)
-        register_segment(folder, seg_idx, dest_seqs)
 
     # Registrar el archivo en el manifiesto para que el renderizador lo encuentre
     update_assets(folder, **{safe_filename: str(dest)})
@@ -403,7 +385,7 @@ async def upload_media(
 
 @router.get("/render/manifest/{job_id}/{video_index}")
 async def get_rendered_manifest(job_id: str, video_index: int):
-    """Obtiene el manifiesto v2v_assets.json actual para un video específico."""
+    """Obtiene los activos actuales desde result.json['assets'] para un video específico."""
     folder = _job_folder(job_id, video_index)
     return load_assets(folder)
 
@@ -1154,7 +1136,7 @@ async def set_gemini_default_model(req: SetDefaultGeminiModelRequest):
 async def regenerate_title(req: RegenerateTitleRequest):
     """
     Regenera el título viral usando Gemini o aplica un nombre manual.
-    Actualiza v2v_assets.json, result.json, y el estado del job en memoria.
+    Actualiza result.json y el estado del job en memoria.
     """
     import re
     from src.assets import update_assets, load_assets
@@ -1191,7 +1173,6 @@ async def regenerate_title(req: RegenerateTitleRequest):
         if not clean_name:
             clean_name = "video_export"
 
-        update_assets(folder, output_name=clean_name, viral_title=clean_name)
         update_result_output_name(folder, clean_name)
 
         if req.job_id:
@@ -1223,7 +1204,7 @@ async def regenerate_title(req: RegenerateTitleRequest):
         info = result_data.get("info", {})
         original_title = info.get("title", "") if isinstance(info, dict) else ""
 
-    # Fallback a v2v_assets.json si falta info
+    # Fallback a assets si falta info
     assets = load_assets(folder)
     if not cached_url:
         cached_url = assets.get("url", "")
@@ -1253,7 +1234,6 @@ async def regenerate_title(req: RegenerateTitleRequest):
     clean_title = re.sub(r'[/\\:*?"<>|\n]', " ", new_title).strip()
     clean_title = re.sub(r" {2,}", " ", clean_title)
 
-    update_assets(folder, output_name=clean_title, viral_title=clean_title)
     update_result_output_name(folder, clean_title)
 
     if req.job_id:

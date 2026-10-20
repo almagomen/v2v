@@ -133,6 +133,9 @@ def process_video_queue(
             source_lang = run_res[3]
             stt_timings = run_res[4]
 
+            from src.assets import load_assets
+            existing_assets = load_assets(path.parent)
+
             # Guardar resultado en JSON y registrar en índice
             result_data = create_result(
                 url=u,
@@ -147,12 +150,10 @@ def process_video_queue(
                     "stems": info.get("_stems_time", 0.0) if isinstance(info, dict) else 0.0,
                     **stt_timings,
                 },
+                assets=existing_assets,
             )
             save_result(path.parent, result_data)
             register_url(u, path.parent.name)
-
-            from src.assets import update_assets
-            update_assets(path.parent, output_name=output_name)
 
             timings = result_data["timings"]
 

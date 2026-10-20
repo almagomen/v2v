@@ -248,7 +248,7 @@ def _run_pipeline(
                 print(f"⚠️ Error en pre-caching TAR: {e}")
 
             # El pipeline termina aquí. El render se hace desde Colab Export.
-            # Recargar el manifiesto (register_segment lo actualizó iterativamente).
+            # Cargar los activos base del video (rutas relativas limpias).
             assets = load_assets(path.parent)
             segments = make_segments(texts)
             videos_data.append(build_entry(idx, path, output_name, segments, assets, r.get("url", "")))

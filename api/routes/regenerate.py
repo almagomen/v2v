@@ -288,10 +288,6 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     texts_original.append(new_segment)
     update_result_segments(path.parent, texts_original)
 
-    # Registrar en el manifiesto de activos físicos
-    from src.assets import register_segment, update_assets
-    register_segment(path.parent, new_seg_idx, audio_es_path)
-    update_assets(path.parent, **{audio_es_path.name: str(audio_es_path)})
 
     # Sincronizar en memoria con el job si existe
     if req.job_id:

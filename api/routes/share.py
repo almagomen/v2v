@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 
 from api.job_store import get_job
 from src.config import TEMP_DIR
+from api.routes.files import _get_video_folder
 from api.routes.render import upload_to_catbox
 
 router = APIRouter(prefix="/api", tags=["share"])
@@ -25,11 +26,12 @@ def share_to_catbox(job_id: str, video_index: int):
 
     video = videos[video_index]
 
+    folder = _get_video_folder(job_id, video_index)
     output_path = None
     for key in ("video_path", "video_only_path", "output_video_path"):
         p = video.get(key)
         if p:
-            candidate = Path(p)
+            candidate = Path(p) if Path(p).is_absolute() else folder / p
             if candidate.exists():
                 output_path = candidate
                 break
@@ -62,11 +64,12 @@ def download_all_zip(job_id: str):
     output_paths: list[Path] = []
     videos = job.get("videos", [])
 
-    for video in videos:
+    for v_idx, video in enumerate(videos):
+        folder = _get_video_folder(job_id, v_idx)
         for key in ("video_path", "video_only_path", "output_video_path"):
             p = video.get(key)
             if p:
-                candidate = Path(p)
+                candidate = Path(p) if Path(p).is_absolute() else folder / p
                 if candidate.exists() and candidate not in output_paths:
                     output_paths.append(candidate)
                     break

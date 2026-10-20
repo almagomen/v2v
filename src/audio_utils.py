@@ -12,7 +12,6 @@ except ImportError:
     torch = None
     torchaudio = None
 
-from src.assets import register_segment
 
 
 def _build_atempo_filter(tempo: float) -> str:
@@ -350,9 +349,6 @@ def clone_voice_segments(
         audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.wav"
         torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
         path_es.append(audio_es_path)
-        # Registrar ruta exacta del segmento en el manifiesto de activos
-        if register:
-            register_segment(path.parent, seq_num, audio_es_path)
         start_samples = int(start_time * rate)
         times.append(start_samples)
 
