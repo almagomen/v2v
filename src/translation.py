@@ -114,9 +114,6 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         print("-" * 60, flush=True)
         print(prompt, flush=True)
         print("=" * 60 + "\n", flush=True)
-    else:
-        print(f"🌐 [Traducción] Preparadas {len(list_sentences)} frases para adaptar ({source_lang_name} -> {target_lang_name})...", flush=True)
-
     # Modelos a intentar en orden: el solicitado (o DEFAULT), con fallback a los populares
     models_to_try = [model_name.strip()] if (model_name and model_name.strip()) else [DEFAULT_TRANSLATION_MODEL]
     for m in POPULAR_GEMINI_MODELS:
@@ -132,7 +129,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         for k_idx, key in enumerate(keys_to_attempt):
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
 
-            print(f"🌐 [Traducción] Probando '{model}' (Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag})...", flush=True)
+            print(f"🌐 [Traducción {source_lang_name} -> {target_lang_name}] Probando '{model}' (Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag})...", flush=True)
             t_start = time.perf_counter()
 
             try:

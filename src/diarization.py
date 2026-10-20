@@ -123,10 +123,29 @@ def assign_speakers_by_word(whisper_result: Any, diarization: Any) -> list[dict]
 
 def smart_group_segments_strict(
     assigned_segments: list[dict],
-    max_gap: float = 1.5,
-    max_duration: float = 10,
+    max_gap: float = 1.2,
+    target_duration: float = 7.0,
+    min_duration: float = 2.0,
+    min_sentence_gap: float = 0.40,
+    min_clause_gap: float = 0.18,
+    min_silence_gap: float = 0.35,
+    max_duration: float | None = None,
 ) -> list[dict]:
-    """Agrupa segmentos priorizando integridad de frase. No corta en comas."""
+    """
+    Agrupa palabras en segmentos de longitud natural orientados a target_duration.
+
+    Reglas:
+    1. Si la duración acumulada está dentro de target_duration (<= 7s) y alcanza min_duration (>= 2s):
+       Corta en signos fuertes (. ! ? ¡ ¿) SI Y SOLO SI el silencio posterior (gap) es >= min_sentence_gap (0.40s).
+       Evita falsos positivos en abreviaturas (node.js, Dr., etc.) y frases demasiado cortas.
+    2. Si se supera target_duration (> 7s):
+       Paso 1: Busca hacia adelante cualquier signo (. ! ? , ; : - —) que tenga un gap posterior >= min_clause_gap (0.18s).
+       Paso 2 (sin signos en adelante): Busca el primer gap >= min_silence_gap (0.35s).
+              Si ninguno lo supera, elige el mayor gap del tramo.
+    """
+    if max_duration is not None and target_duration == 7.0:
+        target_duration = float(max_duration)
+
     if not assigned_segments:
         return []
 
@@ -141,9 +160,8 @@ def smart_group_segments_strict(
     if not all_words:
         return []
 
-    grouped_segments = []
-    current_words = [all_words[0]]
     strong_punct = re.compile(r"[.!?¡¿]")
+    any_punct = re.compile(r"[.!?,;:—–\-]")
 
     def create_segment_from_words(words_list: list[dict]) -> dict | None:
         if not words_list:
@@ -158,45 +176,111 @@ def smart_group_segments_strict(
             "words": words_list,
         }
 
-    for i in range(1, len(all_words)):
-        next_word = all_words[i]
-        if not current_words:
-            current_words.append(next_word)
-            continue
+    grouped_segments = []
+    n = len(all_words)
+    start_idx = 0
 
-        last_word = current_words[-1]
-        gap = next_word["start"] - last_word["end"]
-        speaker_changed = next_word["speaker"] != current_words[0]["speaker"]
-        gap_too_big = gap > max_gap
+    while start_idx < n:
+        speaker = all_words[start_idx]["speaker"]
+        seg_start = all_words[start_idx]["start"]
+        chosen_cut_idx = None
+        curr = start_idx
 
-        if speaker_changed or gap_too_big:
-            seg = create_segment_from_words(current_words)
-            if seg:
-                grouped_segments.append(seg)
-            current_words = [next_word]
-            continue
+        while curr < n:
+            # 1. Corte inmediato si cambia el hablante (diarización)
+            if curr > start_idx and all_words[curr]["speaker"] != speaker:
+                chosen_cut_idx = curr - 1
+                break
 
-        current_words.append(next_word)
-        current_duration = current_words[-1]["end"] - current_words[0]["start"]
+            # 2. Comprobaciones con la palabra anterior
+            if curr > start_idx:
+                prev_end = all_words[curr - 1]["end"]
+                gap_before_curr = all_words[curr]["start"] - prev_end
+                dur_up_to_prev = prev_end - seg_start
 
-        if current_duration > max_duration:
-            split_index = -1
-            for idx in range(len(current_words) - 1, -1, -1):
-                if strong_punct.search(current_words[idx]["word"]):
-                    split_index = idx
+                # Corte por silencio largo absoluto (> max_gap, ej. 1.2s)
+                if gap_before_curr > max_gap:
+                    chosen_cut_idx = curr - 1
                     break
-            if split_index != -1:
-                part_one = current_words[: split_index + 1]
-                part_two = current_words[split_index + 1:]
-                seg = create_segment_from_words(part_one)
-                if seg:
-                    grouped_segments.append(seg)
-                current_words = part_two
 
-    if current_words:
-        seg = create_segment_from_words(current_words)
+                # [DENTRO DEL TARGET (dur_up_to_prev <= target_duration)]:
+                # Corta en punto fuerte SI Y SOLO SI hay silencio real >= min_sentence_gap (0.40s)
+                # y al menos min_duration acumulados para evitar microfrases de 1 palabra.
+                if dur_up_to_prev <= target_duration and dur_up_to_prev >= min_duration:
+                    if strong_punct.search(all_words[curr - 1]["word"]) and gap_before_curr >= min_sentence_gap:
+                        chosen_cut_idx = curr - 1
+                        break
+
+            # Duración acumulada incluyendo la palabra curr
+            dur_curr = all_words[curr]["end"] - seg_start
+
+            # 3. [AL SUPERAR EL TARGET (dur_curr >= target_duration)]:
+            if dur_curr >= target_duration:
+                # Paso 1: Explorar hacia adelante buscando cualquier signo con gap real >= min_clause_gap
+                forward_cut = None
+                forward_indices = []
+                fwd = curr
+                while fwd < n:
+                    if all_words[fwd]["speaker"] != speaker:
+                        break
+                    if fwd > start_idx and (all_words[fwd]["start"] - all_words[fwd - 1]["end"]) > max_gap:
+                        break
+
+                    forward_indices.append(fwd)
+
+                    if any_punct.search(all_words[fwd]["word"]):
+                        if fwd + 1 < n and all_words[fwd + 1]["speaker"] == speaker:
+                            next_gap = all_words[fwd + 1]["start"] - all_words[fwd]["end"]
+                        else:
+                            next_gap = min_clause_gap
+
+                        if next_gap >= min_clause_gap:
+                            forward_cut = fwd
+                            break
+                    fwd += 1
+
+                if forward_cut is not None:
+                    chosen_cut_idx = forward_cut
+                    break
+
+                # Paso 2 (Si no hay signos de puntuación en adelante):
+                # Cortar en el primer gap >= min_silence_gap (0.35s); si ninguno lo supera, elegir el mayor gap
+                first_valid_gap_idx = None
+                largest_gap_val = -1.0
+                largest_gap_idx = curr
+
+                for f_idx in forward_indices:
+                    if f_idx + 1 < n and all_words[f_idx + 1]["speaker"] == speaker:
+                        g = all_words[f_idx + 1]["start"] - all_words[f_idx]["end"]
+                        if g >= min_silence_gap and first_valid_gap_idx is None:
+                            first_valid_gap_idx = f_idx
+                        if g > largest_gap_val:
+                            largest_gap_val = g
+                            largest_gap_idx = f_idx
+
+                if first_valid_gap_idx is not None:
+                    chosen_cut_idx = first_valid_gap_idx
+                elif largest_gap_idx is not None and largest_gap_idx >= curr:
+                    chosen_cut_idx = largest_gap_idx
+                else:
+                    chosen_cut_idx = curr
+                break
+
+            # Si es la última palabra del audio completo
+            if curr == n - 1:
+                chosen_cut_idx = curr
+                break
+
+            curr += 1
+
+        if chosen_cut_idx is None or chosen_cut_idx < start_idx:
+            chosen_cut_idx = start_idx
+
+        seg_words = all_words[start_idx : chosen_cut_idx + 1]
+        seg = create_segment_from_words(seg_words)
         if seg:
             grouped_segments.append(seg)
+        start_idx = chosen_cut_idx + 1
 
     return grouped_segments
 
@@ -206,13 +290,19 @@ def process_audio(
     diarization_result: Any,
     group_segments: bool = True,
     include_words: bool = False,
-    max_gap: float = 1.5,
-    max_duration: float = 10,
+    max_gap: float = 1.2,
+    target_duration: float = 7.0,
+    min_duration: float = 2.0,
+    max_duration: float | None = None,
 ) -> list[dict]:
     assigned_data = assign_speakers_by_word(whisper_result, diarization_result)
     if group_segments:
         assigned_data = smart_group_segments_strict(
-            assigned_data, max_gap=max_gap, max_duration=max_duration
+            assigned_data,
+            max_gap=max_gap,
+            target_duration=target_duration,
+            min_duration=min_duration,
+            max_duration=max_duration,
         )
     if not include_words:
         for seg in assigned_data:

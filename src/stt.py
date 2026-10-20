@@ -47,13 +47,17 @@ def get_whisper_model():
 def transcribe_and_process(
     media_path: Path | str | None = None,
     segments: Any = None,
-    gap: float = 1,
-    duration: int = 7,
+    gap: float = 1.0,
+    target_duration: float = 7.0,
+    duration: Optional[int] = None,
 ) -> Tuple[list[dict], str, dict]:
     """
     Transcribe y procesa con diarización en paralelo cuando hay 2 GPUs.
     Returns: (result, detected_language, timings)
     """
+    if duration is not None:
+        target_duration = float(duration)
+
     if segments is None:
         if media_path is None:
             raise ValueError("Se requiere media_path o segments.")
@@ -97,7 +101,7 @@ def transcribe_and_process(
             segments,
             diarize_segments,
             group_segments=True,
-            max_duration=duration,
+            target_duration=target_duration,
             max_gap=gap,
         )
         t_group = time.perf_counter() - t0_group

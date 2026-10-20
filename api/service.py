@@ -222,7 +222,7 @@ def _run_pipeline(
             t0_tts = time.perf_counter()
             paths_es, _times, _freq = clone_voice_segments(
                 path, texts, lang, speaker_audio, model_tts,
-                slowdown_range=(0.5, 0.8), stretch_target_ratio=0.85,
+                slowdown_range=(0.55, 0.98), stretch_target_ratio=0.90,
                 speaker_map=speaker_map,
             )
             t_tts = time.perf_counter() - t0_tts
