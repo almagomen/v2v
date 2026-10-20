@@ -47,7 +47,7 @@ def get_whisper_model():
 def transcribe_and_process(
     media_path: Path | str | None = None,
     segments: Any = None,
-    gap: float = 1.0,
+    gap: float = 1.2,
     target_duration: float = 7.0,
     duration: Optional[int] = None,
 ) -> Tuple[list[dict], str, dict]:
