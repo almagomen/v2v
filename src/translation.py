@@ -94,25 +94,38 @@ def translate_text_list(
         if has_times:
             start_t, end_t = times[i]
             meta = segments_meta[i] if (segments_meta and i < len(segments_meta)) else {}
-            net_dur = float(meta.get("net_speech_duration") or max(0.4, round(end_t - start_t, 2)))
+            total_dur = max(0.4, round(end_t - start_t, 2))
+            net_dur = float(meta.get("net_speech_duration") or total_dur)
             orig_syl = int(meta.get("syllable_count") or count_syllables_approx(s))
-            target_syl = int(round(max(orig_syl * 1.05, net_dur * 4.8)))
-            min_syl = max(1, int(round(target_syl * 0.80)))
-            max_syl = max(min_syl + 2, int(round(net_dur * 5.5)))
-            max_chars = max(12, int(round(net_dur * 13.5)))
+            orig_chars = len(s)
+            breaks_count = s.count("[break]")
+
+            # En Fish Audio cada [break] consume ~0.35s de respiro.
+            # El tiempo de locución objetivo debe cubrir armónicamente el espacio del clip.
+            speech_target_sec = max(0.4, total_dur - (breaks_count * 0.35))
+
+            # Tasa natural de locución en doblaje español: ~5.0 a 5.6 sílabas/s y ~15.0 a 17.5 chars/s
+            target_chars = int(round(max(orig_chars * 0.95, speech_target_sec * 15.5)))
+            min_chars = max(4, int(round(target_chars * 0.85)))
+            max_chars = max(min_chars + 8, int(round(target_chars * 1.15)))
+
+            target_syl = int(round(max(orig_syl * 0.95, speech_target_sec * 5.0)))
+            min_syl = max(1, int(round(target_syl * 0.85)))
+            max_syl = max(min_syl + 2, int(round(speech_target_sec * 5.8)))
+
             acoustic_hint = meta.get("acoustic_hint", "tono natural")
-            input_dict[k] = f"[{net_dur:.1f}s habla | ~{min_syl}-{max_syl} sílabas | máx {max_chars} chars | {acoustic_hint}]: {s}"
+            input_dict[k] = f"[{total_dur:.1f}s slot | ~{min_syl}-{max_syl} sílabas | ~{min_chars}-{max_chars} chars | {acoustic_hint}]: {s}"
         else:
             input_dict[k] = s
 
-    pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO ESTRICTO (CONTROL DE TIEMPO, SÍLABAS Y CARACTERES):
-   Cada segmento incluye su presupuesto temporal exacto: `[Xs habla | ~A-B sílabas | máx Z chars | tono]: texto original`.
-   En doblaje audiovisual profesional, el ritmo debe ser 100% natural (~4.8 a 5.4 sílabas por segundo de habla neta). El español tiende a expandirse, por lo que debes controlar estrictamente la longitud:
-   - SINCRONÍA POR SÍLABAS Y CONCISIÓN: Elige palabras y construcciones sintácticas concisas en {target_lang_name} que entren dentro del rango de ~A-B sílabas y NUNCA superen máx Z chars. Si la idea original es extensa, reformúlala con elegancia y síntesis sin rodeos ni frases de relleno.
+    pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO (CONTROL DE TIEMPO Y RANGO DE CARACTERES):
+   Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars | tono]: texto original`.
+   En doblaje audiovisual profesional, el ritmo debe ser fluido y natural (~15 a 17 caracteres por segundo).
+   - ISOMORFISMO DE LONGITUD: Ajusta la extensión de tu traducción en {target_lang_name} para que caiga DENTRO del rango de ~M-Z chars (proporcional al tiempo del video). No hagas la frase excesivamente corta (dejaría silencios muertos) ni excesivamente larga (se aceleraría la voz).
    - PRESERVACIÓN DE PAUSAS INTERNAS ([break]): Si la frase original incluye `[break]`, representa una pausa real del hablante en cámara; DEBES mantener `[break]` en el punto equivalente de la frase traducida.
    - TONO ACÚSTICO: Usa la pista acústica provista para elegir si corresponde anteponer un tag oficial de Fish Audio S2.1 ([excited], [confident], [calm], [curious], [surprised], [soft tone], [in a hurry tone]).
    - SEGMENTOS BREVES (< 2.0s): Mantén la traducción en 1 a 3 palabras directas.
-   - En tu JSON de salida entrega ÚNICAMENTE el texto como string, SIN repetir el prefijo de metadatos (prohibido poner `[Xs habla | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
+   - En tu JSON de salida entrega ÚNICAMENTE el texto como string, SIN repetir el prefijo de metadatos (prohibido poner `[Xs slot | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
 
     prompt = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
 Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo.
@@ -370,3 +383,97 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
 
     print(f"❌ [Título Viral] No se pudo generar el título. Último error: {last_error}", flush=True)
     return None
+
+
+def auto_heal_short_segments(
+    underflow_segments: list[dict],
+    target_lang: str = "es",
+    source_lang: str = "en",
+    model_name: Optional[str] = None,
+) -> dict[int, str]:
+    """
+    Auto-healer selectivo: Re-expande únicamente aquellos segmentos donde la síntesis TTS
+    duró significativamente menos que el video (< 0.65x), agregando conectores y riqueza
+    explicativa para cubrir el tiempo objetivo sin silencios muertos.
+    Retorna: {seg_idx: nuevo_texto_expandido}
+    """
+    if not underflow_segments:
+        return {}
+
+    available_keys = get_google_api_keys()
+    if not available_keys:
+        return {}
+
+    target_lang_name = LANGUAGE_NAMES.get(target_lang, "español")
+    source_lang_name = LANGUAGE_NAMES.get(source_lang, "español")
+
+    input_dict = {}
+    for item in underflow_segments:
+        idx = item["idx"]
+        dur_target = item["dur_en"]
+        dur_actual = item["dur_es"]
+        needed_chars = int(round(dur_target * 16.0))
+        cur_text = item["text_dict"].get("text", "")
+        input_dict[str(idx + 1)] = {
+            "texto_actual": cur_text,
+            "segundos_actuales": round(dur_actual, 2),
+            "segundos_objetivo": round(dur_target, 2),
+            "caracteres_necesarios": f"~{needed_chars} chars",
+        }
+
+    prompt = f"""Eres un especialista en doblaje audiovisual y adaptación de guiones para TTS.
+Las siguientes frases dobladas al {target_lang_name} fueron sintetizadas por voz, pero se pronunciaron demasiado rápido y dejaron un vacío de silencio antinatural respecto a la escena original del video.
+
+Tu misión es REESCRIBIR Y EXPANDIR cada frase en {target_lang_name} preservando la MISMA idea central, intención y tono original del {source_lang_name}, pero con mayor desarrollo explicativo, naturalidad oral y conectores fluidos para aproximarse al número de caracteres objetivo (~Z chars), llenando el tiempo de forma armoniosa.
+
+Directrices:
+1. Mantén la numeración idéntica en el JSON de salida.
+2. Si la frase original tenía marcadores de emoción ([excited], [confident], [calm], [in a hurry tone]), presérvalos.
+3. Si la frase es larga, puedes incluir [break] en una pausa lógica interna.
+4. Devuelve ÚNICAMENTE un JSON con las claves numéricas y el nuevo texto expandido.
+
+Entrada:
+---
+{json.dumps(input_dict, indent=2, ensure_ascii=False)}
+---
+
+Devuelve ÚNICAMENTE:
+{{
+  "clave": "nueva frase expandida en {target_lang_name}"
+}}"""
+
+    model = model_name.strip() if (model_name and model_name.strip()) else DEFAULT_TRANSLATION_MODEL
+    try:
+        client = genai.Client(api_key=available_keys[0])
+        interaction = client.interactions.create(
+            model=model,
+            input=prompt,
+            response_format=[{"type": "text", "mime_type": "application/json"}],
+        )
+        raw_text = getattr(interaction, "output_text", None) or ""
+        if raw_text:
+            clean_json = raw_text.strip()
+            match_obj = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
+            if match_obj:
+                clean_json = match_obj.group(1)
+
+            try:
+                parsed = json.loads(clean_json)
+            except Exception:
+                sanitized = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', clean_json)
+                parsed = json.loads(sanitized)
+
+            healed_texts: dict[int, str] = {}
+            for item in underflow_segments:
+                idx = item["idx"]
+                k = str(idx + 1)
+                val = parsed.get(k) or parsed.get(idx + 1)
+                if val and isinstance(val, str) and val.strip():
+                    clean_val = re.sub(r"^\[[^\]]*(?:\||chars|slot)[^\]]*\]:?\s*", "", val).strip()
+                    healed_texts[idx] = clean_val
+            return healed_texts
+    except Exception as e:
+        print(f"⚠️ [Auto-Heal] Error en re-expansión selectiva: {e}", flush=True)
+
+    return {}
+

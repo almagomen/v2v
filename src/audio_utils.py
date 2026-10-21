@@ -31,6 +31,8 @@ def _build_atempo_filter(tempo: float) -> str:
 import subprocess
 import tempfile
 import os
+import re
+import numpy as np
 
 
 def _adjust_audio_duration_ffmpeg(
@@ -126,6 +128,107 @@ def adjust_audio_duration(
         return audio
 
 
+def distribute_silence_padding(arr: Any, target_samples: int, rate: int) -> Any:
+    """
+    Distribuye el padding de silencio necesario entre los valles de silencio internos (respiros/[break])
+    y el final del audio, evitando dejar un hueco muerto gigante al final del clip.
+    Soporta tensores de PyTorch y arrays de NumPy.
+    """
+    needed_pad = target_samples - arr.shape[-1]
+    if needed_pad <= 0:
+        return arr
+
+    is_torch = hasattr(arr, "device") and hasattr(arr, "cpu")
+    arr_np = arr.detach().cpu().numpy() if is_torch else arr
+
+    # Si el padding necesario es muy pequeño (<= 0.15s), agregarlo directamente al final
+    if needed_pad < int(0.15 * rate):
+        pad = np.zeros((arr_np.shape[0], needed_pad), dtype=arr_np.dtype)
+        res_np = np.concatenate([arr_np, pad], axis=-1)
+        return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
+
+    window_size = int(0.04 * rate)
+    hop_size = int(0.02 * rate)
+    total_samples = arr_np.shape[-1]
+
+    if total_samples < window_size:
+        pad = np.zeros((arr_np.shape[0], needed_pad), dtype=arr_np.dtype)
+        res_np = np.concatenate([arr_np, pad], axis=-1)
+        return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
+
+    mono = np.mean(arr_np, axis=0) if arr_np.shape[0] > 1 else arr_np[0]
+    num_frames = (total_samples - window_size) // hop_size + 1
+    if num_frames <= 0:
+        pad = np.zeros((arr_np.shape[0], needed_pad), dtype=arr_np.dtype)
+        res_np = np.concatenate([arr_np, pad], axis=-1)
+        return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
+
+    frame_rms = np.zeros(num_frames, dtype=np.float32)
+    for f in range(num_frames):
+        start = f * hop_size
+        chunk = mono[start:start + window_size]
+        frame_rms[f] = np.sqrt(np.mean(chunk ** 2))
+
+    max_rms = float(np.max(frame_rms))
+    if max_rms < 1e-4:
+        pad = np.zeros((arr_np.shape[0], needed_pad), dtype=arr_np.dtype)
+        res_np = np.concatenate([arr_np, pad], axis=-1)
+        return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
+
+    silence_threshold = max(0.005, max_rms * 0.08)
+    is_silent = frame_rms < silence_threshold
+
+    min_silence_frames = max(3, int(0.12 / 0.02))
+    valleys = []
+    start_f = None
+    for f_idx, silent in enumerate(is_silent):
+        if silent:
+            if start_f is None:
+                start_f = f_idx
+        else:
+            if start_f is not None:
+                dur_frames = f_idx - start_f
+                if dur_frames >= min_silence_frames:
+                    mid_frame = start_f + dur_frames // 2
+                    valleys.append(mid_frame * hop_size)
+                start_f = None
+
+    min_edge = int(0.35 * rate)
+    valleys = [v for v in valleys if v > min_edge and v < (total_samples - min_edge)]
+
+    if not valleys:
+        pad = np.zeros((arr_np.shape[0], needed_pad), dtype=arr_np.dtype)
+        res_np = np.concatenate([arr_np, pad], axis=-1)
+        return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
+
+    num_points = len(valleys) + 1
+    max_per_valley = int(0.80 * rate)
+    valley_share = min(max_per_valley, needed_pad // num_points)
+    allocated_to_valleys = valley_share * len(valleys)
+    end_share = needed_pad - allocated_to_valleys
+
+    parts = []
+    prev_idx = 0
+    silence_chunk = np.zeros((arr_np.shape[0], valley_share), dtype=arr_np.dtype)
+    for v_idx in valleys:
+        parts.append(arr_np[:, prev_idx:v_idx])
+        parts.append(silence_chunk)
+        prev_idx = v_idx
+
+    parts.append(arr_np[:, prev_idx:])
+    if end_share > 0:
+        parts.append(np.zeros((arr_np.shape[0], end_share), dtype=arr_np.dtype))
+
+    res_np = np.concatenate(parts, axis=-1)
+    if res_np.shape[-1] < target_samples:
+        extra = np.zeros((arr_np.shape[0], target_samples - res_np.shape[-1]), dtype=arr_np.dtype)
+        res_np = np.concatenate([res_np, extra], axis=-1)
+    elif res_np.shape[-1] > target_samples:
+        res_np = res_np[:, :target_samples]
+
+    return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
+
+
 def clone_voice_segments(
     path: Path,
     texts: list[dict],
@@ -207,6 +310,52 @@ def clone_voice_segments(
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for i, res in executor.map(_fetch_tts, tts_tasks):
                 tts_results[i] = res
+
+        # --- AUTO-HEALER SELECTIVO: Identificar anomalías severas de sub-duración (< 0.65x) ---
+        underflow_items = []
+        for idx, text_dict in enumerate(texts_to_process):
+            seq_num = only_indices[idx] if only_indices else idx + 1
+            audio_en_path = seqs_src_dir / f"vocals_{seq_num:03d}.wav"
+            if not audio_en_path.exists() or idx not in tts_results:
+                continue
+            arr_cand, rate_cand = tts_results[idx]
+            if arr_cand is None or rate_cand is None:
+                continue
+            v_info = torchaudio.info(str(audio_en_path))
+            dur_en_cand = v_info.num_frames / v_info.sample_rate
+            dur_es_cand = arr_cand.shape[-1] / rate_cand
+            clean_txt = re.sub(r"\[.*?\]", "", text_dict.get("text", "")).strip()
+            # Si el clip dura >= 3.5s y la voz quedó en menos del 65% de la duración en un texto sustancial:
+            if dur_en_cand >= 3.5 and (dur_es_cand / dur_en_cand) < 0.65 and len(clean_txt) >= 20:
+                underflow_items.append({
+                    "idx": idx,
+                    "seq_num": seq_num,
+                    "text_dict": text_dict,
+                    "dur_en": dur_en_cand,
+                    "dur_es": dur_es_cand,
+                })
+
+        if underflow_items:
+            try:
+                from src.translation import auto_heal_short_segments
+                healed_map = auto_heal_short_segments(underflow_items, target_lang=language)
+                for item in underflow_items:
+                    idx = item["idx"]
+                    if idx in healed_map:
+                        new_txt = healed_map[idx]
+                        seq_num = item["seq_num"]
+                        seg_audio_ref = tts_tasks[idx][2]
+                        new_arr, new_rate = tts_fn(new_txt, language, seg_audio_ref, **kwargs)
+                        if new_arr is not None and new_rate is not None:
+                            new_dur = new_arr.shape[-1] / new_rate
+                            old_dur = item["dur_es"]
+                            dur_en_c = item["dur_en"]
+                            if abs(dur_en_c - new_dur) < abs(dur_en_c - old_dur):
+                                print(f"\n🔄 [Auto-Heal] Segmento #{seq_num:03d} re-expandido: {old_dur:.2f}s -> {new_dur:.2f}s (target {dur_en_c:.2f}s)!", flush=True)
+                                tts_results[idx] = (new_arr, new_rate)
+                                texts_to_process[idx]["text"] = new_txt
+            except Exception as e_heal:
+                print(f"\n⚠️ [Auto-Heal] Excepción en re-inferencia selectiva: {e_heal}", flush=True)
 
     for idx, text_dict in enumerate(texts_to_process):
         text = text_dict["text"]
@@ -291,10 +440,10 @@ def clone_voice_segments(
                     print(f"✨ Pad silencio (<=4%): {dur_es:5.2f}s ← {dur_en:5.2f}s", end=" ")
                     pad_samples = int((dur_en - dur_es) * rate)
                     if pad_samples > 0 and torch is not None:
-                        arr = torch.nn.functional.pad(arr, (0, pad_samples))
+                        arr = distribute_silence_padding(arr, int(dur_en * rate), rate)
                 else:
                     # Estirar con atempo para equiparar la duración del segmento original
-                    # Piso seguro de velocidad de 0.75x para preservar naturalidad; el remanente se completa con micro-pad
+                    # Piso seguro de velocidad de 0.75x para preservar naturalidad; el remanente se distribuye orgánicamente
                     min_allowed_speed = 0.75
                     if ratio_slow < min_allowed_speed:
                         effective_speed = min_allowed_speed
@@ -302,7 +451,7 @@ def clone_voice_segments(
                         arr = adjust_audio_duration(arr, stretch_samples, rate)
                         target_samples = int(dur_en * rate)
                         if target_samples > arr.shape[-1] and torch is not None:
-                            arr = torch.nn.functional.pad(arr, (0, target_samples - arr.shape[-1]))
+                            arr = distribute_silence_padding(arr, target_samples, rate)
                         print(f"🔉 {effective_speed:.2f}x+pad: {dur_en:5.2f}s ← {dur_en:5.2f}s", end=" ")
                     else:
                         print(f"🔉 {ratio_slow:.2f}x (expand): {dur_en:5.2f}s ← {dur_en:5.2f}s", end=" ")

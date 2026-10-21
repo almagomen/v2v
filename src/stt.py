@@ -211,23 +211,37 @@ def run_main(
             segments_meta=result,
         )
         t_trans = time.perf_counter() - t0_trans
+        def _enrich_translated_segment(orig_seg: dict, start_t: float, end_t: float, raw_txt: str) -> dict:
+            from src.diarization import count_syllables_approx
+            import re
+            d = dict(orig_seg)
+            d["start"] = start_t
+            d["end"] = end_t
+            d["text"] = raw_txt
+            c_txt = re.sub(r"\[.*?\]", "", raw_txt).strip()
+            w_list = c_txt.split()
+            dur_calc = max(0.1, round(end_t - start_t, 3))
+            i_pause = float(orig_seg.get("internal_pause_sec", 0.0))
+            net_d = max(0.1, round(dur_calc - i_pause, 3))
+            syl_c = count_syllables_approx(c_txt)
+            d["word_count"] = len(w_list)
+            d["char_count"] = len(c_txt)
+            d["syllable_count"] = syl_c
+            d["speech_rate"] = round(len(w_list) / net_d, 2) if net_d > 0 else 0.0
+            d["syllable_rate"] = round(syl_c / net_d, 2) if net_d > 0 else 0.0
+            return d
+
         if translated_texts and len(translated_texts) == len(result):
-            translated_result = []
-            for (s, e), txt, orig in zip(times, translated_texts, result):
-                seg_dict = dict(orig)
-                seg_dict["start"] = s
-                seg_dict["end"] = e
-                seg_dict["text"] = txt
-                translated_result.append(seg_dict)
+            translated_result = [
+                _enrich_translated_segment(orig, s, e, txt)
+                for (s, e), txt, orig in zip(times, translated_texts, result)
+            ]
         elif translated_texts:
             print(f"⚠️ Reconciliando {len(translated_texts)} traducciones con {len(result)} segmentos originales...", flush=True)
-            translated_result = []
-            for i, ((s, e), orig) in enumerate(zip(times, result)):
-                seg_dict = dict(orig)
-                seg_dict["start"] = s
-                seg_dict["end"] = e
-                seg_dict["text"] = translated_texts[i] if i < len(translated_texts) else orig.get("text", "")
-                translated_result.append(seg_dict)
+            translated_result = [
+                _enrich_translated_segment(orig, s, e, translated_texts[i] if i < len(translated_texts) else orig.get("text", ""))
+                for i, ((s, e), orig) in enumerate(zip(times, result))
+            ]
         else:
             print("⚠️ No se pudo traducir, usando texto original", flush=True)
 
