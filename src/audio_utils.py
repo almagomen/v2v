@@ -569,22 +569,19 @@ def clone_voice_segments(
         seq_col = f"{seq_num:>3d}. "
         mode_col = _pad_visible_tag(mode_tag, 20)
 
+        # Si hubo auto-heal, incluir short en la caja de duraciones
+        h = healed_records.get(idx)
+        short_part = f" | short: {h['old_dur']:5.2f}s" if h else ""
+
         # Solo si la duración final difiere sustancialmente tanto de orig como de fish (ej. clamp final de video)
         extra_fin = ""
         if abs(final_dur - dur_en) > 0.08 and abs(final_dur - raw_dur_es) > 0.08:
             extra_fin = f" ➔ fin: {final_dur:5.2f}s"
 
-        dur_col = f"[orig: {dur_en:5.2f}s | fish: {raw_dur_es:5.2f}s{extra_fin}]"
+        dur_col = f"[orig: {dur_en:5.2f}s{short_part} | fish: {raw_dur_es:5.2f}s{extra_fin}]"
         print(f"{seq_col}{mode_col}{dur_col}")
 
         indent = "      "
-
-        # Si el segmento fue re-expandido por el Auto-Healer selectivo
-        if idx in healed_records:
-            h = healed_records[idx]
-            print(f"{indent}🔄 [Auto-Heal]: La 1ª voz generada por Fish fue muy corta ({h['old_dur']:.2f}s para un video de {h['target_dur']:.2f}s).")
-            if h.get("old_text"):
-                print(f"{indent}   ↳ [1ª traducción corta]: {h['old_text']}")
 
         # Si el segmento es traducción, mostrar primero la versión original y luego la doblada
         orig_text = str(text_dict.get("orig_text") or text_dict.get("original_text") or "").strip()
@@ -593,10 +590,14 @@ def clone_voice_segments(
         is_translation = bool(clean_orig and clean_orig.lower() != clean_curr.lower())
 
         if is_translation:
-            print(f"{indent}[orig]: {orig_text}")
+            print(f"{indent}[orig]:  {orig_text}")
+            if h and h.get("old_text"):
+                print(f"{indent}[short]: {h['old_text']}")
             print(f"{indent}{text}")
             print()
         else:
+            if h and h.get("old_text"):
+                print(f"{indent}[short]: {h['old_text']}")
             print(f"{indent}{text}")
             print()
 
