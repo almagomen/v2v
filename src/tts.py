@@ -52,6 +52,8 @@ def fish_tts(
     top_p = float(kwargs.get("top_p", 0.7))
     repetition_penalty = float(kwargs.get("repetition_penalty", 1.2))
     speed = float(kwargs.get("speed", 1.0))
+    volume = float(kwargs.get("volume", 0.0))
+    normalize_loudness = bool(kwargs.get("normalize_loudness", True))
 
     payload: dict[str, Any] = {
         "text": text,
@@ -60,6 +62,11 @@ def fish_tts(
         "top_p": top_p,
         "repetition_penalty": repetition_penalty,
         "normalize": True,
+        "prosody": {
+            "speed": speed,
+            "volume": volume,
+            "normalize_loudness": normalize_loudness,
+        },
     }
 
     if language:
@@ -74,11 +81,6 @@ def fish_tts(
         # Si es un path a un archivo que no existe como modelo, omitir o verificar
         if not Path(v_str).exists():
             payload["reference_id"] = v_str
-
-    # No enviar "volume" ni "speed" al servidor de Fish Audio:
-    # 1. 'volume' aplica un fade-in/compresor no deseado en su servidor.
-    # 2. 'speed' robotiza la entonación neuronal del modelo. La inferencia se mantiene a 1.0x nativo.
-    payload["prosody"] = {"normalize_loudness": True}
 
     # Timeout proporcional a la longitud del texto: base 30s, +30s por cada 100 chars, máx 3 min
     base_timeout = 30
