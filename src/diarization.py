@@ -192,16 +192,14 @@ def smart_group_segments_strict(
     assigned_segments: list[dict],
     target_duration: float | None = None,
     min_duration: float = 3.0,
-    min_clause_dur: float = 6.0,
     max_duration: float | None = None,
     hard_gap: float = 1.4,
     max_gap: float = 0.85,
     min_sentence_gap: float = 0.20,
-    min_clause_gap: float = 0.35,
     min_silence_gap: float = 0.48,
 ) -> list[dict]:
     """
-    Agrupa palabras en segmentos prosódicos puramente acústicos y gramaticales.
+    Agrupa palabras en segmentos prosódicos puramente acústicos y gramaticales (sin corte por comas).
 
     Reglas de cohesión y flujo:
     1. Cero límites artificiales de tiempo:
@@ -213,9 +211,8 @@ def smart_group_segments_strict(
        - Si concluye una oración mayor (. ! ? ; :) con respiro (gap >= min_sentence_gap 0.20s), corta de inmediato.
        - Si el hablante toma un respiro acústico real (gap >= min_silence_gap 0.48s), corta de inmediato.
        - Si hay un silencio estándar (gap > max_gap 0.85s) sobre palabra léxica, corta de inmediato.
-    4. Cláusulas sintácticas protegidas (comas, guiones [, — -]):
-       - Solo se permite cortar en coma si la frase ya acumula una longitud considerable (>= min_clause_dur 6.0s)
-         y la pausa es perceptible (gap >= min_clause_gap 0.35s). Esto evita trocear frases cortas de 3s-4s por comas de entonación.
+    4. Sin cortes artificiales por comas o guiones:
+       - Las comas fluyen naturalmente dentro de las oraciones sin trocear frases compuestas.
     5. Absorción y sanado de micro-segmentos huérfanos (< 3.2s con pausas <= 0.45s).
     """
 
@@ -331,14 +328,6 @@ def smart_group_segments_strict(
                         chosen_cut_idx = curr - 1
                         break
 
-                # C. Cláusula sintáctica protegida (coma, guión: [, — -]):
-                # Solo se permite cortar en coma si la frase ya acumula una longitud considerable (>= min_clause_dur, ej. 6.0s)
-                # y viene acompañada de una micropausa de cláusula clara (gap >= min_clause_gap, ej. 0.35s).
-                # Esto evita trocear frases cortas de 3s-4s por comas de entonación.
-                if dur_up_to_prev >= min_clause_dur and not is_dangling_word(prev_word):
-                    if has_clause_punct(prev_word) and gap_before_curr >= min_clause_gap:
-                        chosen_cut_idx = curr - 1
-                        break
 
             # Duración acumulada incluyendo palabra curr
             dur_curr = all_words[curr]["end"] - seg_start
@@ -479,11 +468,9 @@ def process_audio(
     include_words: bool = False,
     target_duration: float | None = None,
     min_duration: float = 3.0,
-    min_clause_dur: float = 6.0,
     max_gap: float = 0.85,
     hard_gap: float = 1.4,
     min_sentence_gap: float = 0.20,
-    min_clause_gap: float = 0.35,
     min_silence_gap: float = 0.48,
     max_duration: float | None = None,
 ) -> list[dict]:
@@ -493,11 +480,9 @@ def process_audio(
             assigned_data,
             target_duration=target_duration,
             min_duration=min_duration,
-            min_clause_dur=min_clause_dur,
             max_gap=max_gap,
             hard_gap=hard_gap,
             min_sentence_gap=min_sentence_gap,
-            min_clause_gap=min_clause_gap,
             min_silence_gap=min_silence_gap,
             max_duration=max_duration,
         )
