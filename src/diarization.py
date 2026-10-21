@@ -190,9 +190,9 @@ def count_syllables_approx(text: str) -> int:
 
 def smart_group_segments_strict(
     assigned_segments: list[dict],
-    target_duration: float = 6.5,
+    target_duration: float = 10.0,
     min_duration: float = 3.0,
-    max_duration: float = 8.5,
+    max_duration: float = 14.0,
     hard_gap: float = 1.4,
     max_gap: float = 0.75,
     min_sentence_gap: float = 0.20,
@@ -210,9 +210,9 @@ def smart_group_segments_strict(
          corta de inmediato en ese respiro en lugar de seguir acumulando artificialmente.
        - Si concluye una cláusula (, - —) con micropausa (gap >= min_clause_gap 0.25s), corta de inmediato.
        - Si concluye una oración mayor (. ! ? ; :) con respiro (gap >= min_sentence_gap 0.20s), corta de inmediato.
-    3. Habla continua sin pausas (hasta target_duration 6.5s y max_duration 8.5s):
-       - Si el hablante no toma respiros y habla de corrido, la frase fluye de forma natural hasta target_duration.
-       - Al superar target_duration (>= 6.5s), búsqueda prospectiva hasta max_duration (8.5s) con jerarquía prosódica:
+    3. Habla continua orgánica (hasta target_duration 10.0s y guardarraíl max_duration 14.0s):
+       - Si el hablante no toma respiros y habla de corrido, la frase fluye de forma natural hasta completar su idea.
+       - Solo si la frase excede target_duration (>= 10.0s), se activa la búsqueda prospectiva hasta max_duration (14.0s) con jerarquía prosódica:
          a) Prioridad 1: Signo mayor (. ! ? ; :) con micro-gap.
          b) Prioridad 2: Signo de cláusula (, ... —) en palabra léxica.
          c) Prioridad 3: Pausa acústica de respiro (gap >= min_silence_gap).
@@ -220,7 +220,7 @@ def smart_group_segments_strict(
     4. Absorción y sanado de micro-segmentos huérfanos (< 2.2s).
     """
     if max_duration is None:
-        max_duration = 8.5
+        max_duration = 14.0
 
     if not assigned_segments:
         return []
@@ -473,14 +473,14 @@ def process_audio(
     diarization_result: Any,
     group_segments: bool = True,
     include_words: bool = False,
-    target_duration: float = 6.5,
+    target_duration: float = 10.0,
     min_duration: float = 3.0,
     max_gap: float = 0.75,
     hard_gap: float = 1.4,
     min_sentence_gap: float = 0.20,
     min_clause_gap: float = 0.25,
     min_silence_gap: float = 0.38,
-    max_duration: float | None = 8.5,
+    max_duration: float | None = 14.0,
 ) -> list[dict]:
     assigned_data = assign_speakers_by_word(whisper_result, diarization_result)
     if group_segments:
