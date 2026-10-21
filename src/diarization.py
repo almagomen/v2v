@@ -190,9 +190,9 @@ def count_syllables_approx(text: str) -> int:
 
 def smart_group_segments_strict(
     assigned_segments: list[dict],
-    target_duration: float = 10.0,
+    target_duration: float | None = None,
     min_duration: float = 3.0,
-    max_duration: float = 14.0,
+    max_duration: float | None = None,
     hard_gap: float = 1.4,
     max_gap: float = 0.75,
     min_sentence_gap: float = 0.20,
@@ -200,27 +200,22 @@ def smart_group_segments_strict(
     min_silence_gap: float = 0.38,
 ) -> list[dict]:
     """
-    Agrupa palabras en segmentos prosódicos inspirados en Google Research / Area 120 (Aloud).
+    Agrupa palabras en segmentos prosódicos puramente acústicos y gramaticales.
 
     Reglas de cohesión y flujo:
-    1. Pausas acústicas duras:
+    1. Cero límites artificiales de tiempo:
+       - No se fuerza ningún corte por reloj (max_duration/target_duration son None por defecto).
+       - Si el hablante expresa una idea continua de 15s, 30s o más sin respirar, se respeta intacta.
+    2. Pausas acústicas duras:
        - Si gap > hard_gap (1.4s): Silencio de escena o pausa prolongada -> Corta siempre si no es conector.
-    2. Detección temprana de respiros (>= min_duration 3.0s):
+    3. Detección de respiros y pausas naturales (>= min_duration 3.0s):
        - Si el hablante toma un respiro natural (gap >= min_silence_gap 0.38s) sobre una palabra léxica,
-         corta de inmediato en ese respiro en lugar de seguir acumulando artificialmente.
+         corta de inmediato en ese respiro natural.
        - Si concluye una cláusula (, - —) con micropausa (gap >= min_clause_gap 0.25s), corta de inmediato.
        - Si concluye una oración mayor (. ! ? ; :) con respiro (gap >= min_sentence_gap 0.20s), corta de inmediato.
-    3. Habla continua orgánica (hasta target_duration 10.0s y guardarraíl max_duration 14.0s):
-       - Si el hablante no toma respiros y habla de corrido, la frase fluye de forma natural hasta completar su idea.
-       - Solo si la frase excede target_duration (>= 10.0s), se activa la búsqueda prospectiva hasta max_duration (14.0s) con jerarquía prosódica:
-         a) Prioridad 1: Signo mayor (. ! ? ; :) con micro-gap.
-         b) Prioridad 2: Signo de cláusula (, ... —) en palabra léxica.
-         c) Prioridad 3: Pausa acústica de respiro (gap >= min_silence_gap).
-         d) Fallback: El mayor respiro disponible del tramo.
+       - Si hay un silencio estándar (gap > max_gap 0.75s) sobre palabra léxica, corta de inmediato.
     4. Absorción y sanado de micro-segmentos huérfanos (< 2.2s).
     """
-    if max_duration is None:
-        max_duration = 14.0
 
     if not assigned_segments:
         return []
@@ -344,8 +339,8 @@ def smart_group_segments_strict(
             # Duración acumulada incluyendo palabra curr
             dur_curr = all_words[curr]["end"] - seg_start
 
-            # 3. Superado el target_duration (>= 7.0s): búsqueda prospectiva prosódica
-            if dur_curr >= target_duration:
+            # 3. Superado el target_duration (solo si fue configurado explícitamente): búsqueda prospectiva prosódica
+            if target_duration is not None and dur_curr >= target_duration:
                 fwd = curr
                 best_major_idx = None
                 best_clause_idx = None
@@ -386,7 +381,7 @@ def smart_group_segments_strict(
                         if best_breath_idx is None:
                             best_breath_idx = fwd
 
-                    if f_dur >= max_duration:
+                    if max_duration is not None and f_dur >= max_duration:
                         break
 
                     fwd += 1
@@ -401,6 +396,11 @@ def smart_group_segments_strict(
                     chosen_cut_idx = largest_gap_idx
                 else:
                     chosen_cut_idx = curr
+                break
+
+            # 4. Tope máximo absoluto (solo si max_duration fue configurado explícitamente)
+            if max_duration is not None and dur_curr >= max_duration:
+                chosen_cut_idx = curr
                 break
 
             if curr == n - 1:
@@ -426,7 +426,7 @@ def smart_group_segments_strict(
                 if remaining_words_count > 0:
                     remaining_dur = all_words[peek - 1]["end"] - peek_start
                     dur_if_merged = all_words[peek - 1]["end"] - seg_start
-                    if remaining_dur < 2.0 and dur_if_merged <= (max_duration + 1.0):
+                    if remaining_dur < 2.0 and (max_duration is None or dur_if_merged <= (max_duration + 1.0)):
                         chosen_cut_idx = peek - 1
 
         seg_words = all_words[start_idx : chosen_cut_idx + 1]
@@ -443,19 +443,19 @@ def smart_group_segments_strict(
         is_tiny = cur_seg["duration"] < 2.0 or cur_seg["word_count"] <= 2
 
         if is_tiny:
-            # Opción A: Fusionar con el segmento previo solo si es del mismo speaker, pausa <= 0.50s y no excede max_duration + 1.5s
+            # Opción A: Fusionar con el segmento previo solo si es del mismo speaker, pausa <= 0.50s y no excede max_duration
             if merged_segments and merged_segments[-1]["speaker"] == cur_seg["speaker"]:
                 gap_prev = cur_seg["start"] - merged_segments[-1]["end"]
-                if gap_prev <= 0.50 and (merged_segments[-1]["duration"] + cur_seg["duration"]) <= (max_duration + 1.5):
+                if gap_prev <= 0.50 and (max_duration is None or (merged_segments[-1]["duration"] + cur_seg["duration"]) <= (max_duration + 1.5)):
                     prev_seg = merged_segments[-1]
                     comb_words = prev_seg["words"] + cur_seg["words"]
                     merged_segments[-1] = create_segment_from_words(comb_words)
                     i += 1
                     continue
-            # Opción B: Fusionar con el segmento siguiente solo si es del mismo speaker, pausa <= 0.50s y no excede max_duration + 1.5s
+            # Opción B: Fusionar con el segmento siguiente solo si es del mismo speaker, pausa <= 0.50s y no excede max_duration
             if i + 1 < len(grouped_segments) and grouped_segments[i + 1]["speaker"] == cur_seg["speaker"]:
                 gap_next = grouped_segments[i + 1]["start"] - cur_seg["end"]
-                if gap_next <= 0.50 and (cur_seg["duration"] + grouped_segments[i + 1]["duration"]) <= (max_duration + 1.5):
+                if gap_next <= 0.50 and (max_duration is None or (cur_seg["duration"] + grouped_segments[i + 1]["duration"]) <= (max_duration + 1.5)):
                     next_seg = grouped_segments[i + 1]
                     comb_words = cur_seg["words"] + next_seg["words"]
                     grouped_segments[i + 1] = create_segment_from_words(comb_words)
@@ -473,14 +473,14 @@ def process_audio(
     diarization_result: Any,
     group_segments: bool = True,
     include_words: bool = False,
-    target_duration: float = 10.0,
+    target_duration: float | None = None,
     min_duration: float = 3.0,
     max_gap: float = 0.75,
     hard_gap: float = 1.4,
     min_sentence_gap: float = 0.20,
     min_clause_gap: float = 0.25,
     min_silence_gap: float = 0.38,
-    max_duration: float | None = 14.0,
+    max_duration: float | None = None,
 ) -> list[dict]:
     assigned_data = assign_speakers_by_word(whisper_result, diarization_result)
     if group_segments:

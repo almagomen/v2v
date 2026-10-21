@@ -48,7 +48,7 @@ def transcribe_and_process(
     media_path: Path | str | None = None,
     segments: Any = None,
     gap: float = 0.75,
-    target_duration: float = 10.0,
+    target_duration: Optional[float] = None,
     duration: Optional[int] = None,
 ) -> Tuple[list[dict], str, dict]:
     """
