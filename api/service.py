@@ -246,6 +246,7 @@ def _run_pipeline(
                 path, texts, lang, speaker_audio, model_tts,
                 slowdown_range=(0.40, 0.99), stretch_target_ratio=1.0,
                 speaker_map=speaker_map,
+                source_lang=r.get("src_lang", "pt"),
             )
             t_tts = time.perf_counter() - t0_tts
             print(f"⏱️ [Síntesis TTS (Fish Audio)] Completada en {t_tts:.1f}s ({len(paths_es)} audios generados)\n")

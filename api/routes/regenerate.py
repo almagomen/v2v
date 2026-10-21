@@ -140,6 +140,7 @@ def _do_regenerate_segment(
         top_p=top_p,
         repetition_penalty=repetition_penalty,
         volume=volume,
+        source_lang=source_lang,
     )
 
     if not paths_es:

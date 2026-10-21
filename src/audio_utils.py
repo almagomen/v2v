@@ -54,6 +54,85 @@ def _pad_visible_tag(tag: str, target_w: int = 20) -> str:
     return tag
 
 
+def _extract_emotion_prefix(text: str) -> tuple[str, str]:
+    """Extrae las etiquetas de emoción iniciales [tag] y el contenido limpio restante."""
+    if not text:
+        return "", ""
+    match = re.match(r"^((?:\[[^\]]+\]\s*)+)(.*)$", text.strip())
+    if match:
+        tags = match.group(1).strip()
+        rest = match.group(2).strip()
+        return tags, rest
+    return "", text.strip()
+
+
+def _format_aligned_segment_texts(
+    orig_text: str,
+    final_text: str,
+    short_text: Optional[str] = None,
+    source_lang: str = "pt",
+    indent: str = "      ",
+) -> list[str]:
+    """
+    Formatea las líneas de texto del segmento con alineación de corchetes de emoción
+    y adaptación dinámica de la etiqueta de idioma original ([ pt ]).
+    """
+    tag_final, cont_final = _extract_emotion_prefix(final_text)
+    tag_short, cont_short = _extract_emotion_prefix(short_text) if short_text else ("", "")
+
+    has_emotion = bool(tag_final or tag_short)
+
+    lines = []
+    clean_curr = re.sub(r"\[.*?\]", "", final_text).strip()
+    clean_orig = re.sub(r"\[.*?\]", "", orig_text).strip()
+    is_translation = bool(clean_orig and clean_orig.lower() != clean_curr.lower())
+
+    if not is_translation:
+        if short_text:
+            lines.append(f"{indent}{short_text}")
+        lines.append(f"{indent}{final_text}")
+        return lines
+
+    # Si la frase traducida no tiene expresión inicial, no colocar etiqueta [idioma]
+    if not has_emotion:
+        lines.append(f"{indent}{orig_text}")
+        if short_text:
+            lines.append(f"{indent}{short_text}")
+        lines.append(f"{indent}{final_text}")
+        return lines
+
+    # Adaptar etiqueta de idioma original con espacios interiores (ej. [ pt ])
+    sl = source_lang.strip().lower() if source_lang else "pt"
+    tag_orig = f"[ {sl} ]" if len(sl) == 2 else f"[{sl}]"
+
+    len_orig = len(tag_orig)
+    len_short = len(tag_short) if (short_text and tag_short) else 0
+    len_final = len(tag_final) if tag_final else 0
+
+    max_w = max(len_orig, len_final, len_short)
+
+    # Alinear a la derecha las etiquetas para que el corchete ']' concuerde en la misma columna
+    pad_orig = " " * (max_w - len_orig)
+    lines.append(f"{indent}{pad_orig}{tag_orig} {orig_text}")
+
+    if short_text:
+        if tag_short:
+            pad_short = " " * (max_w - len_short)
+            lines.append(f"{indent}{pad_short}{tag_short} {cont_short}")
+        else:
+            pad_short = " " * (max_w + 1)
+            lines.append(f"{indent}{pad_short}{cont_short}")
+
+    if tag_final:
+        pad_final = " " * (max_w - len_final)
+        lines.append(f"{indent}{pad_final}{tag_final} {cont_final}")
+    else:
+        pad_final = " " * (max_w + 1)
+        lines.append(f"{indent}{pad_final}{cont_final}")
+
+    return lines
+
+
 def _adjust_audio_duration_ffmpeg(
     audio: Any,
     filter_str: str,
@@ -308,6 +387,7 @@ def clone_voice_segments(
     target_duration: Optional[float] = None,
     register: bool = True,
     speaker_map: Optional[dict[str, str]] = None,
+    source_lang: Optional[str] = None,
     **kwargs,
 ) -> Tuple[list[Path], list[int], int]:
     seqs_src_dir = path.parent / "Seqs_src"
@@ -317,6 +397,21 @@ def clone_voice_segments(
     texts_to_process = (
         texts if only_indices is None else [texts[i - 1] for i in only_indices]
     )
+
+    # Determinar idioma fuente (origen)
+    src_lang = source_lang or kwargs.get("source_lang")
+    if not src_lang and texts_to_process:
+        src_lang = texts_to_process[0].get("source_lang") or texts_to_process[0].get("src_lang")
+    if not src_lang:
+        try:
+            from src.result_store import load_result
+            r_data = load_result(path.parent)
+            if r_data:
+                src_lang = r_data.get("source_lang")
+        except Exception:
+            pass
+    if not src_lang:
+        src_lang = "pt"
 
     times: list[int] = []
     path_es: list[Path] = []
@@ -583,23 +678,19 @@ def clone_voice_segments(
 
         indent = "      "
 
-        # Si el segmento es traducción, mostrar primero la versión original y luego la doblada
         orig_text = str(text_dict.get("orig_text") or text_dict.get("original_text") or "").strip()
-        clean_curr = re.sub(r"\[.*?\]", "", text).strip()
-        clean_orig = re.sub(r"\[.*?\]", "", orig_text).strip()
-        is_translation = bool(clean_orig and clean_orig.lower() != clean_curr.lower())
+        short_text = h.get("old_text") if h else None
 
-        if is_translation:
-            print(f"{indent}[orig]: {orig_text}")
-            if h and h.get("old_text"):
-                print(f"{indent}{h['old_text']}")
-            print(f"{indent}{text}")
-            print()
-        else:
-            if h and h.get("old_text"):
-                print(f"{indent}{h['old_text']}")
-            print(f"{indent}{text}")
-            print()
+        aligned_lines = _format_aligned_segment_texts(
+            orig_text=orig_text,
+            final_text=text,
+            short_text=short_text,
+            source_lang=src_lang,
+            indent=indent,
+        )
+        for line in aligned_lines:
+            print(line)
+        print()
 
         # Generar nombre con formato consistente: tts_{speaker}_{NNNN}.wav
         # Esto permite al frontend identificar el segmento y su speaker
