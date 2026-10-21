@@ -590,14 +590,14 @@ def clone_voice_segments(
         is_translation = bool(clean_orig and clean_orig.lower() != clean_curr.lower())
 
         if is_translation:
-            print(f"{indent}[orig]:  {orig_text}")
+            print(f"{indent}[orig]: {orig_text}")
             if h and h.get("old_text"):
-                print(f"{indent}[short]: {h['old_text']}")
+                print(f"{indent}{h['old_text']}")
             print(f"{indent}{text}")
             print()
         else:
             if h and h.get("old_text"):
-                print(f"{indent}[short]: {h['old_text']}")
+                print(f"{indent}{h['old_text']}")
             print(f"{indent}{text}")
             print()
 
