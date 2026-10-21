@@ -421,10 +421,10 @@ def clone_voice_segments(
                 print(f"\n⚠️ [Auto-Heal] Excepción en re-inferencia selectiva: {e_heal}", flush=True)
 
     if only_indices is None or len(only_indices) > 1:
-        header = f"{' #':<5}{'MODO':<20}{'DURACIONES [ORIG | FISH ➔ FINAL]':<44}TEXTO"
-        print("-" * 105)
+        header = f"{' #':<5}{'MODO':<20}{'DURACIONES [ORIG | FISH ➔ FINAL]'}"
+        print("-" * 68)
         print(header)
-        print("-" * 105)
+        print("-" * 68)
 
     for idx, text_dict in enumerate(texts_to_process):
         text = text_dict["text"]
@@ -564,25 +564,31 @@ def clone_voice_segments(
         text_dict["end"] = round(start_time + final_dur, 3)
         text_dict["duration"] = round(final_dur, 3)
 
-        # Formateo estricto de columnas alineadas
+        # Formateo estricto de columnas alineadas (Línea métrica)
         seq_col = f"{seq_num:>3d}. "
         mode_col = _pad_visible_tag(mode_tag, 20)
-        dur_col = f"[orig: {dur_en:5.2f}s | fish: {raw_dur_es:5.2f}s ➔ fin: {final_dur:5.2f}s]  "
-        print(f"{seq_col}{mode_col}{dur_col}{text}")
+        dur_col = f"[orig: {dur_en:5.2f}s | fish: {raw_dur_es:5.2f}s ➔ fin: {final_dur:5.2f}s]"
+        print(f"{seq_col}{mode_col}{dur_col}")
+
+        indent = "      "
 
         # Si el segmento fue re-expandido por el Auto-Healer selectivo
         if idx in healed_records:
             h = healed_records[idx]
-            print(f"     ↳ 🔄 [auto-heal]: {h['old_dur']:.2f}s → {h['new_dur']:.2f}s (target {h['target_dur']:.2f}s)")
+            print(f"{indent}🔄 [Auto-Heal]: Audio inicial era muy corto ({h['old_dur']:.2f}s); se amplió el texto a {h['new_dur']:.2f}s para cubrir el video ({h['target_dur']:.2f}s)")
 
-        # Si el segmento es traducción, mostrar versión original para comparativa y salto de línea
+        # Si el segmento es traducción, mostrar primero la versión original y luego la doblada
         orig_text = str(text_dict.get("orig_text") or text_dict.get("original_text") or "").strip()
         clean_curr = re.sub(r"\[.*?\]", "", text).strip()
         clean_orig = re.sub(r"\[.*?\]", "", orig_text).strip()
         is_translation = bool(clean_orig and clean_orig.lower() != clean_curr.lower())
 
         if is_translation:
-            print(f"     ↳ 🌐 [orig]: {orig_text}")
+            print(f"{indent}[orig]: {orig_text}")
+            print(f"{indent}{text}")
+            print()
+        else:
+            print(f"{indent}{text}")
             print()
 
         # Generar nombre con formato consistente: tts_{speaker}_{NNNN}.wav
