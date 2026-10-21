@@ -86,10 +86,20 @@ def adjust_audio_duration(
     tempo = audio.shape[-1] / target_duration_samples
     safe_tempo = max(min(tempo, max_tempo), min_tempo)
 
-    # Si la diferencia es imperceptible (<1%), solo recortar si excede
-    if abs(safe_tempo - 1.0) < 0.01:
+    # Si la diferencia es imperceptible (<=4%), no alterar con atempo para no degradar el timbre:
+    # aplicar micro-trim suave con fade-out o micro-pad de silencio
+    if abs(safe_tempo - 1.0) <= 0.04:
         if audio.shape[-1] > target_duration_samples:
-            return audio[:, :target_duration_samples]
+            trimmed = audio[:, :target_duration_samples].clone()
+            fade_len = min(128, target_duration_samples)
+            if torch is not None and fade_len > 0:
+                fade = torch.linspace(1.0, 0.0, fade_len, device=trimmed.device)
+                trimmed[:, -fade_len:] *= fade
+            return trimmed
+        elif audio.shape[-1] < target_duration_samples:
+            pad_len = target_duration_samples - audio.shape[-1]
+            if torch is not None:
+                return torch.nn.functional.pad(audio, (0, pad_len))
         return audio
 
     filter_str = _build_atempo_filter(safe_tempo)
@@ -266,14 +276,24 @@ def clone_voice_segments(
         if slowdown_range:
             if duration_ratio > 1.0:
                 if max_allowed_dur is not None and dur_es > max_allowed_dur:
-                    # Choca con el siguiente segmento: acelerar a max_allowed_dur
+                    # Choca con el siguiente segmento: acelerar suavemente a max_allowed_dur
                     ratio_needed = dur_es / max_allowed_dur
-                    print(
-                        f"⚠️ {ratio_needed:.2f}x: {max_allowed_dur:5.2f}s → {dur_en:5.2f}s",
-                        end=" ",
-                    )
-                    target_samples = int(max_allowed_dur * rate)
-                    arr = adjust_audio_duration(arr, target_samples, rate)
+                    if ratio_needed <= 1.04:
+                        print(
+                            f"✨ Pad/Trim (<=4%): {dur_es:5.2f}s ← {dur_en:5.2f}s",
+                            end=" ",
+                        )
+                        target_samples = int(max_allowed_dur * rate)
+                        if arr.shape[-1] > target_samples:
+                            arr = arr[:, :target_samples]
+                    else:
+                        safe_ratio = min(ratio_needed, 1.15)
+                        print(
+                            f"⚠️ {safe_ratio:.2f}x: {max_allowed_dur:5.2f}s → {dur_en:5.2f}s",
+                            end=" ",
+                        )
+                        target_samples = int(arr.shape[-1] / safe_ratio)
+                        arr = adjust_audio_duration(arr, target_samples, rate)
                 else:
                     # Cabe en la pausa natural sin chocar (1.00x)
                     print(
@@ -281,19 +301,28 @@ def clone_voice_segments(
                         end=" ",
                     )
             elif slowdown_range[0] < duration_ratio < slowdown_range[1]:
-                # Estiramiento para cubrir el espacio original (isocronía sin huecos de silencio)
+                # Estiramiento suave para cubrir el espacio original (isocronía sin huecos de silencio)
                 desired_dur = dur_es + (dur_en - dur_es) * stretch_target_ratio
-                min_slow_speed = 0.85  # Piso de seguridad de doblaje profesional: evita arrastre o voz ebria
+                min_slow_speed = 0.90  # Piso de seguridad conservador: evita arrastre o voz lenta
                 max_slow_dur = dur_es / min_slow_speed
                 target_dur_sec = min(desired_dur, max_slow_dur, dur_en)
                 effective_slow_speed = dur_es / target_dur_sec if target_dur_sec > 0 else 1.0
 
-                print(
-                    f"🔉 {effective_slow_speed:.2f}x: {target_dur_sec:5.2f}s ← {dur_en:5.2f}s",
-                    end=" ",
-                )
-                target_samples = int(target_dur_sec * rate)
-                arr = adjust_audio_duration(arr, target_samples, rate)
+                if effective_slow_speed >= 0.96:
+                    print(
+                        f"✨ Pad silencio (<=4%): {dur_es:5.2f}s ← {dur_en:5.2f}s",
+                        end=" ",
+                    )
+                    pad_samples = int((target_dur_sec - dur_es) * rate)
+                    if pad_samples > 0 and torch is not None:
+                        arr = torch.nn.functional.pad(arr, (0, pad_samples))
+                else:
+                    print(
+                        f"🔉 {effective_slow_speed:.2f}x: {target_dur_sec:5.2f}s ← {dur_en:5.2f}s",
+                        end=" ",
+                    )
+                    target_samples = int(target_dur_sec * rate)
+                    arr = adjust_audio_duration(arr, target_samples, rate)
             else:
                 print(
                     f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s",

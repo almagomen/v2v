@@ -62,6 +62,9 @@ def fish_tts(
         "normalize": True,
     }
 
+    if language:
+        payload["language"] = language
+
     if sample_rate:
         payload["sample_rate"] = sample_rate
 
@@ -72,12 +75,10 @@ def fish_tts(
         if not Path(v_str).exists():
             payload["reference_id"] = v_str
 
-    # No enviar "volume" al servidor: su API aplica un compresor/fade-in inicial si se envía ese parámetro.
-    prosody: dict[str, Any] = {"normalize_loudness": True}
-    if speed != 1.0:
-        prosody["speed"] = speed
-    if len(prosody) > 1 or prosody.get("speed"):
-        payload["prosody"] = prosody
+    # No enviar "volume" ni "speed" al servidor de Fish Audio:
+    # 1. 'volume' aplica un fade-in/compresor no deseado en su servidor.
+    # 2. 'speed' robotiza la entonación neuronal del modelo. La inferencia se mantiene a 1.0x nativo.
+    payload["prosody"] = {"normalize_loudness": True}
 
     # Timeout proporcional a la longitud del texto: base 30s, +30s por cada 100 chars, máx 3 min
     base_timeout = 30

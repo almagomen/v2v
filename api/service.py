@@ -210,13 +210,33 @@ def _run_pipeline(
                 else:
                     t["speaker"] = speaker_name
 
-            # Si se especificó una emoción en el proceso inicial, se antepone a cada segmento
+            # ─── ANÁLISIS EXPRESIVO Y EMOCIONAL POR SEGMENTO (Fase 3) ───
+            # Si no hay emociones predefinidas en los segmentos, inferir dinámicamente con Gemini/heurística
+            has_existing_emotions = any(t.get("emotion") or (t.get("text", "").startswith("[") and "]" in t.get("text", "").split(maxsplit=1)[0]) for t in texts)
+            if not has_existing_emotions:
+                try:
+                    from src.expression import analyze_segments_expression
+                    exp_results = analyze_segments_expression(texts, source_lang=r.get("source_lang", "en"))
+                    for t, exp in zip(texts, exp_results):
+                        t_emo = exp.get("emotion")
+                        if t_emo and t_emo != "calm":
+                            t["emotion"] = t_emo
+                            t["emotion_intensity"] = exp.get("intensity", 0.7)
+                            t["style"] = exp.get("style", "natural")
+                            cur_txt = t.get("text", "").strip()
+                            t["text"] = f"[{t_emo}] {cur_txt}"
+                except Exception as ex_exp:
+                    print(f"⚠️ [Expresión] No se pudo clasificar emociones: {ex_exp}")
+
+            # Si se especificó una emoción en el proceso inicial, actúa como fallback/override para segmentos sin emoción
             if emotion and emotion != "none":
                 clean_tag = emotion if emotion.startswith("[") else f"[{emotion}]"
                 for t in texts:
                     current_txt = t.get("text", "").strip()
-                    if not current_txt.startswith(clean_tag):
+                    has_bracket_tag = current_txt.startswith("[") and "]" in current_txt.split(maxsplit=1)[0]
+                    if not has_bracket_tag and not t.get("emotion"):
                         t["text"] = f"{clean_tag} {current_txt}"
+                        t["emotion"] = emotion.strip("[]")
 
             print("⚡ TTS:")
             t0_tts = time.perf_counter()
@@ -232,7 +252,17 @@ def _run_pipeline(
                 set_url_state(r.get("url", ""), "error", "Error en TTS")
                 continue
 
-            # Guardar segmentos actualizados (con emociones y duraciones TTS) — una sola escritura
+            # Verificación de integridad acústica y QA de los clips generados (Fase 6)
+            try:
+                from src.qa import verify_audio_quality
+                for i, p_es in enumerate(paths_es):
+                    if i < len(texts):
+                        qa_info = verify_audio_quality(p_es, expected_text=texts[i].get("text", ""))
+                        texts[i]["qa"] = qa_info
+            except Exception as e_qa:
+                print(f"⚠️ Error en QA de síntesis: {e_qa}")
+
+            # Guardar segmentos actualizados (con emociones, duraciones TTS y QA) — una sola escritura
             update_result_segments(path.parent, texts)
 
             # Pre-empaquetado anticipado en background del TAR de segmentos para entrega instantánea vía Cloudflare

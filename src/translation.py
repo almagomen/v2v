@@ -92,17 +92,22 @@ def translate_text_list(
         if has_times:
             start_t, end_t = times[i]
             dur = max(0.5, round(end_t - start_t, 1))
-            # Rango de palabras por segundo para habla humana natural en doblaje (~2.2 a 2.8 palabras/s)
-            min_w = max(1, int(dur * 2.2))
-            max_w = max(min_w + 1, int(dur * 2.8) + 1)
-            input_dict[k] = f"[{dur}s | ~{min_w}-{max_w} palabras]: {s}"
+            # Rango de palabras por segundo para habla humana natural en doblaje (~2.0 a 2.6 palabras/s)
+            min_w = max(1, int(dur * 2.0))
+            max_w = max(min_w + 1, int(dur * 2.6) + 1)
+            # Techo de caracteres estricto para doblaje natural en español (~13.5 a 14.5 caracteres/segundo con espacios)
+            max_chars = max(16, int(dur * 14.0))
+            input_dict[k] = f"[{dur}s | ~{min_w}-{max_w} palabras | máx {max_chars} caracteres]: {s}"
         else:
             input_dict[k] = s
 
-    pacing_instruction = """5. DOBLAJE ISOMÉTRICO (CONTROL DE PALABRAS Y TIEMPO):
-   Cada segmento incluye su duración estimada y rango objetivo de palabras: `[Xs | ~A-B palabras]: texto original`.
-   Ajusta la extensión de tu traducción en {target_lang_name} para situarte dentro de ese rango de palabras (`~A-B palabras`), garantizando que la síntesis de voz (TTS) hable a un ritmo 100% natural sin sonar acelerada ni arrastrada.
-   En tu JSON de salida entrega ÚNICAMENTE el texto limpio como string, SIN incluir las etiquetas de corchetes ni tiempos (no pongas `[Xs | ...]:`).""" if has_times else """5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
+    pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO ESTRICTO (CONTROL DE TIEMPO, PALABRAS Y CARACTERES):
+   Cada segmento incluye su presupuesto temporal exacto: `[Xs | ~A-B palabras | máx Z caracteres]: texto original`.
+   En doblaje audiovisual profesional, la velocidad de locución debe ser 100% natural (~12 a 14 caracteres por segundo). El español tiende a expandirse un 20% respecto a otros idiomas, lo que arruinaría la sincronía si no se controla.
+   - REGLA DE ORO DE LONGITUD: Tu adaptación al {target_lang_name} DEBE situarse dentro de ese presupuesto (`~A-B palabras` y NUNCA superar `máx Z caracteres`).
+   - SÍNTESIS Y PRECISIÓN: Si la idea original en {source_lang_name} es extensa, no traduzcas con rodeos ni perífrasis; REFORMÚLALA de forma sintética, elegante y directa preservando la intención esencial.
+   - SEGMENTOS CORTOS (< 2.0s): Para interjecciones o frases breves (ej. "Listo", "Funciona", "Vamos a ver"), mantén la traducción en 1 a 3 palabras directas, sin agregar fórmulas de relleno.
+   - En tu JSON de salida entrega ÚNICAMENTE el texto limpio como string, SIN incluir corchetes ni etiquetas de tiempo (prohibido poner `[Xs | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
 
     prompt = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
 Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo.
@@ -114,7 +119,7 @@ Directrices obligatorias:
 4. VOZ HABLADA Y DOBLAJE: El texto será sintetizado por modelos de voz (TTS). La frase debe tener ritmo fonético natural, ser directa y sonar convincente y orgánica al ser escuchada.
 {pacing_instruction}
 6. COHERENCIA: Las frases forman parte de un diálogo o narración continua; preserva la coherencia temática y el flujo entre ellas.
-7. PRESERVACIÓN DE EMOCIONES: Si alguna frase original incluye marcadores de emoción entre corchetes como [happy], [whisper], [laughter], [sad], [excited], etc., CONSÉRVALOS en la posición correspondiente dentro de la frase reescrita.
+7. PRESERVACIÓN DE EMOCIONES Y ENTONACIÓN: Si alguna frase original incluye marcadores de emoción entre corchetes, CONSÉRVALOS o adáptalos a los tags canónicos compatibles con Fish Audio S2.1 (ej. [happy], [whispering], [laughing], [sad], [excited], [angry], [calm], [confident], [curious], [surprised]). No uses tags no estándar como [whisper] o [laughter] (cámbialos siempre por [whispering] y [laughing]). Puedes colocar [emphasis] justo antes de una palabra clave si el orador la enfatiza con fuerza. Preserva estrictamente la entonación interrogativa (¿?) y exclamativa (¡!) para asegurar la correcta modulación prosódica en el TTS.
 
 Texto original ({source_lang_name}) indexado por segmento:
 ---
@@ -198,20 +203,20 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         for i in range(1, total_count + 1):
                             val = parsed.get(str(i)) or parsed.get(i)
                             if val and isinstance(val, str) and val.strip():
-                                clean_val = re.sub(r"^\[.*?\]:\s*", "", val).strip()
+                                clean_val = re.sub(r"^\[.*?\]:?\s*", "", val).strip()
                                 aligned_list.append(clean_val if clean_val else list_sentences[i - 1])
                             else:
                                 aligned_list.append(list_sentences[i - 1])
                     elif isinstance(parsed, list):
                         for i in range(total_count):
                             if i < len(parsed) and isinstance(parsed[i], str) and parsed[i].strip():
-                                clean_val = re.sub(r"^\[.*?\]:\s*", "", parsed[i]).strip()
+                                clean_val = re.sub(r"^\[.*?\]:?\s*", "", parsed[i]).strip()
                                 aligned_list.append(clean_val if clean_val else list_sentences[i])
                             else:
                                 aligned_list.append(list_sentences[i])
 
                     if aligned_list and len(aligned_list) == total_count:
-                        print(f"⏱️ [Etapa: Traducción (Gemini)] Completada con '{model}' en {duration:.1f}s ({len(aligned_list)} frases 1-a-1 verificadas)", flush=True)
+                        print(f"⏱️ [Etapa: Traducción | Gemini] Completada con '{model}' en {duration:.1f}s ({len(aligned_list)} frases)", flush=True)
                         return aligned_list
 
             except Exception as e:

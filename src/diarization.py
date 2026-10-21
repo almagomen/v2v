@@ -122,9 +122,28 @@ def assign_speakers_by_word(whisper_result: Any, diarization: Any) -> list[dict]
 
 
 MAJOR_PUNCT = re.compile(r"[.!?¡¿;:]+$")
+CLAUSE_PUNCT = re.compile(r"[,—\-]+|\.{2,}$")
 ABBREVIATIONS = {
     "dr.", "dra.", "sr.", "sra.", "mr.", "mrs.", "ms.", "prof.", "etc.", "vs.", "ex.", "pág.", "vol.", "inc.", "corp."
 }
+DANGLING_CONNECTORS = {
+    "de", "del", "da", "do", "das", "dos", "e", "y", "and", "ou", "o", "u",
+    "a", "el", "la", "los", "las", "the", "un", "una", "unos", "unas",
+    "em", "en", "in", "on", "at", "na", "no", "nas", "nos", "para", "por",
+    "pra", "pro", "for", "to", "que", "that", "se", "si", "if", "com", "con",
+    "with", "como", "as", "mas", "pero", "but", "sin", "sem", "without",
+    "ao", "aos", "à", "às"
+}
+
+
+def clean_word_token(word: str) -> str:
+    return re.sub(r"[^\wáéíóúâêîôûãõàèìòùäëïöüñçÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÄËÏÖÜÑÇ]", "", word).lower()
+
+
+def is_dangling_word(word: str) -> bool:
+    """Detecta si la palabra es un conector débil (preposición, artículo o conjunción) que no debe quedar suelto al final."""
+    token = clean_word_token(word)
+    return token in DANGLING_CONNECTORS
 
 
 def has_major_punct(word: str) -> bool:
@@ -135,37 +154,47 @@ def has_major_punct(word: str) -> bool:
     return bool(MAJOR_PUNCT.search(w))
 
 
+def has_clause_punct(word: str) -> bool:
+    """Verifica si la palabra termina en signo de cláusula intermedia (, - — ...) excluyendo abreviaturas."""
+    w = word.strip()
+    if not w or w.lower() in ABBREVIATIONS:
+        return False
+    return bool(CLAUSE_PUNCT.search(w))
+
+
 def smart_group_segments_strict(
     assigned_segments: list[dict],
     target_duration: float = 7.0,
     min_duration: float = 3.5,
-    max_gap: float = 1.2,
+    max_duration: float = 9.5,
     hard_gap: float = 2.2,
-    min_sentence_gap: float = 0.40,
+    max_gap: float = 1.2,
+    min_sentence_gap: float = 0.35,
     min_clause_gap: float = 0.18,
     min_silence_gap: float = 0.35,
-    max_duration: float | None = None,
 ) -> list[dict]:
     """
-    Agrupa palabras en segmentos de longitud natural orientados a target_duration.
+    Agrupa palabras en segmentos prosódicos inspirados en Google Research / Area 120 (Aloud).
 
-    Reglas de cohesión y flujo (Alineación acústica estilo YouTube/DeepMind):
-    1. Pausas y absorción de silencios (min_duration = 3.5s):
-       - Si gap > hard_gap (2.2s): Silencio prolongado/cambio de sección -> Corta siempre.
+    Reglas de cohesión y flujo:
+    1. Pausas acústicas:
+       - Si gap > hard_gap (2.2s): Silencio de escena o pausa prolongada -> Corta siempre.
        - Si gap > max_gap (1.2s): Solo corta si dur_up_to_prev >= min_duration (3.5s).
-         Si dura menos de 3.5s, absorbe la pausa para que la frase se complete naturalmente y no deje palabras huérfanas (< 2.5s).
-    2. Puntuación dentro de target:
-       - Si dur_up_to_prev >= min_duration (3.5s) y <= target_duration (7.0s):
-         Corta en signos mayores (. ! ? ¡ ¿ ; :) SI Y SOLO SI el silencio posterior es >= min_sentence_gap (0.40s).
-         Las comas nunca cortan por sí solas dentro del target para no romper frases.
+    2. Puntuación dentro de target (3.5s a target_duration 7.0s):
+       - Corta en signo mayor (. ! ? ¡ ¿ ; :) con respiro posterior >= min_sentence_gap (0.35s).
+       - No corta en comas dentro de target para preservar ideas completas.
     3. Al superar target_duration (>= 7.0s):
-       - Explora hacia adelante y corta en LO QUE OCURRA PRIMERO:
-         a) Un signo mayor (. ! ? ¡ ¿ ; :) con micro-gap (>= 0.18s), O BIEN
-         b) Una pausa acústica natural de respiro (gap >= min_silence_gap, 0.35s).
-       - Si el orador habla de corrido sin pausas, selecciona el mayor respiro disponible del tramo.
+       - Búsqueda en ventana hacia adelante (hasta max_duration, 9.5s) con jerarquía prosódica:
+         a) Prioridad 1: Signo mayor (. ! ? ; :) con micro-gap (>= min_clause_gap).
+         b) Prioridad 2: Signo de cláusula (, ... —) en palabra léxica (no conector huérfano).
+         c) Prioridad 3: Pausa acústica de respiro (gap >= min_silence_gap) en palabra léxica.
+         d) Fallback: El mayor respiro disponible del tramo.
+    4. Absorción de colas huérfanas:
+       - Si las palabras restantes antes de un cambio de speaker o hard_gap duran < 2.5s y la
+         unión no supera max_duration + 1.0s, se absorben para evitar micro-clips espasmódicos.
     """
-    if max_duration is not None and target_duration == 7.0:
-        target_duration = float(max_duration)
+    if max_duration is None:
+        max_duration = 9.5
 
     if not assigned_segments:
         return []
@@ -173,7 +202,7 @@ def smart_group_segments_strict(
     all_words = []
     for seg in assigned_segments:
         seg_speaker = seg["speaker"]
-        for w in seg["words"]:
+        for w in seg.get("words", []):
             word_copy = w.copy()
             word_copy["speaker"] = seg_speaker
             all_words.append(word_copy)
@@ -186,11 +215,20 @@ def smart_group_segments_strict(
             return None
         raw_text = " ".join([w["word"].strip() for w in words_list])
         clean_text = re.sub(r"\s+([.,!?:;])", r"\1", raw_text)
+        start_t = words_list[0]["start"]
+        end_t = words_list[-1]["end"]
+        dur = max(0.1, round(end_t - start_t, 3))
+        w_count = len(words_list)
+        c_count = len(clean_text)
         return {
-            "start": words_list[0]["start"],
-            "end": words_list[-1]["end"],
+            "start": start_t,
+            "end": end_t,
+            "duration": dur,
             "text": clean_text,
             "speaker": words_list[0]["speaker"],
+            "word_count": w_count,
+            "char_count": c_count,
+            "speech_rate": round(w_count / dur, 2) if dur > 0 else 0.0,
             "words": words_list,
         }
 
@@ -205,7 +243,7 @@ def smart_group_segments_strict(
         curr = start_idx
 
         while curr < n:
-            # 1. Corte inmediato si cambia el hablante (diarización)
+            # 1. Corte inmediato si cambia el interlocutor (diarización estricta)
             if curr > start_idx and all_words[curr]["speaker"] != speaker:
                 chosen_cut_idx = curr - 1
                 break
@@ -217,75 +255,84 @@ def smart_group_segments_strict(
                 dur_up_to_prev = prev_end - seg_start
                 prev_word = all_words[curr - 1]["word"]
 
-                # A. Silencio duro de sección (> hard_gap, ej. 2.2s): siempre corta
+                # A. Silencio duro (> hard_gap, ej. 2.2s): siempre corta
                 if gap_before_curr > hard_gap:
                     chosen_cut_idx = curr - 1
                     break
 
                 # B. Silencio estándar (> max_gap, ej. 1.2s): solo si ya alcanzó min_duration (3.5s)
-                # Si dura menos, absorbe la pausa para que la frase se complete naturalmente
                 if gap_before_curr > max_gap and dur_up_to_prev >= min_duration:
                     chosen_cut_idx = curr - 1
                     break
 
-                # C. Fin de oración o signo mayor ([. ! ? ; :]) con respiro (>= 0.40s) dentro de target
+                # C. Fin de oración mayor ([. ! ? ; :]) con respiro dentro de target
                 if dur_up_to_prev >= min_duration and dur_up_to_prev <= target_duration:
                     if has_major_punct(prev_word) and gap_before_curr >= min_sentence_gap:
                         chosen_cut_idx = curr - 1
                         break
 
-            # Duración acumulada incluyendo la palabra curr
+            # Duración acumulada incluyendo palabra curr
             dur_curr = all_words[curr]["end"] - seg_start
 
-            # 3. [AL SUPERAR EL TARGET (dur_curr >= target_duration)]:
-            # Prioriza lo que ocurra primero: signo mayor (. ! ? ; :) o silencio/respiro acústico (>= 0.35s)
+            # 3. Superado el target_duration (>= 7.0s): búsqueda prospectiva prosódica
             if dur_curr >= target_duration:
-                forward_cut = None
-                forward_indices = []
                 fwd = curr
+                best_major_idx = None
+                best_clause_idx = None
+                best_breath_idx = None
                 largest_gap_val = -1.0
                 largest_gap_idx = curr
 
                 while fwd < n:
                     if all_words[fwd]["speaker"] != speaker:
                         break
-                    # Silencio duro de sección interrumpe la búsqueda
                     if fwd > start_idx and (all_words[fwd]["start"] - all_words[fwd - 1]["end"]) > hard_gap:
                         break
 
-                    forward_indices.append(fwd)
+                    f_dur = all_words[fwd]["end"] - seg_start
                     f_word = all_words[fwd]["word"]
 
-                    # Gap posterior a la palabra fwd
                     if fwd + 1 < n and all_words[fwd + 1]["speaker"] == speaker:
                         next_g = all_words[fwd + 1]["start"] - all_words[fwd]["end"]
                     else:
                         next_g = min_silence_gap
 
-                    # Rastrear mayor gap disponible
                     if next_g > largest_gap_val:
                         largest_gap_val = next_g
                         largest_gap_idx = fwd
 
-                    is_major = has_major_punct(f_word) and next_g >= min_clause_gap
-                    is_acoustic_breath = next_g >= min_silence_gap
+                    # Prioridad 1: Puntuación mayor
+                    if has_major_punct(f_word) and next_g >= min_clause_gap:
+                        best_major_idx = fwd
+                        break
 
-                    # LO QUE OCURRA PRIMERO:
-                    if is_major or is_acoustic_breath:
-                        forward_cut = fwd
+                    # Prioridad 2: Cláusula intermedia sin conector huérfano
+                    if has_clause_punct(f_word) and next_g >= min_clause_gap and not is_dangling_word(f_word):
+                        if best_clause_idx is None:
+                            best_clause_idx = fwd
+
+                    # Prioridad 3: Pausa acústica de respiro sin conector huérfano
+                    if next_g >= min_silence_gap and not is_dangling_word(f_word):
+                        if best_breath_idx is None:
+                            best_breath_idx = fwd
+
+                    if f_dur >= max_duration:
                         break
 
                     fwd += 1
 
-                if forward_cut is not None:
-                    chosen_cut_idx = forward_cut
+                if best_major_idx is not None:
+                    chosen_cut_idx = best_major_idx
+                elif best_clause_idx is not None:
+                    chosen_cut_idx = best_clause_idx
+                elif best_breath_idx is not None:
+                    chosen_cut_idx = best_breath_idx
                 elif largest_gap_idx is not None and largest_gap_idx >= curr:
                     chosen_cut_idx = largest_gap_idx
                 else:
                     chosen_cut_idx = curr
                 break
 
-            # Si es la última palabra del audio completo
             if curr == n - 1:
                 chosen_cut_idx = curr
                 break
@@ -294,6 +341,21 @@ def smart_group_segments_strict(
 
         if chosen_cut_idx is None or chosen_cut_idx < start_idx:
             chosen_cut_idx = start_idx
+
+        # 4. Prevención de colas huérfanas (Orphan Tail Absorption)
+        if chosen_cut_idx + 1 < n and all_words[chosen_cut_idx + 1]["speaker"] == speaker:
+            peek = chosen_cut_idx + 1
+            peek_start = all_words[peek]["start"]
+            while peek < n and all_words[peek]["speaker"] == speaker:
+                if peek > chosen_cut_idx + 1 and (all_words[peek]["start"] - all_words[peek - 1]["end"]) > hard_gap:
+                    break
+                peek += 1
+            remaining_words_count = peek - (chosen_cut_idx + 1)
+            if remaining_words_count > 0:
+                remaining_dur = all_words[peek - 1]["end"] - peek_start
+                dur_if_merged = all_words[peek - 1]["end"] - seg_start
+                if remaining_dur < 2.5 and dur_if_merged <= (max_duration + 1.0):
+                    chosen_cut_idx = peek - 1
 
         seg_words = all_words[start_idx : chosen_cut_idx + 1]
         seg = create_segment_from_words(seg_words)
@@ -313,10 +375,10 @@ def process_audio(
     min_duration: float = 3.5,
     max_gap: float = 1.2,
     hard_gap: float = 2.2,
-    min_sentence_gap: float = 0.40,
+    min_sentence_gap: float = 0.35,
     min_clause_gap: float = 0.18,
     min_silence_gap: float = 0.35,
-    max_duration: float | None = None,
+    max_duration: float | None = 9.5,
 ) -> list[dict]:
     assigned_data = assign_speakers_by_word(whisper_result, diarization_result)
     if group_segments:

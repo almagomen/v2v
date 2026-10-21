@@ -1072,16 +1072,15 @@ async def render_batch(req: RenderBatchRequest):
             "total_time": round(t_batch_total, 2),
         }
 
-        # Build ZIP in memory
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Build ZIP directly on disk to prevent RAM exhaustion and Cloudflare HTTP 524 timeouts
+        zip_name = to_zip_name(req.zip_name) or "batch_export"
+        zip_file_path = TEMP_DIR / f"{batch_id}_{zip_name}.zip"
+
+        with zipfile.ZipFile(zip_file_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for output_path, zip_display_name in results:
                 zf.write(output_path, arcname=f"{zip_display_name}.mp4")
             if errors:
                 zf.writestr("_errors.txt", "\n".join(errors))
-
-        zip_buffer.seek(0)
-        zip_name = to_zip_name(req.zip_name) or "batch_export"
 
         _batch_progress[batch_id] = {
             "status": "done",
@@ -1092,10 +1091,10 @@ async def render_batch(req: RenderBatchRequest):
             "step": f"¡{len(results)} videos exportados con éxito!",
         }
 
-        return StreamingResponse(
-            zip_buffer,
+        return FileResponse(
+            path=str(zip_file_path),
+            filename=f"{zip_name}.zip",
             media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="{zip_name}.zip"'},
         )
     finally:
         pass
