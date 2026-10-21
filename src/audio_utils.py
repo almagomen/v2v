@@ -374,6 +374,7 @@ def clone_voice_segments(
                     "dur_es": dur_es_cand,
                 })
 
+        healed_records: dict[int, dict] = {}
         if underflow_items:
             try:
                 from src.translation import auto_heal_short_segments
@@ -390,7 +391,11 @@ def clone_voice_segments(
                             old_dur = item["dur_es"]
                             dur_en_c = item["dur_en"]
                             if abs(dur_en_c - new_dur) < abs(dur_en_c - old_dur):
-                                print(f"\n🔄 [Auto-Heal] Segmento #{seq_num:03d} re-expandido: {old_dur:.2f}s -> {new_dur:.2f}s (target {dur_en_c:.2f}s)!", flush=True)
+                                healed_records[idx] = {
+                                    "old_dur": old_dur,
+                                    "new_dur": new_dur,
+                                    "target_dur": dur_en_c,
+                                }
                                 tts_results[idx] = (new_arr, new_rate)
                                 texts_to_process[idx]["text"] = new_txt
             except Exception as e_heal:
@@ -435,8 +440,14 @@ def clone_voice_segments(
         # --------------------------------------------------------
 
         dur_es = arr.shape[-1] / rate
+        raw_dur_es = dur_es
+        heal_tag = ""
+        if idx in healed_records:
+            h = healed_records[idx]
+            heal_tag = f" 🔄 [healed {h['old_dur']:.2f}s→{h['new_dur']:.2f}s]"
+
         duration_ratio = dur_es / dur_en if dur_en > 0 else 0
-        print(f"{idx+1:2d}. ", end="")
+        print(f"{seq_num:2d}. ", end="")
 
         # ─── BÚSQUEDA DEL PRÓXIMO SEGMENTO CRONOLÓGICO Y LÍMITE DE PAUSA ───
         # Buscar el inicio del siguiente segmento cronológico (de cualquier interlocutor)
@@ -463,12 +474,12 @@ def clone_voice_segments(
             if max_allowed_dur is not None and dur_es > max_allowed_dur:
                 ratio_needed = dur_es / max_allowed_dur
                 if ratio_needed <= 1.03:
-                    print(f"✨ 1.00x (natural): {dur_es:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                    print(f"✨ 1.00x (natural): {dur_es:5.2f}s ← {dur_en:5.2f}s{heal_tag}", end=" ")
                 else:
                     # Aceleración suave con FFmpeg hasta un tope seguro de 1.25x para sincronía exacta
                     safe_ratio = min(ratio_needed, 1.25)
                     new_dur = dur_es / safe_ratio
-                    print(f"⚡ {safe_ratio:.2f}x (sync): {new_dur:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                    print(f"⚡ {safe_ratio:.2f}x (sync): {new_dur:5.2f}s ← {raw_dur_es:5.2f}s (orig: {dur_en:5.2f}s){heal_tag}", end=" ")
                     target_samples = int(arr.shape[-1] / safe_ratio)
                     arr = adjust_audio_duration(arr, target_samples, rate)
             elif dur_es < dur_en:
@@ -476,7 +487,7 @@ def clone_voice_segments(
                 # Expandir con atempo hasta cubrir dur_en y eliminar el silencio muerto entre segmentos
                 ratio_slow = dur_es / dur_en
                 if ratio_slow >= 0.96:
-                    print(f"✨ Pad silencio (<=4%): {dur_es:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                    print(f"✨ Pad silencio (<=4%): {dur_en:5.2f}s ← {raw_dur_es:5.2f}s{heal_tag}", end=" ")
                     pad_samples = int((dur_en - dur_es) * rate)
                     if pad_samples > 0 and torch is not None:
                         arr = distribute_silence_padding(arr, int(dur_en * rate), rate)
@@ -491,13 +502,13 @@ def clone_voice_segments(
                         target_samples = int(dur_en * rate)
                         if target_samples > arr.shape[-1] and torch is not None:
                             arr = distribute_silence_padding(arr, target_samples, rate)
-                        print(f"🔉 {effective_speed:.2f}x+pad: {dur_en:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                        print(f"🔉 {effective_speed:.2f}x+pad: {dur_en:5.2f}s ← {raw_dur_es:5.2f}s{heal_tag}", end=" ")
                     else:
-                        print(f"🔉 {ratio_slow:.2f}x (expand): {dur_en:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                        print(f"🔉 {ratio_slow:.2f}x (expand): {dur_en:5.2f}s ← {raw_dur_es:5.2f}s{heal_tag}", end=" ")
                         target_samples = int(dur_en * rate)
                         arr = adjust_audio_duration(arr, target_samples, rate)
             else:
-                print(f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                print(f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s{heal_tag}", end=" ")
 
         # Micro-fade out suave (256 muestras) al final del audio para eliminar ruidos de corte abrupto
         if arr.shape[-1] > 256 and torch is not None:
@@ -557,6 +568,9 @@ def clone_voice_segments(
         path_es.append(audio_es_path)
         start_samples = int(start_time * rate)
         times.append(start_samples)
+
+    if healed_records:
+        print(f"\n✨ [Auto-Heal] {len(healed_records)} segmentos re-expandidos exitosamente en el flujo de doblaje.", flush=True)
 
     return path_es, times, rate
 
