@@ -190,36 +190,37 @@ def count_syllables_approx(text: str) -> int:
 
 def smart_group_segments_strict(
     assigned_segments: list[dict],
-    target_duration: float = 4.5,
-    min_duration: float = 2.2,
-    max_duration: float = 6.5,
-    hard_gap: float = 1.1,
-    max_gap: float = 0.65,
-    min_sentence_gap: float = 0.22,
-    min_clause_gap: float = 0.15,
-    min_silence_gap: float = 0.25,
+    target_duration: float = 6.5,
+    min_duration: float = 3.0,
+    max_duration: float = 8.5,
+    hard_gap: float = 1.4,
+    max_gap: float = 0.75,
+    min_sentence_gap: float = 0.20,
+    min_clause_gap: float = 0.25,
+    min_silence_gap: float = 0.38,
 ) -> list[dict]:
     """
     Agrupa palabras en segmentos prosódicos inspirados en Google Research / Area 120 (Aloud).
 
     Reglas de cohesión y flujo:
-    1. Pausas acústicas:
-       - Si gap > hard_gap (1.1s): Silencio de escena o pausa prolongada -> Corta siempre si no es conector.
-       - Si gap > max_gap (0.65s): Solo corta si dur_up_to_prev >= min_duration (2.2s).
-    2. Puntuación dentro de target (2.2s a target_duration 4.5s):
-       - Corta en signo mayor (. ! ? ¡ ¿ ; :) con respiro posterior >= min_sentence_gap (0.22s).
-       - No corta en comas dentro de target para preservar ideas completas.
-    3. Al superar target_duration (>= 4.5s):
-       - Búsqueda en ventana hacia adelante (hasta max_duration, 6.5s) con jerarquía prosódica:
-         a) Prioridad 1: Signo mayor (. ! ? ; :) con micro-gap (>= min_clause_gap).
-         b) Prioridad 2: Signo de cláusula (, ... —) en palabra léxica (no conector huérfano).
-         c) Prioridad 3: Pausa acústica de respiro (gap >= min_silence_gap) en palabra léxica.
+    1. Pausas acústicas duras:
+       - Si gap > hard_gap (1.4s): Silencio de escena o pausa prolongada -> Corta siempre si no es conector.
+    2. Detección temprana de respiros (>= min_duration 3.0s):
+       - Si el hablante toma un respiro natural (gap >= min_silence_gap 0.38s) sobre una palabra léxica,
+         corta de inmediato en ese respiro en lugar de seguir acumulando artificialmente.
+       - Si concluye una cláusula (, - —) con micropausa (gap >= min_clause_gap 0.25s), corta de inmediato.
+       - Si concluye una oración mayor (. ! ? ; :) con respiro (gap >= min_sentence_gap 0.20s), corta de inmediato.
+    3. Habla continua sin pausas (hasta target_duration 6.5s y max_duration 8.5s):
+       - Si el hablante no toma respiros y habla de corrido, la frase fluye de forma natural hasta target_duration.
+       - Al superar target_duration (>= 6.5s), búsqueda prospectiva hasta max_duration (8.5s) con jerarquía prosódica:
+         a) Prioridad 1: Signo mayor (. ! ? ; :) con micro-gap.
+         b) Prioridad 2: Signo de cláusula (, ... —) en palabra léxica.
+         c) Prioridad 3: Pausa acústica de respiro (gap >= min_silence_gap).
          d) Fallback: El mayor respiro disponible del tramo.
-    4. Absorción de colas huérfanas:
-       - Si las palabras restantes duran < 2.0s y la pausa es <= 0.50s, se absorben.
+    4. Absorción y sanado de micro-segmentos huérfanos (< 2.2s).
     """
     if max_duration is None:
-        max_duration = 6.5
+        max_duration = 8.5
 
     if not assigned_segments:
         return []
@@ -316,14 +317,27 @@ def smart_group_segments_strict(
                         chosen_cut_idx = curr - 1
                         break
 
-                # B. Silencio estándar (> max_gap, ej. 1.2s): solo si alcanzó min_duration (3.5s) y no es conector
-                if gap_before_curr > max_gap and dur_up_to_prev >= min_duration and not is_dangling_word(prev_word):
-                    chosen_cut_idx = curr - 1
-                    break
-
-                # C. Fin de oración mayor ([. ! ? ; :]) con respiro dentro de target
-                if dur_up_to_prev >= min_duration and dur_up_to_prev <= target_duration:
+                # B. Detección temprana de respiros y pausas naturales tras min_duration (>= 3.0s):
+                # Si el hablante tomó un respiro natural o pausa suficiente sobre una palabra léxica,
+                # cortamos de inmediato para respetar la cadencia del hablante original y no empaquetar oraciones compuestas.
+                if dur_up_to_prev >= min_duration and not is_dangling_word(prev_word):
+                    # 1. Fin de oración mayor ([. ! ? ¡ ¿ ; :]) con respiro mínimo
                     if has_major_punct(prev_word) and gap_before_curr >= min_sentence_gap:
+                        chosen_cut_idx = curr - 1
+                        break
+
+                    # 2. Cláusula intermedia (, - — ...) con micropausa perceptible de cláusula
+                    if has_clause_punct(prev_word) and gap_before_curr >= min_clause_gap:
+                        chosen_cut_idx = curr - 1
+                        break
+
+                    # 3. Pausa acústica de respiración humana pura (gap >= min_silence_gap, ej. 0.38s)
+                    if gap_before_curr >= min_silence_gap:
+                        chosen_cut_idx = curr - 1
+                        break
+
+                    # 4. Silencio estándar mayor que max_gap (ej. 0.75s)
+                    if gap_before_curr > max_gap:
                         chosen_cut_idx = curr - 1
                         break
 
@@ -459,14 +473,14 @@ def process_audio(
     diarization_result: Any,
     group_segments: bool = True,
     include_words: bool = False,
-    target_duration: float = 4.5,
-    min_duration: float = 2.2,
-    max_gap: float = 0.65,
-    hard_gap: float = 1.1,
-    min_sentence_gap: float = 0.22,
-    min_clause_gap: float = 0.15,
-    min_silence_gap: float = 0.25,
-    max_duration: float | None = 6.5,
+    target_duration: float = 6.5,
+    min_duration: float = 3.0,
+    max_gap: float = 0.75,
+    hard_gap: float = 1.4,
+    min_sentence_gap: float = 0.20,
+    min_clause_gap: float = 0.25,
+    min_silence_gap: float = 0.38,
+    max_duration: float | None = 8.5,
 ) -> list[dict]:
     assigned_data = assign_speakers_by_word(whisper_result, diarization_result)
     if group_segments:
