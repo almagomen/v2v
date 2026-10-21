@@ -32,7 +32,26 @@ import subprocess
 import tempfile
 import os
 import re
-import numpy as np
+import unicodedata
+
+
+def _pad_visible_tag(tag: str, target_w: int = 20) -> str:
+    """Calcula el ancho visible en terminal monoespaciada para alinear columnas tabulares."""
+    w = 0
+    for ch in tag:
+        if ch == '\ufe0f':
+            continue
+        if ch in ('🔉', '✨', '⚡', '🎯', '🎛', '🔄', '🌐', '✂'):
+            w += 2
+        elif unicodedata.east_asian_width(ch) in ('F', 'W'):
+            w += 2
+        elif unicodedata.category(ch) == 'Mn':
+            pass
+        else:
+            w += 1
+    if w < target_w:
+        return tag + " " * (target_w - w)
+    return tag
 
 
 def _adjust_audio_duration_ffmpeg(
@@ -401,6 +420,12 @@ def clone_voice_segments(
             except Exception as e_heal:
                 print(f"\n⚠️ [Auto-Heal] Excepción en re-inferencia selectiva: {e_heal}", flush=True)
 
+    if only_indices is None or len(only_indices) > 1:
+        header = f"{' #':<5}{'MODO':<20}{'DURACIONES [ORIG | FISH ➔ FINAL]':<44}TEXTO"
+        print("-" * 105)
+        print(header)
+        print("-" * 105)
+
     for idx, text_dict in enumerate(texts_to_process):
         text = text_dict["text"]
         start_time = text_dict["start"]
@@ -441,13 +466,6 @@ def clone_voice_segments(
 
         dur_es = arr.shape[-1] / rate
         raw_dur_es = dur_es
-        heal_tag = ""
-        if idx in healed_records:
-            h = healed_records[idx]
-            heal_tag = f" 🔄 [healed {h['old_dur']:.2f}s→{h['new_dur']:.2f}s]"
-
-        duration_ratio = dur_es / dur_en if dur_en > 0 else 0
-        print(f"{seq_num:2d}. ", end="")
 
         # ─── BÚSQUEDA DEL PRÓXIMO SEGMENTO CRONOLÓGICO Y LÍMITE DE PAUSA ───
         # Buscar el inicio del siguiente segmento cronológico (de cualquier interlocutor)
@@ -470,16 +488,17 @@ def clone_voice_segments(
         else:
             max_allowed_dur = dur_en * 1.15
 
+        mode_tag = "✨ 1.00x (natural)"
+
         if slowdown_range:
             if max_allowed_dur is not None and dur_es > max_allowed_dur:
                 ratio_needed = dur_es / max_allowed_dur
                 if ratio_needed <= 1.03:
-                    print(f"✨ 1.00x (natural): {dur_es:5.2f}s ← {dur_en:5.2f}s{heal_tag}", end=" ")
+                    mode_tag = "✨ 1.00x (natural)"
                 else:
                     # Aceleración suave con FFmpeg hasta un tope seguro de 1.25x para sincronía exacta
                     safe_ratio = min(ratio_needed, 1.25)
-                    new_dur = dur_es / safe_ratio
-                    print(f"⚡ {safe_ratio:.2f}x (sync): {new_dur:5.2f}s ← {raw_dur_es:5.2f}s (orig: {dur_en:5.2f}s){heal_tag}", end=" ")
+                    mode_tag = f"⚡ {safe_ratio:.2f}x (sync)"
                     target_samples = int(arr.shape[-1] / safe_ratio)
                     arr = adjust_audio_duration(arr, target_samples, rate)
             elif dur_es < dur_en:
@@ -487,7 +506,8 @@ def clone_voice_segments(
                 # Expandir con atempo hasta cubrir dur_en y eliminar el silencio muerto entre segmentos
                 ratio_slow = dur_es / dur_en
                 if ratio_slow >= 0.96:
-                    print(f"✨ Pad silencio (<=4%): {dur_en:5.2f}s ← {raw_dur_es:5.2f}s{heal_tag}", end=" ")
+                    pad_pct = int(round((1.0 - ratio_slow) * 100))
+                    mode_tag = f"✨ 1.00x (+pad {pad_pct}%)" if pad_pct > 0 else "✨ 1.00x (natural)"
                     pad_samples = int((dur_en - dur_es) * rate)
                     if pad_samples > 0 and torch is not None:
                         arr = distribute_silence_padding(arr, int(dur_en * rate), rate)
@@ -497,18 +517,18 @@ def clone_voice_segments(
                     min_allowed_speed = 0.75
                     if ratio_slow < min_allowed_speed:
                         effective_speed = min_allowed_speed
+                        mode_tag = f"🔉 {effective_speed:.2f}x (+pad)"
                         stretch_samples = int(arr.shape[-1] / effective_speed)
                         arr = adjust_audio_duration(arr, stretch_samples, rate)
                         target_samples = int(dur_en * rate)
                         if target_samples > arr.shape[-1] and torch is not None:
                             arr = distribute_silence_padding(arr, target_samples, rate)
-                        print(f"🔉 {effective_speed:.2f}x+pad: {dur_en:5.2f}s ← {raw_dur_es:5.2f}s{heal_tag}", end=" ")
                     else:
-                        print(f"🔉 {ratio_slow:.2f}x (expand): {dur_en:5.2f}s ← {raw_dur_es:5.2f}s{heal_tag}", end=" ")
+                        mode_tag = f"🔉 {ratio_slow:.2f}x (expand)"
                         target_samples = int(dur_en * rate)
                         arr = adjust_audio_duration(arr, target_samples, rate)
             else:
-                print(f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s{heal_tag}", end=" ")
+                mode_tag = "✨ 1.00x (natural)"
 
         # Micro-fade out suave (256 muestras) al final del audio para eliminar ruidos de corte abrupto
         if arr.shape[-1] > 256 and torch is not None:
@@ -519,30 +539,14 @@ def clone_voice_segments(
         # Aplicar target_duration (modo 's') si está presente
         if target_duration is not None and target_duration > 0:
             raw_speed = dur_es / target_duration if target_duration > 0 else 1.0
-            if raw_speed < 0.5:
-                effective_speed = 0.5
-                print(
-                    f"Target duration: {target_duration:.2f}s -> speed={raw_speed:.2f}x CLAMPED a 0.5x",
-                    end=" ",
-                )
-            elif raw_speed > 2.0:
-                effective_speed = 2.0
-                print(
-                    f"Target duration: {target_duration:.2f}s -> speed={raw_speed:.2f}x CLAMPED a 2.0x",
-                    end=" ",
-                )
-            else:
-                effective_speed = raw_speed
-                print(
-                    f"Target duration: {target_duration:.2f}s -> speed={effective_speed:.2f}x",
-                    end=" ",
-                )
+            effective_speed = max(0.5, min(raw_speed, 2.0))
+            mode_tag = f"🎯 {effective_speed:.2f}x (target)"
             target_samples = int(target_duration * rate)
             arr = adjust_audio_duration(arr, target_samples, rate)
         # Aplicar speed manual del usuario si es distinto de 1.0 y no se aplicó target_duration
         elif speed != 1.0:
             target_samples = int(arr.shape[-1] / speed)
-            print(f"Speed manual: {speed}x -> {target_samples} samples", end=" ")
+            mode_tag = f"🎛️ {speed:.2f}x (manual)"
             arr = adjust_audio_duration(arr, target_samples, rate)
 
         # Tope final estricto: ningún segmento puede exceder la duración total del video
@@ -553,13 +557,33 @@ def clone_voice_segments(
                 allowed_sec = max(0.1, max_end - start_time)
                 target_samples = int(allowed_sec * rate)
                 arr = adjust_audio_duration(arr, target_samples, rate)
+                mode_tag = "✂️ clamp (fin video)"
 
         # Actualizar metadatos de duración y fin real del segmento
         final_dur = arr.shape[-1] / rate
         text_dict["end"] = round(start_time + final_dur, 3)
         text_dict["duration"] = round(final_dur, 3)
 
-        print(f" {text}")
+        # Formateo estricto de columnas alineadas
+        seq_col = f"{seq_num:>3d}. "
+        mode_col = _pad_visible_tag(mode_tag, 20)
+        dur_col = f"[orig: {dur_en:5.2f}s | fish: {raw_dur_es:5.2f}s ➔ fin: {final_dur:5.2f}s]  "
+        print(f"{seq_col}{mode_col}{dur_col}{text}")
+
+        # Si el segmento fue re-expandido por el Auto-Healer selectivo
+        if idx in healed_records:
+            h = healed_records[idx]
+            print(f"     ↳ 🔄 [auto-heal]: {h['old_dur']:.2f}s → {h['new_dur']:.2f}s (target {h['target_dur']:.2f}s)")
+
+        # Si el segmento es traducción, mostrar versión original para comparativa y salto de línea
+        orig_text = str(text_dict.get("orig_text") or text_dict.get("original_text") or "").strip()
+        clean_curr = re.sub(r"\[.*?\]", "", text).strip()
+        clean_orig = re.sub(r"\[.*?\]", "", orig_text).strip()
+        is_translation = bool(clean_orig and clean_orig.lower() != clean_curr.lower())
+
+        if is_translation:
+            print(f"     ↳ 🌐 [orig]: {orig_text}")
+            print()
 
         # Generar nombre con formato consistente: tts_{speaker}_{NNNN}.wav
         # Esto permite al frontend identificar el segmento y su speaker

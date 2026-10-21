@@ -72,15 +72,22 @@ def process_video_queue(
                         if path and path.exists():
                             t_cache = time.perf_counter() - t_url_pipeline_start
                             out_title = result_data.get("output_name") or path.stem
+                            c_segs = result_data.get("segments", [])
+                            c_orig = result_data.get("original_segments", [])
+                            for i, cs in enumerate(c_segs):
+                                if not (cs.get("orig_text") or cs.get("original_text")) and i < len(c_orig):
+                                    raw_o = c_orig[i].get("text", "")
+                                    cs["orig_text"] = raw_o
+                                    cs["original_text"] = raw_o
                             results.append(
                                 {
                                     "path": path,
                                     "output_name": out_title,
                                     "url": u,
                                     "info": result_data.get("info", {}),
-                                    "texts": result_data.get("segments", []),
+                                    "texts": c_segs,
                                     "src_lang": result_data.get("source_lang", "es"),
-                                    "result": result_data.get("original_segments", []),
+                                    "result": c_orig,
                                     "transcription_lang": result_data.get("source_lang", "es"),
                                     "cached": True,
                                 }
@@ -102,15 +109,22 @@ def process_video_queue(
                     t_cache = time.perf_counter() - t_url_pipeline_start
                     out_title = cached_data.get("output_name") or info.get("title") or path.stem
                     print(f"♻️ Cargando caché: {path.name}")
+                    c_segs = cached_data.get("segments", [])
+                    c_orig = cached_data.get("original_segments", [])
+                    for i, cs in enumerate(c_segs):
+                        if not (cs.get("orig_text") or cs.get("original_text")) and i < len(c_orig):
+                            raw_o = c_orig[i].get("text", "")
+                            cs["orig_text"] = raw_o
+                            cs["original_text"] = raw_o
                     results.append(
                         {
                             "path": path,
                             "output_name": out_title,
                             "url": u,
                             "info": cached_data.get("info", {}),
-                            "texts": cached_data.get("segments", []),
+                            "texts": c_segs,
                             "src_lang": cached_data.get("source_lang", "es"),
-                            "result": cached_data.get("original_segments", []),
+                            "result": c_orig,
                             "transcription_lang": cached_data.get("source_lang", "es"),
                             "cached": True,
                         }

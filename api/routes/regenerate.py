@@ -99,10 +99,13 @@ def _do_regenerate_segment(
     if seg_idx < 1 or seg_idx > len(texts_original):
         raise HTTPException(status_code=400, detail="Índice de segmento inválido")
 
+    orig_txt_val = texts_original[seg_idx - 1].get("orig_text") or texts_original[seg_idx - 1].get("original_text", "")
     t_edit = {
         "start": start,
         "end": end,
         "text": text,
+        "orig_text": orig_txt_val,
+        "original_text": orig_txt_val,
         # Resolvemos siempre a la clave legible del diccionario (ej: 'mrbeast')
         # aunque el frontend haya enviado el ID de Fish Audio como speaker.
         # Esto garantiza que el archivo en disco se llame tts_mrbeast_001.wav

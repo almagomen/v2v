@@ -215,6 +215,9 @@ def run_main(
             from src.diarization import count_syllables_approx
             import re
             d = dict(orig_seg)
+            orig_raw = orig_seg.get("orig_text") or orig_seg.get("original_text") or orig_seg.get("text", "")
+            d["orig_text"] = orig_raw
+            d["original_text"] = orig_raw
             d["start"] = start_t
             d["end"] = end_t
             d["text"] = raw_txt
@@ -244,6 +247,15 @@ def run_main(
             ]
         else:
             print("⚠️ No se pudo traducir, usando texto original", flush=True)
+            for r in result:
+                r["orig_text"] = r.get("orig_text") or r.get("text", "")
+                r["original_text"] = r.get("original_text") or r.get("text", "")
+            translated_result = result
+    else:
+        for r in result:
+            r["orig_text"] = r.get("orig_text") or r.get("text", "")
+            r["original_text"] = r.get("original_text") or r.get("text", "")
+        translated_result = result
 
     # Inferencia asíncrona con resolución garantizada antes de retornar al pipeline
     fallback_summary = " ".join(t["text"] for t in (translated_result or result)) if (translated_result or result) else (title or "")
