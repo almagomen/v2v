@@ -192,12 +192,13 @@ def smart_group_segments_strict(
     assigned_segments: list[dict],
     target_duration: float | None = None,
     min_duration: float = 3.0,
+    min_clause_dur: float = 6.0,
     max_duration: float | None = None,
     hard_gap: float = 1.4,
-    max_gap: float = 0.75,
+    max_gap: float = 0.85,
     min_sentence_gap: float = 0.20,
-    min_clause_gap: float = 0.25,
-    min_silence_gap: float = 0.38,
+    min_clause_gap: float = 0.35,
+    min_silence_gap: float = 0.48,
 ) -> list[dict]:
     """
     Agrupa palabras en segmentos prosódicos puramente acústicos y gramaticales.
@@ -205,16 +206,17 @@ def smart_group_segments_strict(
     Reglas de cohesión y flujo:
     1. Cero límites artificiales de tiempo:
        - No se fuerza ningún corte por reloj (max_duration/target_duration son None por defecto).
-       - Si el hablante expresa una idea continua de 15s, 30s o más sin respirar, se respeta intacta.
+       - Si el hablante expresa una idea continua sin respirar, se respeta intacta.
     2. Pausas acústicas duras:
        - Si gap > hard_gap (1.4s): Silencio de escena o pausa prolongada -> Corta siempre si no es conector.
     3. Detección de respiros y pausas naturales (>= min_duration 3.0s):
-       - Si el hablante toma un respiro natural (gap >= min_silence_gap 0.38s) sobre una palabra léxica,
-         corta de inmediato en ese respiro natural.
-       - Si concluye una cláusula (, - —) con micropausa (gap >= min_clause_gap 0.25s), corta de inmediato.
        - Si concluye una oración mayor (. ! ? ; :) con respiro (gap >= min_sentence_gap 0.20s), corta de inmediato.
-       - Si hay un silencio estándar (gap > max_gap 0.75s) sobre palabra léxica, corta de inmediato.
-    4. Absorción y sanado de micro-segmentos huérfanos (< 2.2s).
+       - Si el hablante toma un respiro acústico real (gap >= min_silence_gap 0.48s), corta de inmediato.
+       - Si hay un silencio estándar (gap > max_gap 0.85s) sobre palabra léxica, corta de inmediato.
+    4. Cláusulas sintácticas protegidas (comas, guiones [, — -]):
+       - Solo se permite cortar en coma si la frase ya acumula una longitud considerable (>= min_clause_dur 6.0s)
+         y la pausa es perceptible (gap >= min_clause_gap 0.35s). Esto evita trocear frases cortas de 3s-4s por comas de entonación.
+    5. Absorción y sanado de micro-segmentos huérfanos (< 3.2s con pausas <= 0.45s).
     """
 
     if not assigned_segments:
@@ -312,27 +314,29 @@ def smart_group_segments_strict(
                         chosen_cut_idx = curr - 1
                         break
 
-                # B. Detección temprana de respiros y pausas naturales tras min_duration (>= 3.0s):
-                # Si el hablante tomó un respiro natural o pausa suficiente sobre una palabra léxica,
-                # cortamos de inmediato para respetar la cadencia del hablante original y no empaquetar oraciones compuestas.
+                # B. Condiciones de corte tras alcanzar min_duration (>= 3.0s):
                 if dur_up_to_prev >= min_duration and not is_dangling_word(prev_word):
-                    # 1. Fin de oración mayor ([. ! ? ¡ ¿ ; :]) con respiro mínimo
+                    # 1. Fin de oración mayor ([. ! ? ¡ ¿ ; :]) con respiro posterior
                     if has_major_punct(prev_word) and gap_before_curr >= min_sentence_gap:
                         chosen_cut_idx = curr - 1
                         break
 
-                    # 2. Cláusula intermedia (, - — ...) con micropausa perceptible de cláusula
-                    if has_clause_punct(prev_word) and gap_before_curr >= min_clause_gap:
-                        chosen_cut_idx = curr - 1
-                        break
-
-                    # 3. Pausa acústica de respiración humana pura (gap >= min_silence_gap, ej. 0.38s)
+                    # 2. Pausa acústica de respiración real (gap >= min_silence_gap, ej. 0.48s)
                     if gap_before_curr >= min_silence_gap:
                         chosen_cut_idx = curr - 1
                         break
 
-                    # 4. Silencio estándar mayor que max_gap (ej. 0.75s)
+                    # 3. Silencio estándar mayor que max_gap (ej. 0.85s)
                     if gap_before_curr > max_gap:
+                        chosen_cut_idx = curr - 1
+                        break
+
+                # C. Cláusula sintáctica protegida (coma, guión: [, — -]):
+                # Solo se permite cortar en coma si la frase ya acumula una longitud considerable (>= min_clause_dur, ej. 6.0s)
+                # y viene acompañada de una micropausa de cláusula clara (gap >= min_clause_gap, ej. 0.35s).
+                # Esto evita trocear frases cortas de 3s-4s por comas de entonación.
+                if dur_up_to_prev >= min_clause_dur and not is_dangling_word(prev_word):
+                    if has_clause_punct(prev_word) and gap_before_curr >= min_clause_gap:
                         chosen_cut_idx = curr - 1
                         break
 
@@ -435,27 +439,27 @@ def smart_group_segments_strict(
             grouped_segments.append(seg)
         start_idx = chosen_cut_idx + 1
 
-    # 5. Pase 2: Fusión y sanado de micro-segmentos huérfanos (< 2.0s o <= 2 palabras) respetando pausas reales (> 0.50s)
+    # 5. Pase 2: Fusión y sanado de micro-segmentos huérfanos (< 3.2s o <= 3 palabras) con pausas cortas (<= 0.45s)
     merged_segments = []
     i = 0
     while i < len(grouped_segments):
         cur_seg = grouped_segments[i]
-        is_tiny = cur_seg["duration"] < 2.0 or cur_seg["word_count"] <= 2
+        is_tiny = cur_seg["duration"] < 3.2 or cur_seg["word_count"] <= 3
 
         if is_tiny:
-            # Opción A: Fusionar con el segmento previo solo si es del mismo speaker, pausa <= 0.50s y no excede max_duration
+            # Opción A: Fusionar con el segmento previo solo si es del mismo speaker, pausa <= 0.45s y no excede max_duration
             if merged_segments and merged_segments[-1]["speaker"] == cur_seg["speaker"]:
                 gap_prev = cur_seg["start"] - merged_segments[-1]["end"]
-                if gap_prev <= 0.50 and (max_duration is None or (merged_segments[-1]["duration"] + cur_seg["duration"]) <= (max_duration + 1.5)):
+                if gap_prev <= 0.45 and (max_duration is None or (merged_segments[-1]["duration"] + cur_seg["duration"]) <= (max_duration + 1.5)):
                     prev_seg = merged_segments[-1]
                     comb_words = prev_seg["words"] + cur_seg["words"]
                     merged_segments[-1] = create_segment_from_words(comb_words)
                     i += 1
                     continue
-            # Opción B: Fusionar con el segmento siguiente solo si es del mismo speaker, pausa <= 0.50s y no excede max_duration
+            # Opción B: Fusionar con el segmento siguiente solo si es del mismo speaker, pausa <= 0.45s y no excede max_duration
             if i + 1 < len(grouped_segments) and grouped_segments[i + 1]["speaker"] == cur_seg["speaker"]:
                 gap_next = grouped_segments[i + 1]["start"] - cur_seg["end"]
-                if gap_next <= 0.50 and (max_duration is None or (cur_seg["duration"] + grouped_segments[i + 1]["duration"]) <= (max_duration + 1.5)):
+                if gap_next <= 0.45 and (max_duration is None or (cur_seg["duration"] + grouped_segments[i + 1]["duration"]) <= (max_duration + 1.5)):
                     next_seg = grouped_segments[i + 1]
                     comb_words = cur_seg["words"] + next_seg["words"]
                     grouped_segments[i + 1] = create_segment_from_words(comb_words)
@@ -475,11 +479,12 @@ def process_audio(
     include_words: bool = False,
     target_duration: float | None = None,
     min_duration: float = 3.0,
-    max_gap: float = 0.75,
+    min_clause_dur: float = 6.0,
+    max_gap: float = 0.85,
     hard_gap: float = 1.4,
     min_sentence_gap: float = 0.20,
-    min_clause_gap: float = 0.25,
-    min_silence_gap: float = 0.38,
+    min_clause_gap: float = 0.35,
+    min_silence_gap: float = 0.48,
     max_duration: float | None = None,
 ) -> list[dict]:
     assigned_data = assign_speakers_by_word(whisper_result, diarization_result)
@@ -488,6 +493,7 @@ def process_audio(
             assigned_data,
             target_duration=target_duration,
             min_duration=min_duration,
+            min_clause_dur=min_clause_dur,
             max_gap=max_gap,
             hard_gap=hard_gap,
             min_sentence_gap=min_sentence_gap,
