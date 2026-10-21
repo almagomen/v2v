@@ -229,6 +229,53 @@ def distribute_silence_padding(arr: Any, target_samples: int, rate: int) -> Any:
     return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
 
 
+def get_audio_file_duration(file_path: Path | str, fallback: Optional[float] = None) -> Optional[float]:
+    """
+    Obtiene la duración en segundos de un archivo de audio de forma robusta y rápida.
+    Prueba sucesivamente: wave (estándar, 0 dependencias), soundfile, torchaudio.info y torchaudio.load.
+    """
+    p_str = str(file_path)
+    # 1. wave (módulo estándar de Python, ultrarrápido para archivos WAV)
+    try:
+        import wave
+        with wave.open(p_str, "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            if rate > 0 and frames > 0:
+                return frames / float(rate)
+    except Exception:
+        pass
+
+    # 2. soundfile (muy confiable en entornos Linux/Kaggle)
+    try:
+        import soundfile as sf
+        info = sf.info(p_str)
+        if info.duration > 0:
+            return float(info.duration)
+    except Exception:
+        pass
+
+    # 3. torchaudio.info (si está disponible y soportado en el build de PyTorch)
+    try:
+        if torchaudio is not None and hasattr(torchaudio, "info"):
+            v_info = torchaudio.info(p_str)
+            if getattr(v_info, "sample_rate", 0) > 0:
+                return v_info.num_frames / float(v_info.sample_rate)
+    except Exception:
+        pass
+
+    # 4. torchaudio.load (fallback leyendo cabecera/datos)
+    try:
+        if torchaudio is not None:
+            arr, sr = torchaudio.load(p_str)
+            if sr > 0:
+                return arr.shape[-1] / float(sr)
+    except Exception:
+        pass
+
+    return fallback
+
+
 def clone_voice_segments(
     path: Path,
     texts: list[dict],
@@ -260,21 +307,13 @@ def clone_voice_segments(
     for cand_name in ["no_vocals.wav", "no_vocals.m4a", "vocals.wav"]:
         cand_p = path.with_name(cand_name)
         if cand_p.exists():
-            try:
-                v_info = torchaudio.info(str(cand_p))
-                if v_info.sample_rate > 0:
-                    video_total_duration = v_info.num_frames / v_info.sample_rate
-                    break
-            except Exception:
-                pass
+            d = get_audio_file_duration(cand_p)
+            if d is not None and d > 0:
+                video_total_duration = d
+                break
 
     if video_total_duration is None and path.exists():
-        try:
-            v_info = torchaudio.info(str(path))
-            if v_info.sample_rate > 0:
-                video_total_duration = v_info.num_frames / v_info.sample_rate
-        except Exception:
-            pass
+        video_total_duration = get_audio_file_duration(path)
 
     from concurrent.futures import ThreadPoolExecutor
 
@@ -321,8 +360,8 @@ def clone_voice_segments(
             arr_cand, rate_cand = tts_results[idx]
             if arr_cand is None or rate_cand is None:
                 continue
-            v_info = torchaudio.info(str(audio_en_path))
-            dur_en_cand = v_info.num_frames / v_info.sample_rate
+            meta_fallback = float(text_dict.get("duration") or max(0.1, float(text_dict.get("end", 0)) - float(text_dict.get("start", 0))))
+            dur_en_cand = get_audio_file_duration(audio_en_path, fallback=meta_fallback) or meta_fallback
             dur_es_cand = arr_cand.shape[-1] / rate_cand
             clean_txt = re.sub(r"\[.*?\]", "", text_dict.get("text", "")).strip()
             # Si el clip dura >= 3.5s y la voz quedó en menos del 65% de la duración en un texto sustancial:

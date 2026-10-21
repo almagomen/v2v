@@ -339,10 +339,32 @@ async def get_segment_speed(job_id: str, video_index: int, seg_idx: int):
         if not raw_path.exists():
             return {"speed": 1.0}
 
-        info_current = torchaudio.info(str(audio_path))
-        info_raw = torchaudio.info(str(raw_path))
-        current_samples = info_current.num_frames
-        raw_samples = info_raw.num_frames
+        def _get_samples(p):
+            try:
+                import wave
+                with wave.open(str(p), "rb") as wf:
+                    return wf.getnframes()
+            except Exception:
+                pass
+            try:
+                import soundfile as sf
+                return sf.info(str(p)).frames
+            except Exception:
+                pass
+            try:
+                if torchaudio is not None and hasattr(torchaudio, "info"):
+                    return torchaudio.info(str(p)).num_frames
+            except Exception:
+                pass
+            try:
+                if torchaudio is not None:
+                    return torchaudio.load(str(p))[0].shape[-1]
+            except Exception:
+                pass
+            return 0
+
+        current_samples = _get_samples(audio_path)
+        raw_samples = _get_samples(raw_path)
         
         if current_samples == 0:
             return {"speed": 1.0}
