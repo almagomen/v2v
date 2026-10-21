@@ -300,11 +300,11 @@ def clone_voice_segments(
                         f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s",
                         end=" ",
                     )
-            elif slowdown_range[0] < duration_ratio < slowdown_range[1]:
-                # Estiramiento suave para cubrir el espacio original (isocronía sin huecos de silencio)
-                desired_dur = dur_es + (dur_en - dur_es) * stretch_target_ratio
-                min_slow_speed = 0.90  # Piso de seguridad conservador: evita arrastre o voz lenta
+            elif duration_ratio < slowdown_range[1]:
+                # Estiramiento suave para cubrir armónicamente el espacio original (isocronía sin huecos de silencio)
+                min_slow_speed = 0.88  # Piso de seguridad conservador: preserva timbre natural y fluidez sin arrastrar
                 max_slow_dur = dur_es / min_slow_speed
+                desired_dur = dur_es + (dur_en - dur_es) * stretch_target_ratio
                 target_dur_sec = min(desired_dur, max_slow_dur, dur_en)
                 effective_slow_speed = dur_es / target_dur_sec if target_dur_sec > 0 else 1.0
 
@@ -328,6 +328,12 @@ def clone_voice_segments(
                     f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s",
                     end=" ",
                 )
+
+        # Micro-fade out suave (256 muestras) al final del audio para eliminar ruidos de corte abrupto
+        if arr.shape[-1] > 256 and torch is not None:
+            fade_len = min(256, arr.shape[-1])
+            fade = torch.linspace(1.0, 0.0, fade_len, device=arr.device)
+            arr[:, -fade_len:] *= fade
 
         # Aplicar target_duration (modo 's') si está presente
         if target_duration is not None and target_duration > 0:

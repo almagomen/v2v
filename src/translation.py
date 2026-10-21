@@ -118,8 +118,12 @@ Directrices obligatorias:
 3. REESCRIBE MANTENIENDO LA IDEA: No hagas una traducción literal o palabra por palabra. Reformula y reescribe preservando la misma idea central y sentido, usando expresiones coloquiales y naturales adecuadas al {target_lang_name}.
 4. VOZ HABLADA Y DOBLAJE: El texto será sintetizado por modelos de voz (TTS). La frase debe tener ritmo fonético natural, ser directa y sonar convincente y orgánica al ser escuchada.
 {pacing_instruction}
-6. COHERENCIA: Las frases forman parte de un diálogo o narración continua; preserva la coherencia temática y el flujo entre ellas.
-7. PRESERVACIÓN DE EMOCIONES Y ENTONACIÓN: Si alguna frase original incluye marcadores de emoción entre corchetes, CONSÉRVALOS o adáptalos a los tags canónicos compatibles con Fish Audio S2.1 (ej. [happy], [whispering], [laughing], [sad], [excited], [angry], [calm], [confident], [curious], [surprised]). No uses tags no estándar como [whisper] o [laughter] (cámbialos siempre por [whispering] y [laughing]). Puedes colocar [emphasis] justo antes de una palabra clave si el orador la enfatiza con fuerza. Preserva estrictamente la entonación interrogativa (¿?) y exclamativa (¡!) para asegurar la correcta modulación prosódica en el TTS.
+6. COHERENCIA Y CONTINUIDAD ENTRE FRASES: Las frases forman parte de una narración continua en un timeline audiovisual. Si una frase continúa la idea de la clave anterior (o deja una idea abierta para la clave siguiente), preserva la ilación gramatical natural, usando puntuación de enlace (comas o puntos seguidos) para que al reproducirse consecutivamente en el reproductor suenen como un discurso fluido y continuo, sin interrupciones abruptas ni pausas antinaturales.
+7. PRESERVACIÓN DE EMOCIONES, ÉNFASIS Y PAUSAS HUMANAS (FISH AUDIO S2.1):
+   - Conserva o adapta marcadores de emoción a los tags oficiales de Fish Audio S2.1: [happy], [whispering], [laughing], [sad], [excited], [angry], [calm], [confident], [curious], [surprised], [satisfied]. Prohibido usar [whisper] o [laughter] (cámbialos siempre por [whispering] y [laughing]).
+   - Si una frase es larga y requiere un respiro o pausa breve interna, puedes insertar la etiqueta `[break]` en medio de dos cláusulas lógicas (nunca al inicio ni al final de la frase).
+   - Puedes anteponer `[emphasis]` inmediatamente antes de una palabra clave para acentuarla con fuerza.
+   - Preserva estrictamente la entonación interrogativa (¿?) y exclamativa (¡!) para una modulación prosódica creíble.
 
 Texto original ({source_lang_name}) indexado por segmento:
 ---

@@ -127,12 +127,23 @@ ABBREVIATIONS = {
     "dr.", "dra.", "sr.", "sra.", "mr.", "mrs.", "ms.", "prof.", "etc.", "vs.", "ex.", "pág.", "vol.", "inc.", "corp."
 }
 DANGLING_CONNECTORS = {
+    # Conectores y preposiciones
     "de", "del", "da", "do", "das", "dos", "e", "y", "and", "ou", "o", "u",
-    "a", "el", "la", "los", "las", "the", "un", "una", "unos", "unas",
+    "a", "el", "la", "los", "las", "the", "un", "una", "unos", "unas", "um", "uma",
     "em", "en", "in", "on", "at", "na", "no", "nas", "nos", "para", "por",
     "pra", "pro", "for", "to", "que", "that", "se", "si", "if", "com", "con",
     "with", "como", "as", "mas", "pero", "but", "sin", "sem", "without",
-    "ao", "aos", "à", "às"
+    "ao", "aos", "à", "às", "or",
+    # Demostrativos y relativos incompletos
+    "este", "esta", "estes", "estas", "esse", "essa", "esses", "essas",
+    "aquele", "aquela", "esto", "eso", "aquello", "aqui", "aquí", "aí", "ahí",
+    "onde", "donde", "cujo", "cuja", "cuyo", "cuya",
+    # Modificadores / Intensificadores que dejan la frase trunca
+    "totalmente", "completamente", "bastante", "muito", "muy", "más", "mais",
+    "menos", "tan", "tão", "tanto", "tanta", "apenas", "solo", "somente",
+    # Verbos copulativos / auxiliares colgantes
+    "é", "es", "foi", "fue", "era", "vai", "va", "vamos", "foram", "serão",
+    "ser", "estar", "ir", "ter", "tener", "haver", "haber",
 }
 
 
@@ -141,7 +152,7 @@ def clean_word_token(word: str) -> str:
 
 
 def is_dangling_word(word: str) -> bool:
-    """Detecta si la palabra es un conector débil (preposición, artículo o conjunción) que no debe quedar suelto al final."""
+    """Detecta si la palabra es un conector débil (preposición, artículo, conjunción o modificador incompleto) que no debe quedar suelto al final."""
     token = clean_word_token(word)
     return token in DANGLING_CONNECTORS
 
@@ -255,13 +266,27 @@ def smart_group_segments_strict(
                 dur_up_to_prev = prev_end - seg_start
                 prev_word = all_words[curr - 1]["word"]
 
-                # A. Silencio duro (> hard_gap, ej. 2.2s): siempre corta
+                # A. Silencio duro (> hard_gap, ej. 2.2s):
                 if gap_before_curr > hard_gap:
-                    chosen_cut_idx = curr - 1
-                    break
+                    if is_dangling_word(prev_word):
+                        # Retroceder buscando la última palabra no-dangling dentro del segmento actual
+                        back = curr - 1
+                        found_safe = False
+                        while back > start_idx:
+                            if not is_dangling_word(all_words[back - 1]["word"]):
+                                chosen_cut_idx = back - 1
+                                found_safe = True
+                                break
+                            back -= 1
+                        if found_safe:
+                            break
+                        # Si no hay palabra segura previa, no cortar aquí sobre el conector huérfano
+                    else:
+                        chosen_cut_idx = curr - 1
+                        break
 
-                # B. Silencio estándar (> max_gap, ej. 1.2s): solo si ya alcanzó min_duration (3.5s)
-                if gap_before_curr > max_gap and dur_up_to_prev >= min_duration:
+                # B. Silencio estándar (> max_gap, ej. 1.2s): solo si alcanzó min_duration (3.5s) y no es conector
+                if gap_before_curr > max_gap and dur_up_to_prev >= min_duration and not is_dangling_word(prev_word):
                     chosen_cut_idx = curr - 1
                     break
 
@@ -363,7 +388,33 @@ def smart_group_segments_strict(
             grouped_segments.append(seg)
         start_idx = chosen_cut_idx + 1
 
-    return grouped_segments
+    # 5. Pase 2: Fusión y sanado de micro-segmentos huérfanos (< 2.8s o <= 3 palabras)
+    merged_segments = []
+    i = 0
+    while i < len(grouped_segments):
+        cur_seg = grouped_segments[i]
+        is_tiny = cur_seg["duration"] < 2.8 or cur_seg["word_count"] <= 3
+
+        if is_tiny:
+            # Opción A: Fusionar con el segmento previo si es del mismo speaker y cabe en max_duration + 2.5s
+            if merged_segments and merged_segments[-1]["speaker"] == cur_seg["speaker"] and (merged_segments[-1]["duration"] + cur_seg["duration"]) <= (max_duration + 2.5):
+                prev_seg = merged_segments[-1]
+                comb_words = prev_seg["words"] + cur_seg["words"]
+                merged_segments[-1] = create_segment_from_words(comb_words)
+                i += 1
+                continue
+            # Opción B: Fusionar con el segmento siguiente si es del mismo speaker
+            elif i + 1 < len(grouped_segments) and grouped_segments[i + 1]["speaker"] == cur_seg["speaker"]:
+                next_seg = grouped_segments[i + 1]
+                comb_words = cur_seg["words"] + next_seg["words"]
+                grouped_segments[i + 1] = create_segment_from_words(comb_words)
+                i += 1
+                continue
+
+        merged_segments.append(cur_seg)
+        i += 1
+
+    return merged_segments
 
 
 def process_audio(
