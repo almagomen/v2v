@@ -205,7 +205,12 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         if match_arr:
                             clean_json = match_arr.group(1)
 
-                    parsed = json.loads(clean_json)
+                    try:
+                        parsed = json.loads(clean_json)
+                    except (json.JSONDecodeError, Exception):
+                        # Reparar secuencias de escape inválidas (comunes en rutas de Windows como C:\Program Files\... o regex)
+                        sanitized_json = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', clean_json)
+                        parsed = json.loads(sanitized_json)
 
                     aligned_list: list[str] = []
                     if isinstance(parsed, dict):
