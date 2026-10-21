@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
 from typing import Optional
 
 from google import genai
@@ -177,3 +178,62 @@ Devuelve ÚNICAMENTE el JSON:
     return [{"emotion": heuristic_detect_emotion(t.get("text", ""))[0],
              "intensity": heuristic_detect_emotion(t.get("text", ""))[1],
              "style": "natural"} for t in texts]
+
+
+def extract_acoustic_prosody(vocals_path: Path | str, segments: list[dict]) -> list[dict]:
+    """
+    Analiza vocals.wav para medir la energía RMS real (en dB relativos a la media del hablante)
+    y el ritmo silábico de cada segmento antes de traducir.
+    """
+    p = Path(vocals_path)
+    if not p.exists() or not segments:
+        return segments
+    try:
+        import math
+        import torch
+        import torchaudio
+        waveform, sr = torchaudio.load(str(p))
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+
+        rms_values = []
+        for seg in segments:
+            s_frame = max(0, int(float(seg.get("start", 0.0)) * sr))
+            e_frame = min(waveform.shape[-1], int(float(seg.get("end", 0.0)) * sr))
+            chunk = waveform[:, s_frame:e_frame]
+            if chunk.numel() > 0:
+                rms = float(torch.sqrt(torch.mean(chunk ** 2)).item())
+            else:
+                rms = 1e-6
+            rms_values.append(max(rms, 1e-6))
+
+        mean_rms = sum(rms_values) / max(1, len(rms_values))
+
+        for seg, rms in zip(segments, rms_values):
+            rel_db = 20.0 * math.log10(rms / max(mean_rms, 1e-6))
+            seg["energy_db"] = round(rel_db, 1)
+            syl_rate = float(seg.get("syllable_rate") or (float(seg.get("speech_rate", 2.5)) * 1.6))
+
+            if rel_db >= 3.2 and syl_rate >= 5.0:
+                seg["acoustic_hint"] = "alta energía y entusiasmo ([excited])"
+                seg["suggested_emotion"] = "excited"
+            elif rel_db >= 2.8:
+                seg["acoustic_hint"] = "voz firme y enfática ([confident])"
+                seg["suggested_emotion"] = "confident"
+            elif rel_db <= -4.5:
+                seg["acoustic_hint"] = "voz baja o suave ([soft tone])"
+                seg["suggested_emotion"] = "soft tone"
+            elif syl_rate >= 5.8:
+                seg["acoustic_hint"] = "ritmo rápido y urgente ([in a hurry tone])"
+                seg["suggested_emotion"] = "in a hurry tone"
+            elif syl_rate <= 3.2:
+                seg["acoustic_hint"] = "ritmo pausado y sereno ([calm])"
+                seg["suggested_emotion"] = "calm"
+            else:
+                seg["acoustic_hint"] = "tono natural fluido ([calm])"
+                seg["suggested_emotion"] = "calm"
+    except Exception as e:
+        print(f"⚠️ [Prosodia Acústica] No se pudo analizar vocals.wav: {e}")
+
+    return segments
+

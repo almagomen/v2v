@@ -151,6 +151,7 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
     sentences: list[str] = []
     valid_indices: list[int] = []
     times_list: list[tuple[float, float]] = []
+    meta_list: list[dict] = []
 
     for seg_idx in indices:
         if seg_idx < 1 or seg_idx > len(original_list):
@@ -170,6 +171,7 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
             s_t = float(orig_d.get("start", 0.0))
             e_t = float(orig_d.get("end", s_t + 2.0))
             times_list.append((s_t, e_t))
+            meta_list.append(orig_d)
 
     if not sentences:
         raise HTTPException(status_code=400, detail="No hay textos para retraducir")
@@ -181,6 +183,7 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
         target_lang=target_lang,
         source_lang=source_lang,
         times=times_list if len(times_list) == len(sentences) else None,
+        segments_meta=meta_list if len(meta_list) == len(sentences) else None,
     )
     if not translated or len(translated) != len(sentences):
         raise HTTPException(status_code=500, detail="Error al retraducir con Gemini")

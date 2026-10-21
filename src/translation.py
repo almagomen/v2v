@@ -9,6 +9,7 @@ from typing import Optional, Tuple
 from google import genai
 
 from src.config import get_google_api_keys, rotate_google_api_key
+from src.diarization import count_syllables_approx
 
 LANGUAGE_NAMES = {
     "es": "Español",
@@ -66,10 +67,11 @@ def translate_text_list(
     model_name: Optional[str] = None,
     print_full_prompt: bool = False,
     times: Optional[list[Tuple[float, float]]] = None,
+    segments_meta: Optional[list[dict]] = None,
 ) -> list[str] | None:
     """
     Traduce una lista de frases a un idioma objetivo usando Gemini (Interactions API).
-    Soporta traducción isométrica con presupuesto de palabras/tiempo estilo YouTube/DeepMind,
+    Soporta traducción isométrica con presupuesto de sílabas, tiempo neto y tags prosódicos,
     cascada limpia de modelos (lite -> gemma) y rotación de API Keys.
     """
     if not list_sentences:
@@ -91,23 +93,26 @@ def translate_text_list(
         k = str(i + 1)
         if has_times:
             start_t, end_t = times[i]
-            dur = max(0.5, round(end_t - start_t, 1))
-            # Rango de palabras por segundo para habla humana natural en doblaje (~2.0 a 2.6 palabras/s)
-            min_w = max(1, int(dur * 2.0))
-            max_w = max(min_w + 1, int(dur * 2.6) + 1)
-            # Techo de caracteres estricto para doblaje natural en español (~13.5 a 14.5 caracteres/segundo con espacios)
-            max_chars = max(16, int(dur * 14.0))
-            input_dict[k] = f"[{dur}s | ~{min_w}-{max_w} palabras | máx {max_chars} caracteres]: {s}"
+            meta = segments_meta[i] if (segments_meta and i < len(segments_meta)) else {}
+            net_dur = float(meta.get("net_speech_duration") or max(0.4, round(end_t - start_t, 2)))
+            orig_syl = int(meta.get("syllable_count") or count_syllables_approx(s))
+            target_syl = int(round(max(orig_syl * 1.05, net_dur * 4.8)))
+            min_syl = max(1, int(round(target_syl * 0.80)))
+            max_syl = max(min_syl + 2, int(round(net_dur * 5.5)))
+            max_chars = max(12, int(round(net_dur * 13.5)))
+            acoustic_hint = meta.get("acoustic_hint", "tono natural")
+            input_dict[k] = f"[{net_dur:.1f}s habla | ~{min_syl}-{max_syl} sílabas | máx {max_chars} chars | {acoustic_hint}]: {s}"
         else:
             input_dict[k] = s
 
-    pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO ESTRICTO (CONTROL DE TIEMPO, PALABRAS Y CARACTERES):
-   Cada segmento incluye su presupuesto temporal exacto: `[Xs | ~A-B palabras | máx Z caracteres]: texto original`.
-   En doblaje audiovisual profesional, la velocidad de locución debe ser 100% natural (~12 a 14 caracteres por segundo). El español tiende a expandirse un 20% respecto a otros idiomas, lo que arruinaría la sincronía si no se controla.
-   - REGLA DE ORO DE LONGITUD: Tu adaptación al {target_lang_name} DEBE situarse dentro de ese presupuesto (`~A-B palabras` y NUNCA superar `máx Z caracteres`).
-   - SÍNTESIS Y PRECISIÓN: Si la idea original en {source_lang_name} es extensa, no traduzcas con rodeos ni perífrasis; REFORMÚLALA de forma sintética, elegante y directa preservando la intención esencial.
-   - SEGMENTOS CORTOS (< 2.0s): Para interjecciones o frases breves (ej. "Listo", "Funciona", "Vamos a ver"), mantén la traducción en 1 a 3 palabras directas, sin agregar fórmulas de relleno.
-   - En tu JSON de salida entrega ÚNICAMENTE el texto limpio como string, SIN incluir corchetes ni etiquetas de tiempo (prohibido poner `[Xs | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
+    pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO ESTRICTO (CONTROL DE TIEMPO, SÍLABAS Y CARACTERES):
+   Cada segmento incluye su presupuesto temporal exacto: `[Xs habla | ~A-B sílabas | máx Z chars | tono]: texto original`.
+   En doblaje audiovisual profesional, el ritmo debe ser 100% natural (~4.8 a 5.4 sílabas por segundo de habla neta). El español tiende a expandirse, por lo que debes controlar estrictamente la longitud:
+   - SINCRONÍA POR SÍLABAS Y CONCISIÓN: Elige palabras y construcciones sintácticas concisas en {target_lang_name} que entren dentro del rango de ~A-B sílabas y NUNCA superen máx Z chars. Si la idea original es extensa, reformúlala con elegancia y síntesis sin rodeos ni frases de relleno.
+   - PRESERVACIÓN DE PAUSAS INTERNAS ([break]): Si la frase original incluye `[break]`, representa una pausa real del hablante en cámara; DEBES mantener `[break]` en el punto equivalente de la frase traducida.
+   - TONO ACÚSTICO: Usa la pista acústica provista para elegir si corresponde anteponer un tag oficial de Fish Audio S2.1 ([excited], [confident], [calm], [curious], [surprised], [soft tone], [in a hurry tone]).
+   - SEGMENTOS BREVES (< 2.0s): Mantén la traducción en 1 a 3 palabras directas.
+   - En tu JSON de salida entrega ÚNICAMENTE el texto como string, SIN repetir el prefijo de metadatos (prohibido poner `[Xs habla | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
 
     prompt = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
 Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo.
@@ -207,14 +212,16 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         for i in range(1, total_count + 1):
                             val = parsed.get(str(i)) or parsed.get(i)
                             if val and isinstance(val, str) and val.strip():
-                                clean_val = re.sub(r"^\[.*?\]:?\s*", "", val).strip()
+                                clean_val = re.sub(r"^\[[^\]]*(?:\||habla|sílabas|palabras|chars)[^\]]*\]:?\s*", "", val, flags=re.IGNORECASE).strip()
+                                clean_val = re.sub(r"^\[[^\]]+\]:\s*", "", clean_val).strip()
                                 aligned_list.append(clean_val if clean_val else list_sentences[i - 1])
                             else:
                                 aligned_list.append(list_sentences[i - 1])
                     elif isinstance(parsed, list):
                         for i in range(total_count):
                             if i < len(parsed) and isinstance(parsed[i], str) and parsed[i].strip():
-                                clean_val = re.sub(r"^\[.*?\]:?\s*", "", parsed[i]).strip()
+                                clean_val = re.sub(r"^\[[^\]]*(?:\||habla|sílabas|palabras|chars)[^\]]*\]:?\s*", "", parsed[i], flags=re.IGNORECASE).strip()
+                                clean_val = re.sub(r"^\[[^\]]+\]:\s*", "", clean_val).strip()
                                 aligned_list.append(clean_val if clean_val else list_sentences[i])
                             else:
                                 aligned_list.append(list_sentences[i])

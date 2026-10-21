@@ -47,8 +47,8 @@ def get_whisper_model():
 def transcribe_and_process(
     media_path: Path | str | None = None,
     segments: Any = None,
-    gap: float = 1.2,
-    target_duration: float = 7.0,
+    gap: float = 0.65,
+    target_duration: float = 4.5,
     duration: Optional[int] = None,
 ) -> Tuple[list[dict], str, dict]:
     """
@@ -187,6 +187,12 @@ def run_main(
     t_whisper = step_timings.get("whisper", 0.0)
     t_diarize = step_timings.get("diarization", 0.0)
 
+    try:
+        from src.expression import extract_acoustic_prosody
+        result = extract_acoustic_prosody(vocals_path, result)
+    except Exception as e_ac:
+        print(f"⚠️ Error en prosodia acústica: {e_ac}")
+
     times = []
     texts = []
     for r in result:
@@ -202,6 +208,7 @@ def run_main(
             target_lang=translate,
             source_lang=detected_language,
             times=times,
+            segments_meta=result,
         )
         t_trans = time.perf_counter() - t0_trans
         if translated_texts and len(translated_texts) == len(result):

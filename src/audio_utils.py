@@ -250,84 +250,44 @@ def clone_voice_segments(
         duration_ratio = dur_es / dur_en if dur_en > 0 else 0
         print(f"{idx+1:2d}. ", end="")
 
-        # ─── BÚSQUEDA DEL PRÓXIMO SEGMENTO DEL MISMO HABLANTE ───
-        # Buscar en la lista global 'texts' el siguiente inicio para este speaker
-        next_same_speaker_starts = [
-            t["start"]
+        # ─── BÚSQUEDA DEL PRÓXIMO SEGMENTO CRONOLÓGICO Y LÍMITE DE PAUSA ───
+        # Buscar el inicio del siguiente segmento cronológico (de cualquier interlocutor)
+        next_starts = [
+            float(t["start"])
             for t in texts
-            if t.get("speaker", "SPEAKER_00") == speaker and t["start"] > start_time + 0.01
+            if float(t["start"]) > start_time + 0.01
         ]
-        next_speaker_start = min(next_same_speaker_starts) if next_same_speaker_starts else None
+        next_seg_start = min(next_starts) if next_starts else None
 
-        # Determinar el límite máximo disponible sin colisionar
-        if next_speaker_start is not None:
-            available_space = next_speaker_start - start_time
-            original_gap = available_space - dur_en
-            # Gap dinámico de respiro: entre 0.05s y 0.15s según el espacio libre
-            safety_gap = min(0.15, max(0.05, original_gap * 0.1)) if original_gap > 0.1 else min(0.05, max(0.0, original_gap))
-            max_allowed_dur = max(dur_en, available_space - safety_gap)
+        # Determinar el límite máximo disponible evitando invadir silencios largos de escena
+        if next_seg_start is not None:
+            hard_limit = max(0.2, next_seg_start - start_time - 0.08)
+            natural_limit = dur_en + max(0.35, min(0.85, dur_en * 0.20))
+            max_allowed_dur = min(hard_limit, max(dur_en, natural_limit))
         elif video_total_duration is not None:
-            # Es el último segmento: tope absoluto para no superar el final del video
-            available_space = max(0.1, video_total_duration - start_time - 0.05)
-            max_allowed_dur = available_space
+            hard_limit = max(0.2, video_total_duration - start_time - 0.05)
+            natural_limit = dur_en + max(0.35, min(0.85, dur_en * 0.20))
+            max_allowed_dur = min(hard_limit, max(dur_en, natural_limit))
         else:
-            max_allowed_dur = None
+            max_allowed_dur = dur_en * 1.15
 
         if slowdown_range:
-            if duration_ratio > 1.0:
-                if max_allowed_dur is not None and dur_es > max_allowed_dur:
-                    # Choca con el siguiente segmento: acelerar suavemente a max_allowed_dur
-                    ratio_needed = dur_es / max_allowed_dur
-                    if ratio_needed <= 1.04:
-                        print(
-                            f"✨ Pad/Trim (<=4%): {dur_es:5.2f}s ← {dur_en:5.2f}s",
-                            end=" ",
-                        )
-                        target_samples = int(max_allowed_dur * rate)
-                        if arr.shape[-1] > target_samples:
-                            arr = arr[:, :target_samples]
-                    else:
-                        safe_ratio = min(ratio_needed, 1.15)
-                        print(
-                            f"⚠️ {safe_ratio:.2f}x: {max_allowed_dur:5.2f}s → {dur_en:5.2f}s",
-                            end=" ",
-                        )
-                        target_samples = int(arr.shape[-1] / safe_ratio)
-                        arr = adjust_audio_duration(arr, target_samples, rate)
+            if max_allowed_dur is not None and dur_es > max_allowed_dur:
+                ratio_needed = dur_es / max_allowed_dur
+                if ratio_needed <= 1.03:
+                    print(f"✨ 1.00x (natural): {dur_es:5.2f}s ← {dur_en:5.2f}s", end=" ")
                 else:
-                    # Cabe en la pausa natural sin chocar (1.00x)
-                    print(
-                        f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s",
-                        end=" ",
-                    )
-            elif duration_ratio < slowdown_range[1]:
-                # Estiramiento suave para cubrir armónicamente el espacio original (isocronía sin huecos de silencio)
-                min_slow_speed = 0.88  # Piso de seguridad conservador: preserva timbre natural y fluidez sin arrastrar
-                max_slow_dur = dur_es / min_slow_speed
-                desired_dur = dur_es + (dur_en - dur_es) * stretch_target_ratio
-                target_dur_sec = min(desired_dur, max_slow_dur, dur_en)
-                effective_slow_speed = dur_es / target_dur_sec if target_dur_sec > 0 else 1.0
-
-                if effective_slow_speed >= 0.96:
-                    print(
-                        f"✨ Pad silencio (<=4%): {dur_es:5.2f}s ← {dur_en:5.2f}s",
-                        end=" ",
-                    )
-                    pad_samples = int((target_dur_sec - dur_es) * rate)
-                    if pad_samples > 0 and torch is not None:
-                        arr = torch.nn.functional.pad(arr, (0, pad_samples))
-                else:
-                    print(
-                        f"🔉 {effective_slow_speed:.2f}x: {target_dur_sec:5.2f}s ← {dur_en:5.2f}s",
-                        end=" ",
-                    )
-                    target_samples = int(target_dur_sec * rate)
+                    # Aceleración suave con FFmpeg hasta un tope seguro de 1.25x para sincronía exacta
+                    safe_ratio = min(ratio_needed, 1.25)
+                    new_dur = dur_es / safe_ratio
+                    print(f"⚡ {safe_ratio:.2f}x (sync): {new_dur:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                    target_samples = int(arr.shape[-1] / safe_ratio)
                     arr = adjust_audio_duration(arr, target_samples, rate)
             else:
-                print(
-                    f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s",
-                    end=" ",
-                )
+                # Si dur_es <= max_allowed_dur (incluyendo cuando dur_es <= dur_en):
+                # PROHIBIDO ralentizar con atempo < 1.0. Se conserva 1.00x puro de Fish Audio
+                # para mantener intacto el timbre humano y dejar que las pausas respiren.
+                print(f"✨ 1.00x (cadencia pura): {dur_es:5.2f}s ← {dur_en:5.2f}s", end=" ")
 
         # Micro-fade out suave (256 muestras) al final del audio para eliminar ruidos de corte abrupto
         if arr.shape[-1] > 256 and torch is not None:
