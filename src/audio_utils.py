@@ -283,11 +283,33 @@ def clone_voice_segments(
                     print(f"⚡ {safe_ratio:.2f}x (sync): {new_dur:5.2f}s ← {dur_en:5.2f}s", end=" ")
                     target_samples = int(arr.shape[-1] / safe_ratio)
                     arr = adjust_audio_duration(arr, target_samples, rate)
+            elif dur_es < dur_en:
+                # El audio traducido es más corto que el original:
+                # Expandir con atempo hasta cubrir dur_en y eliminar el silencio muerto entre segmentos
+                ratio_slow = dur_es / dur_en
+                if ratio_slow >= 0.96:
+                    print(f"✨ Pad silencio (<=4%): {dur_es:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                    pad_samples = int((dur_en - dur_es) * rate)
+                    if pad_samples > 0 and torch is not None:
+                        arr = torch.nn.functional.pad(arr, (0, pad_samples))
+                else:
+                    # Estirar con atempo para equiparar la duración del segmento original
+                    # Piso seguro de velocidad de 0.75x para preservar naturalidad; el remanente se completa con micro-pad
+                    min_allowed_speed = 0.75
+                    if ratio_slow < min_allowed_speed:
+                        effective_speed = min_allowed_speed
+                        stretch_samples = int(arr.shape[-1] / effective_speed)
+                        arr = adjust_audio_duration(arr, stretch_samples, rate)
+                        target_samples = int(dur_en * rate)
+                        if target_samples > arr.shape[-1] and torch is not None:
+                            arr = torch.nn.functional.pad(arr, (0, target_samples - arr.shape[-1]))
+                        print(f"🔉 {effective_speed:.2f}x+pad: {dur_en:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                    else:
+                        print(f"🔉 {ratio_slow:.2f}x (expand): {dur_en:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                        target_samples = int(dur_en * rate)
+                        arr = adjust_audio_duration(arr, target_samples, rate)
             else:
-                # Si dur_es <= max_allowed_dur (incluyendo cuando dur_es <= dur_en):
-                # PROHIBIDO ralentizar con atempo < 1.0. Se conserva 1.00x puro de Fish Audio
-                # para mantener intacto el timbre humano y dejar que las pausas respiren.
-                print(f"✨ 1.00x (cadencia pura): {dur_es:5.2f}s ← {dur_en:5.2f}s", end=" ")
+                print(f"✨ 1.00x: {dur_es:5.2f}s ← {dur_en:5.2f}s", end=" ")
 
         # Micro-fade out suave (256 muestras) al final del audio para eliminar ruidos de corte abrupto
         if arr.shape[-1] > 256 and torch is not None:

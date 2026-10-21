@@ -53,20 +53,14 @@ def fish_tts(
     repetition_penalty = float(kwargs.get("repetition_penalty", 1.2))
     speed = float(kwargs.get("speed", 1.0))
     volume = float(kwargs.get("volume", 0.0))
-    normalize_loudness = bool(kwargs.get("normalize_loudness", True))
 
     payload: dict[str, Any] = {
         "text": text,
         "format": format,
         "temperature": float(temperature),
-        "top_p": top_p,
-        "repetition_penalty": repetition_penalty,
+        "top_p": float(top_p),
+        "repetition_penalty": float(repetition_penalty),
         "normalize": True,
-        "prosody": {
-            "speed": speed,
-            "volume": volume,
-            "normalize_loudness": normalize_loudness,
-        },
     }
 
     if language:
@@ -81,6 +75,14 @@ def fish_tts(
         # Si es un path a un archivo que no existe como modelo, omitir o verificar
         if not Path(v_str).exists():
             payload["reference_id"] = v_str
+
+    prosody: dict[str, Any] = {"normalize_loudness": True}
+    if speed and speed != 1.0:
+        prosody["speed"] = float(speed)
+    if volume and volume != 0.0:
+        prosody["volume"] = float(volume)
+    if len(prosody) > 1 or prosody.get("speed") or prosody.get("volume"):
+        payload["prosody"] = prosody
 
     # Timeout proporcional a la longitud del texto: base 30s, +30s por cada 100 chars, máx 3 min
     base_timeout = 30
