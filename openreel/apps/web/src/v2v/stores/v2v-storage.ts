@@ -18,7 +18,7 @@ export const DEFAULT_V2V_PREFERENCES: V2VUserPreferences = {
   importInstrumental: true,
   importOriginalAudio: false,
   importOriginalVocals: false,
-  importOriginalSegments: true,
+  importOriginalSegments: false,
   importMergedVideo: false,
 };
 

@@ -198,6 +198,7 @@ def list_audio_segments(job_id: str, video_index: int):
                 "seg": seg,
                 "start": s.get("start", 0.0),
                 "end": s.get("end", 0.0),
+                "duration": s.get("duration", round(s.get("end", 0.0) - s.get("start", 0.0), 3)),
                 "speaker": s.get("speaker") or "",
                 "filename": filename,
             }
@@ -346,12 +347,19 @@ def list_src_audio_segments(job_id: str, video_index: int):
         if wav_path is None:
             continue
 
+        o_start = s.get("orig_start", s.get("start", 0.0))
+        o_end = s.get("orig_end", s.get("end", 0.0))
+        o_dur = s.get("orig_duration", round(o_end - o_start, 3))
         items.append(
             {
                 "seg": seg,
-                "start": s.get("start", 0.0),
-                "end": s.get("end", 0.0),
-                "speaker": s.get("speaker") or "",
+                "start": o_start,
+                "end": o_end,
+                "duration": o_dur,
+                "orig_start": o_start,
+                "orig_end": o_end,
+                "orig_duration": o_dur,
+                "speaker": s.get("original_speaker", s.get("speaker", "")),
                 "filename": filename,
             }
         )

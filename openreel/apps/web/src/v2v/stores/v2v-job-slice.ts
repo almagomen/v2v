@@ -928,7 +928,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   const srcMediaItems: MediaItem[] = [];
                   for (const d of downloadedSrcSegs) {
-                    const fallbackDuration = Math.max(d.seg.end - d.seg.start, 0.1);
+                    const fallbackDuration = d.seg.duration || d.seg.orig_duration || Math.max(d.seg.end - d.seg.start, 0.1);
                     const meta = {
                       duration: fallbackDuration,
                       width: 0,
@@ -1081,7 +1081,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                               allClipsToBatchAdd.push({
                                 trackId: origTrackId,
                                 mediaId: media.id,
-                                startTime: seg.start,
+                                startTime: downloadedSrc.seg.orig_start ?? downloadedSrc.seg.start,
                               });
                             }
                           }

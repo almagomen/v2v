@@ -106,12 +106,12 @@ def create_result(
     source_lang: str,
     target_lang: Optional[str],
     segments: list[dict],
-    original_segments: list[dict],
+    original_segments: Optional[list[dict]] = None,
     info: dict,
     timings: Optional[dict] = None,
     assets: Optional[dict] = None,
 ) -> dict:
-    """Crea la estructura estándar de result.json con info optimizada y assets integrados."""
+    """Crea la estructura estándar unificada de result.json."""
     return {
         "version": 2,
         "url": url,
@@ -119,7 +119,6 @@ def create_result(
         "source_lang": source_lang,
         "target_lang": target_lang,
         "segments": segments,
-        "original_segments": original_segments,
         "info": sanitize_video_info(info),
         "timings": timings or {},
         "assets": assets or {},
@@ -155,29 +154,29 @@ def create_segment_entry(
     speaker: Optional[str] = None,
     original_speaker: Optional[str] = None,
     phonemes: Optional[dict[str, str]] = None,
-    word_count: Optional[int] = None,
-    char_count: Optional[int] = None,
+    orig_start: Optional[float] = None,
+    orig_end: Optional[float] = None,
+    orig_duration: Optional[float] = None,
+    healed: Optional[str] = None,
     syllable_count: Optional[int] = None,
-    speech_rate: Optional[float] = None,
-    syllable_rate: Optional[float] = None,
     internal_pause_sec: Optional[float] = None,
     **extra,
 ) -> dict:
     """
-    Construye de forma centralizada y canónica la estructura de un segmento V2V.
-    Normaliza 'orig_text' y 'original_text', redondea tiempos y calcula métricas si no vienen provistas.
+    Construye de forma canónica y unificada la estructura de un segmento V2V.
+    Preserva las coordenadas del audio original y el generado, sin duplicar texto ni almacenar métricas obsoletas.
     """
     import re
     s_val = round(float(start), 3)
     e_val = round(float(end), 3)
     dur = max(0.1, round(e_val - s_val, 3))
 
-    resolved_orig = orig_text if orig_text is not None else (original_text or text)
-    clean_text = re.sub(r"\[.*?\]", "", str(text)).strip()
-    words = clean_text.split()
+    o_start = round(float(orig_start), 3) if orig_start is not None else s_val
+    o_end = round(float(orig_end), 3) if orig_end is not None else e_val
+    o_dur = round(float(orig_duration), 3) if orig_duration is not None else max(0.1, round(o_end - o_start, 3))
 
-    c_cnt = char_count if char_count is not None else len(clean_text)
-    w_cnt = word_count if word_count is not None else len(words)
+    resolved_orig = original_text if original_text is not None else (orig_text or text)
+    clean_text = re.sub(r"\[.*?\]", "", str(text)).strip()
 
     if syllable_count is None:
         try:
@@ -188,12 +187,6 @@ def create_segment_entry(
     else:
         syl_cnt = syllable_count
 
-    i_pause = float(internal_pause_sec or 0.0)
-    net_dur = max(0.1, round(dur - i_pause, 3))
-
-    sp_rate = speech_rate if speech_rate is not None else (round(w_cnt / net_dur, 2) if net_dur > 0 else 0.0)
-    syl_rate = syllable_rate if syllable_rate is not None else (round(syl_cnt / net_dur, 2) if net_dur > 0 else 0.0)
-
     clean_phonemes = (
         {str(k).strip(): str(v).strip() for k, v in phonemes.items() if k and v}
         if isinstance(phonemes, dict)
@@ -202,28 +195,25 @@ def create_segment_entry(
 
     entry = {
         "seg": int(seg),
+        "text": str(text),
+        "original_text": str(resolved_orig),
         "start": s_val,
         "end": e_val,
         "duration": dur,
-        "text": str(text),
-        "orig_text": str(resolved_orig),
-        "original_text": str(resolved_orig),
+        "orig_start": o_start,
+        "orig_end": o_end,
+        "orig_duration": o_dur,
         "speaker": speaker or "mrbeast",
         "original_speaker": original_speaker or speaker or "SPEAKER_00",
-        "word_count": w_cnt,
-        "char_count": c_cnt,
-        "syllable_count": syl_cnt,
-        "speech_rate": sp_rate,
-        "syllable_rate": syl_rate,
     }
+    if syl_cnt:
+        entry["syllable_count"] = syl_cnt
     if clean_phonemes:
         entry["phonemes"] = clean_phonemes
+    if healed:
+        entry["healed"] = str(healed)
     if internal_pause_sec:
-        entry["internal_pause_sec"] = i_pause
-
-    for k, v in extra.items():
-        if k not in entry and k != "acoustic_hint":
-            entry[k] = v
+        entry["internal_pause_sec"] = float(internal_pause_sec)
 
     return entry
 
@@ -246,11 +236,25 @@ def get_result_segments(folder: Path) -> list[dict]:
 
 
 def get_result_original_segments(folder: Path) -> list[dict]:
-    """Retorna la lista de segmentos STT originales de result.json."""
+    """Retorna la lista de segmentos STT originales de result.json (reconstrucción unificada)."""
     data = load_result(folder)
     if data is None:
         return []
-    return data.get("original_segments", [])
+    if "original_segments" in data and data["original_segments"]:
+        return data["original_segments"]
+    origs = []
+    for s in data.get("segments", []):
+        origs.append({
+            "seg": s.get("seg"),
+            "start": s.get("orig_start", s.get("start", 0.0)),
+            "end": s.get("orig_end", s.get("end", 0.0)),
+            "duration": s.get("orig_duration", s.get("duration", 0.0)),
+            "text": s.get("original_text", s.get("text", "")),
+            "original_text": s.get("original_text", s.get("text", "")),
+            "speaker": s.get("original_speaker", s.get("speaker", "")),
+            "original_speaker": s.get("original_speaker", s.get("speaker", "")),
+        })
+    return origs
 
 
 def get_result_source_lang(folder: Path) -> Optional[str]:

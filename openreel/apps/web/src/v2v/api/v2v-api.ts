@@ -85,12 +85,19 @@ export interface Segment {
   seg: number;
   start: number;
   end: number;
+  duration?: number;
+  orig_start?: number;
+  orig_end?: number;
+  orig_duration?: number;
   text: string;
   speaker?: string;
   original_speaker?: string;
   orig_text?: string;
   original_text?: string;
   phonemes?: Record<string, string>;
+  healed?: string;
+  internal_pause_sec?: number;
+  syllable_count?: number;
 }
 
 
@@ -130,6 +137,10 @@ export interface AudioSegmentItem {
   seg: number;
   start: number;
   end: number;
+  duration?: number;
+  orig_start?: number;
+  orig_end?: number;
+  orig_duration?: number;
   speaker: string;
   filename: string;
 }

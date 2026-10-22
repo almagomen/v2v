@@ -4,8 +4,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
-# Catálogo canónico oficial de Fish Audio S2 / S2.1 (64+ expresiones y efectos)
-CANONICAL_FISH_EMOTIONS = {
+# Catálogo canónico oficial de expresiones, modulaciones prosódicas y efectos (64+)
+CANONICAL_EMOTIONS = {
     # 1. Emociones Básicas (24)
     "happy", "sad", "angry", "excited", "calm", "nervous", "confident",
     "surprised", "satisfied", "delighted", "scared", "worried", "upset",
@@ -29,11 +29,13 @@ CANONICAL_FISH_EMOTIONS = {
     # 5. Efectos Especiales y Pausas
     "break", "long-break", "audience laughing", "background laughter", "crowd laughing",
 }
+# Alias para retrocompatibilidad
+CANONICAL_FISH_EMOTIONS = CANONICAL_EMOTIONS
 
 def normalize_emotion_tag(tag: str) -> Optional[str]:
-    """Valida y limpia el tag contra el catálogo canónico oficial de Fish Audio S2."""
+    """Valida y limpia el tag contra el catálogo canónico oficial."""
     clean = re.sub(r"[\[\]]", "", tag).strip().lower()
-    if clean in CANONICAL_FISH_EMOTIONS:
+    if clean in CANONICAL_EMOTIONS:
         return clean
     return None
 

@@ -60,6 +60,47 @@ def set_default_gemini_model(model_name: str) -> None:
     set_default_title_model(model_name)
 
 
+def validate_and_place_breaks(text: str, meta: Optional[dict] = None) -> str:
+    """
+    Verifica que los marcadores [break] y [long-break] estén en la posición sintáctica correcta:
+    - Remueve breaks indebidos al inicio absoluto o al final de la frase.
+    - Normaliza espaciados alrededor de breaks internos.
+    - Si la frase no contiene break pero el audio original contenía una pausa interna acústica (internal_pause_sec >= 0.35s),
+      inserta [break] o [long-break] en la cesura lógica más apropiada (punto seguido, punto y coma, coma central).
+    """
+    if not text:
+        return text
+
+    # 1. Limpieza de breaks indebidos en los extremos
+    cleaned = re.sub(r"^(\s*\[(?:long-)?break\]\s*)+", "", text)
+    cleaned = re.sub(r"^(\[[a-zA-Z\s\-]+\])\s*\[(?:long-)?break\]\s*", r"\1 ", cleaned)
+    cleaned = re.sub(r"(\s*\[(?:long-)?break\]\s*)+([.,!?:;]?\s*)$", r"\2", cleaned)
+    cleaned = re.sub(r"\s*\[(long-)?break\]\s*", r" [\1break] ", cleaned).strip()
+
+    # Si ya contiene break en el cuerpo del texto, respetarlo
+    if "[break]" in cleaned or "[long-break]" in cleaned:
+        return cleaned
+
+    # 2. Si no contiene break, verificar si el segmento original tenía pausa interna
+    if meta:
+        internal_pause = float(meta.get("internal_pause_sec", 0.0) or 0.0)
+        if internal_pause >= 0.35:
+            break_tag = "[long-break]" if internal_pause >= 0.85 else "[break]"
+            # Buscar cesura lógica: punto seguido (. ), punto y coma (; )
+            if re.search(r"\.\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]", cleaned):
+                cleaned = re.sub(r"\.\s+([A-ZÁÉÍÓÚÑa-záéíóúñ])", rf". {break_tag} \1", cleaned, count=1)
+            elif "; " in cleaned:
+                cleaned = cleaned.replace("; ", f"; {break_tag} ", 1)
+            elif ", " in cleaned:
+                parts = cleaned.split(", ")
+                if len(parts) >= 2:
+                    mid_idx = len(parts) // 2
+                    parts[mid_idx - 1] = parts[mid_idx - 1] + f", {break_tag}"
+                    cleaned = " ".join(parts)
+
+    return cleaned
+
+
 def translate_text_list(
     list_sentences: list[str],
     target_lang: str,
@@ -94,21 +135,18 @@ def translate_text_list(
     input_dict = {}
     for i, s in enumerate(list_sentences):
         k = str(i + 1)
+        # Limpieza de entrada: enviar lenguaje natural humano a Gemini sin contaminaciones
+        clean_s = re.sub(r"\[(long-)?break\]", "", s).strip()
+        clean_s = re.sub(r"\s+", " ", clean_s)
         if has_times:
             start_t, end_t = times[i]
             meta = segments_meta[i] if (segments_meta and i < len(segments_meta)) else {}
             total_dur = max(0.4, round(end_t - start_t, 2))
-            net_dur = float(meta.get("net_speech_duration") or total_dur)
-            orig_syl = int(meta.get("syllable_count") or count_syllables_approx(s))
-            orig_chars = len(s)
-            long_breaks_count = s.count("[long-break]")
-            short_breaks_count = max(0, s.count("[break]") - long_breaks_count)
+            orig_syl = int(meta.get("syllable_count") or count_syllables_approx(clean_s))
+            orig_chars = len(clean_s)
 
-            # En síntesis de voz: cada [break] consume ~0.35s y cada [long-break] consume ~0.85s de respiro.
-            # El tiempo de locución objetivo debe cubrir armónicamente el espacio del clip.
-            speech_target_sec = max(0.4, total_dur - (short_breaks_count * 0.35) - (long_breaks_count * 0.85))
-
-            # Tasa natural de locución en doblaje español: ~5.0 a 5.6 sílabas/s y ~15.0 a 17.5 chars/s
+            # Tasa natural de locución en doblaje: ~5.0 a 5.6 sílabas/s y ~15.0 a 17.5 chars/s
+            speech_target_sec = max(0.4, total_dur)
             target_chars = int(round(max(orig_chars * 0.95, speech_target_sec * 15.5)))
             min_chars = max(4, int(round(target_chars * 0.85)))
             max_chars = max(min_chars + 8, int(round(target_chars * 1.15)))
@@ -117,26 +155,25 @@ def translate_text_list(
             min_syl = max(1, int(round(target_syl * 0.85)))
             max_syl = max(min_syl + 2, int(round(speech_target_sec * 5.8)))
 
-            acoustic_hint = meta.get("acoustic_hint", "tono natural")
-            input_dict[k] = f"[{total_dur:.1f}s slot | ~{min_syl}-{max_syl} sílabas | ~{min_chars}-{max_chars} chars | {acoustic_hint}]: {s}"
+            input_dict[k] = f"[{total_dur:.1f}s slot | ~{min_syl}-{max_syl} sílabas | ~{min_chars}-{max_chars} chars]: {clean_s}"
         else:
-            input_dict[k] = s
+            input_dict[k] = clean_s
 
     if enable_emotions:
-        from src.expression import CANONICAL_FISH_EMOTIONS
-        active_emotions = sorted([e for e in CANONICAL_FISH_EMOTIONS if not ("break" in e or "laughing" in e and "crowd" in e)])
+        from src.expression import CANONICAL_EMOTIONS
+        active_emotions = sorted([e for e in CANONICAL_EMOTIONS if not ("break" in e or "laughing" in e and "crowd" in e)])
         emotions_catalog_str = ", ".join(f"[{e}]" for e in active_emotions)
-        emotion_guideline = f"""   - Modulación prosódica y expresiones: Puedes integrar marcadores de emoción, estilo o reacciones vocales seleccionados del catálogo canónico activo del sistema:
+        emotion_guideline = f"""   - Modulación prosódica y expresiones: Analiza el contexto, el tono emocional y la intención comunicativa de cada frase en el diálogo y compáralo con el catálogo canónico de expresiones disponibles:
      {emotions_catalog_str}
-     * Ubicación flexible: Colócalos ya sea al inicio de la frase para definir la entonación general o en cualquier punto natural de la frase donde ocurra la inflexión emocional.
-     * Tono neutro: Si el tono de la frase es neutro, déjala limpia sin ninguna etiqueta de emoción."""
-        pacing_emotion_hint = "- MODULACIÓN PROSÓDICA DINÁMICA: Considera la pista acústica (nivel de energía y ritmo) provista en el segmento para integrar armónicamente, al inicio o en el punto de inflexión de la frase y solo si el contexto lo justifica, una modulación del catálogo de estilos activos disponible."
+     * Cuando la frase exprese una emoción o inflexión clara, incorpora la expresión del catálogo que mejor le corresponda.
+     * Ubicación: Colócala al inicio de la frase para definir la actitud general o en el punto exacto de la frase donde ocurra el cambio emocional."""
+        pacing_emotion_hint = "- MODULACIÓN PROSÓDICA: Evalúa el contenido semántico y conversacional de cada enunciado y selecciona libremente del catálogo canónico la modulación que capture la intención del hablante."
     else:
         emotion_guideline = """   - Modulación: Mantén una entonación natural y neutra, sin marcadores de emoción."""
         pacing_emotion_hint = "- MODULACIÓN: Entrega la locución con entonación neutra y natural."
 
     pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO (CONTROL DE TIEMPO Y RANGO DE CARACTERES):
-   Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars | pista acústica]: texto original`.
+   Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars]: texto original`.
    En doblaje audiovisual profesional, el ritmo debe ser fluido y natural (~15 a 17 caracteres por segundo).
    - ISOMORFISMO DE LONGITUD: Ajusta la extensión de tu traducción en {target_lang_name} para que caiga DENTRO del rango de ~M-Z chars (proporcional al tiempo del video). No hagas la frase excesivamente corta (dejaría silencios muertos) ni excesivamente larga (se aceleraría la voz).
    - PRESERVACIÓN Y MANEJO DE PAUSAS: Si la escena contiene silencios naturales o respiraciones, puedes usar marcadores de pausa:
@@ -154,6 +191,9 @@ Tu misión es ADAPTAR cada frase en {target_lang_name} para su locución por mod
     else:
         role_mission = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
 Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo."""
+
+    ex_text_1 = f"[excited] frase 1 adaptada al {target_lang_name}" if enable_emotions else f"frase 1 adaptada al {target_lang_name}"
+    ex_text_2 = f"frase 2 [break] adaptada al {target_lang_name}"
 
     prompt = f"""{role_mission}
 
@@ -192,11 +232,11 @@ Texto original ({source_lang_name}) indexado por segmento:
 Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves numéricas del "1" al "{total_count}":
 {{
   "1": {{
-    "text": "frase 1 adaptada al {target_lang_name}",
+    "text": "{ex_text_1}",
     "phonemes": {empty_dict_str}
   }},
   "2": {{
-    "text": "frase 2 adaptada al {target_lang_name}",
+    "text": "{ex_text_2}",
     "phonemes": {empty_dict_str}
   }},
   ...
@@ -300,7 +340,12 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
 
                             if txt_raw:
                                 clean_val = re.sub(r"^\[[^\]]*(?:\||habla|sílabas|palabras|chars)[^\]]*\]:?\s*", "", txt_raw, flags=re.IGNORECASE).strip()
-                                clean_val = re.sub(r"^\[[^\]]+\]:\s*", "", clean_val).strip()
+                                # Si hay dos puntos después de un tag canónico de emoción (ej: "[excited]: Hola"), quitar solo los dos puntos
+                                clean_val = re.sub(r"^(\[[a-zA-Z\s\-]+\]):\s*", r"\1 ", clean_val).strip()
+                                # Quitar índices o duraciones sueltas como "[1]: " o "[2.5s]: "
+                                clean_val = re.sub(r"^\[\d+(?:\.\d+)?s?\]:?\s*", "", clean_val).strip()
+                                curr_meta = segments_meta[i - 1] if (segments_meta and i - 1 < len(segments_meta)) else {}
+                                clean_val = validate_and_place_breaks(clean_val, curr_meta)
                                 aligned_list.append(clean_val if clean_val else list_sentences[i - 1])
                             else:
                                 aligned_list.append(list_sentences[i - 1])
@@ -326,7 +371,10 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
 
                             if txt_raw:
                                 clean_val = re.sub(r"^\[[^\]]*(?:\||habla|sílabas|palabras|chars)[^\]]*\]:?\s*", "", txt_raw, flags=re.IGNORECASE).strip()
-                                clean_val = re.sub(r"^\[[^\]]+\]:\s*", "", clean_val).strip()
+                                clean_val = re.sub(r"^(\[[a-zA-Z\s\-]+\]):\s*", r"\1 ", clean_val).strip()
+                                clean_val = re.sub(r"^\[\d+(?:\.\d+)?s?\]:?\s*", "", clean_val).strip()
+                                curr_meta = segments_meta[i] if (segments_meta and i < len(segments_meta)) else {}
+                                clean_val = validate_and_place_breaks(clean_val, curr_meta)
                                 aligned_list.append(clean_val if clean_val else list_sentences[i])
                             else:
                                 aligned_list.append(list_sentences[i])
@@ -579,4 +627,98 @@ Devuelve ÚNICAMENTE:
         print(f"⚠️ [Auto-Heal] Error en re-expansión selectiva: {e}", flush=True)
 
     return {}
+
+
+def auto_heal_long_segments(
+    overflow_segments: list[dict],
+    target_lang: str = "es",
+    source_lang: str = "es",
+    model_name: Optional[str] = None,
+) -> dict[int, str]:
+    """
+    Reescribe de forma más concisa y sintética los segmentos que desbordaron su ranura temporal,
+    reduciendo la cantidad de caracteres para que la locución quepa cómodamente en el tiempo asignado
+    sin necesidad de acelerar la voz en exceso (evitando voz de ardilla y solapamientos).
+    Retorna: {seg_idx: nuevo_texto_conciso}
+    """
+    if not overflow_segments:
+        return {}
+
+    available_keys = get_google_api_keys()
+    if not available_keys:
+        return {}
+
+    target_lang_name = LANGUAGE_NAMES.get(target_lang, "español")
+    source_lang_name = LANGUAGE_NAMES.get(source_lang, "español")
+
+    input_dict = {}
+    for item in overflow_segments:
+        idx = item["idx"]
+        dur_target = item["dur_en"]
+        dur_actual = item["dur_es"]
+        needed_chars = int(round(dur_target * 14.0))
+        cur_text = item["text_dict"].get("text", "")
+        input_dict[str(idx + 1)] = {
+            "texto_actual": cur_text,
+            "segundos_actuales": round(dur_actual, 2),
+            "segundos_maximos": round(dur_target, 2),
+            "caracteres_objetivo": f"máximo ~{needed_chars} chars",
+        }
+
+    prompt = f"""Eres un especialista en doblaje audiovisual y adaptación de guiones para síntesis de voz (TTS).
+Las siguientes frases dobladas al {target_lang_name} tardaron demasiado tiempo al sintetizarse por voz y se desbordaron respecto a la escena original del video, amenazando con solaparse sobre la siguiente frase.
+
+Tu misión es REESCRIBIR DE FORMA MÁS CONCISA, SINTÉTICA Y DIRECTA cada frase en {target_lang_name}, eliminando palabras de relleno, perífrasis o giros redundantes, conservando al 100% la MISMA idea central, significado e intención del {source_lang_name}. La frase debe ser más compacta para aproximarse a los caracteres objetivo indicados, entrando holgadamente en el tiempo disponible con velocidad de habla natural (sin acelerar).
+
+Directrices:
+1. Mantén la numeración idéntica en el JSON de salida.
+2. Si la frase contiene marcadores de emoción entre corchetes, consérvalos o adáptalos.
+3. No uses [break] ni [long-break] en frases que necesitan ser acortadas.
+4. Devuelve ÚNICAMENTE un JSON con las claves numéricas y la versión concisa adaptada.
+
+Entrada:
+---
+{json.dumps(input_dict, indent=2, ensure_ascii=False)}
+---
+
+Devuelve ÚNICAMENTE:
+{{
+  "clave": "frase concisa adaptada en {target_lang_name}"
+}}"""
+
+    model = model_name.strip() if (model_name and model_name.strip()) else DEFAULT_TRANSLATION_MODEL
+    try:
+        client = genai.Client(api_key=available_keys[0])
+        interaction = client.interactions.create(
+            model=model,
+            input=prompt,
+            response_format=[{"type": "text", "mime_type": "application/json"}],
+        )
+        raw_text = getattr(interaction, "output_text", None) or ""
+        if raw_text:
+            clean_json = raw_text.strip()
+            match_obj = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
+            if match_obj:
+                clean_json = match_obj.group(1)
+
+            try:
+                parsed = json.loads(clean_json)
+            except Exception:
+                sanitized = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', clean_json)
+                parsed = json.loads(sanitized)
+
+            healed_texts: dict[int, str] = {}
+            for item in overflow_segments:
+                idx = item["idx"]
+                k = str(idx + 1)
+                val = parsed.get(k) or parsed.get(idx + 1)
+                if val and isinstance(val, str) and val.strip():
+                    clean_val = re.sub(r"^\[[^\]]*(?:\||chars|slot)[^\]]*\]:?\s*", "", val).strip()
+                    healed_texts[idx] = clean_val
+            return healed_texts
+    except Exception as e:
+        print(f"⚠️ [Auto-Heal Overflow] Error en síntesis concisa: {e}", flush=True)
+
+    return {}
+
 

@@ -241,7 +241,6 @@ def smart_group_segments_strict(
                 gap = w["start"] - words_list[idx_w - 1]["end"]
                 if gap >= 0.32:
                     internal_pause_time += gap
-                    tokens.append("[break]")
             tokens.append(w_str)
 
         raw_text = " ".join(tokens)

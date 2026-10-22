@@ -241,17 +241,7 @@ def _run_pipeline(
                 set_url_state(r.get("url", ""), "error", "Error en TTS")
                 continue
 
-            # Verificación de integridad acústica y QA de los clips generados (Fase 6)
-            try:
-                from src.qa import verify_audio_quality
-                for i, p_es in enumerate(paths_es):
-                    if i < len(texts):
-                        qa_info = verify_audio_quality(p_es, expected_text=texts[i].get("text", ""))
-                        texts[i]["qa"] = qa_info
-            except Exception as e_qa:
-                print(f"⚠️ Error en QA de síntesis: {e_qa}")
-
-            # Guardar segmentos actualizados (con emociones, duraciones TTS y QA) — una sola escritura
+            # Guardar segmentos actualizados (con emociones y duraciones TTS) — una sola escritura
             update_result_segments(path.parent, texts)
 
             # Pre-empaquetado anticipado en background del TAR de segmentos para entrega instantánea vía Cloudflare
