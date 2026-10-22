@@ -74,15 +74,10 @@ Analiza la siguiente lista de {total} frases consecutivas de un video y determin
 Catálogo oficial de modulaciones disponibles:
 {catalog_display}
 
-Directrices de dirección de doblaje:
+Directrices:
 1. Responde ÚNICAMENTE con un JSON con exactamente {total} claves numéricas del "1" al "{total}".
-2. Para cada clave asigna exclusivamente el nombre de la emoción del catálogo oficial (sin corchetes) o "calm" si el tono es neutro.
-3. Si el orador expone explicaciones, argumentaciones o narrativa con soltura y seguridad: usa "confident" o "calm".
-4. Si está llamando la atención, festejando o mostrando un hito importante: usa "excited" o "delighted".
-5. Si formula preguntas, dilemas o reflexiones: usa "curious", "doubtful" o "confused".
-6. Si describe prisas, urgencias o acciones vertiginosas: usa "in a hurry tone".
-7. Si expresa alivio, sosiego o desahogo: usa "sighing" o "relaxed".
-8. Si expresa ironía, humor o picardía: usa "sarcastic" o "laughing".
+2. Para cada clave asigna exclusivamente el nombre de la emoción del catálogo oficial que mejor refleje el estado afectivo, la intención dramática y el tono oral del hablante (sin corchetes), o "calm" si la frase es puramente neutra o informativa estándar.
+3. Evalúa con total libertad toda la diversidad de matices del catálogo oficial disponible, seleccionando la opción más orgánica y precisa sin restringirte a un subconjunto limitado.
 
 Frases indexadas:
 ---
