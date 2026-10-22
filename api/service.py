@@ -160,6 +160,7 @@ def _run_pipeline(
                         "original_text": t.get("original_text") or t.get("orig_text", ""),
                         "speaker": t.get("speaker", speaker_name),
                         "original_speaker": t.get("original_speaker") or t.get("speaker") or "SPEAKER_00",
+                        **({"phonemes": t["phonemes"]} if t.get("phonemes") else {}),
                     }
                     for i, t in enumerate(texts_list)
                 ]
@@ -213,7 +214,7 @@ def _run_pipeline(
                     t["speaker"] = speaker_name
 
             # ─── ANÁLISIS EXPRESIVO Y EMOCIONAL POR SEGMENTO (Fase 3) ───
-            # Si no hay emociones predefinidas en los segmentos, inferir dinámicamente con Gemini/heurística
+            # Si no hay emociones predefinidas en los segmentos, inferir dinámicamente con Gemini
             has_existing_emotions = any(t.get("emotion") or (t.get("text", "").startswith("[") and "]" in t.get("text", "").split(maxsplit=1)[0]) for t in texts)
             if not has_existing_emotions:
                 try:
@@ -223,8 +224,6 @@ def _run_pipeline(
                         t_emo = exp.get("emotion")
                         if t_emo and t_emo != "calm":
                             t["emotion"] = t_emo
-                            t["emotion_intensity"] = exp.get("intensity", 0.7)
-                            t["style"] = exp.get("style", "natural")
                             cur_txt = t.get("text", "").strip()
                             t["text"] = f"[{t_emo}] {cur_txt}"
                 except Exception as ex_exp:

@@ -233,6 +233,7 @@ def run_main(
             d["speech_rate"] = round(len(w_list) / net_d, 2) if net_d > 0 else 0.0
             d["syllable_rate"] = round(syl_c / net_d, 2) if net_d > 0 else 0.0
             d["phonemes"] = orig_seg.get("phonemes") or {}
+            d.pop("acoustic_hint", None)
             return d
 
 
@@ -258,6 +259,10 @@ def run_main(
             r["orig_text"] = r.get("orig_text") or r.get("text", "")
             r["original_text"] = r.get("original_text") or r.get("text", "")
         translated_result = result
+
+    # Limpiar clave temporal de pista acústica de los segmentos originales
+    for r in result:
+        r.pop("acoustic_hint", None)
 
     # Inferencia asíncrona con resolución garantizada antes de retornar al pipeline
     fallback_summary = " ".join(t["text"] for t in (translated_result or result)) if (translated_result or result) else (title or "")
