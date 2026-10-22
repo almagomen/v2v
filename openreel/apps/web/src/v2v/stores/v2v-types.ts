@@ -107,6 +107,7 @@ export interface JobState {
   importInstrumental: boolean;
   importOriginalAudio: boolean;
   importOriginalVocals: boolean;
+  importOriginalSegments: boolean;
   importMergedVideo: boolean;
 }
 
@@ -120,6 +121,7 @@ export interface JobActions {
   setImportInstrumental: (enabled: boolean) => void;
   setImportOriginalAudio: (enabled: boolean) => void;
   setImportOriginalVocals: (enabled: boolean) => void;
+  setImportOriginalSegments: (enabled: boolean) => void;
   setImportMergedVideo: (enabled: boolean) => void;
 
   setUrls: (urls: string) => void;

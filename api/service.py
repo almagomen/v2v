@@ -184,8 +184,9 @@ def _run_pipeline(
                 
                 # Pre-caching del paquete TAR en disco para entrega instantánea vía Cloudflare
                 try:
-                    from api.routes.files import ensure_audio_segments_tar
+                    from api.routes.files import ensure_audio_segments_tar, ensure_src_audio_segments_tar
                     ensure_audio_segments_tar(path.parent)
+                    ensure_src_audio_segments_tar(path.parent)
                 except Exception:
                     pass
 
@@ -256,12 +257,16 @@ def _run_pipeline(
             # Pre-empaquetado anticipado en background del TAR de segmentos para entrega instantánea vía Cloudflare
             try:
                 t0_tar = time.perf_counter()
-                from api.routes.files import ensure_audio_segments_tar
+                from api.routes.files import ensure_audio_segments_tar, ensure_src_audio_segments_tar
                 tar_file = ensure_audio_segments_tar(path.parent)
+                tar_src_file = ensure_src_audio_segments_tar(path.parent)
                 t_tar = time.perf_counter() - t0_tar
                 if tar_file:
                     sz_mb = tar_file.stat().st_size / (1024 * 1024)
                     print(f"📦 [Pre-caching TAR] {len(paths_es)} segmentos empaquetados en {t_tar:.2f}s ({sz_mb:.1f}MB)")
+                if tar_src_file:
+                    sz_src_mb = tar_src_file.stat().st_size / (1024 * 1024)
+                    print(f"📦 [Pre-caching TAR Orig] Segmentos originales empaquetados ({sz_src_mb:.1f}MB)")
             except Exception as e:
                 print(f"⚠️ Error en pre-caching TAR: {e}")
 

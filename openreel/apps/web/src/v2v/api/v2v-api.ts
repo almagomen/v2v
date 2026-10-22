@@ -727,6 +727,70 @@ export const v2vApi = {
     }
   },
 
+  async getSrcAudioSegments(jobId: string, videoIndex: number): Promise<AudioSegmentItem[]> {
+    const res = await fetch(url(`/api/job/${jobId}/src-audio-segments/${videoIndex}`));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al listar segmentos de audio originales");
+    }
+    return readJsonOrThrow<AudioSegmentItem[]>(res);
+  },
+
+  async fetchSrcAudioSegmentBlob(jobId: string, videoIndex: number, seg: number): Promise<Blob> {
+    const res = await fetch(url(`/api/job/${jobId}/src-audio-segments/${videoIndex}/${seg}`));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Error al descargar segmento original ${seg}`);
+    }
+    return res.blob();
+  },
+
+  /**
+   * Descarga todos los segmentos WAV originales de un video en un paquete TAR empaquetado.
+   */
+  async fetchSrcAudioSegmentsTar(
+    jobId: string,
+    videoIndex: number,
+    timeoutMs = 0,
+    externalSignal?: AbortSignal
+  ): Promise<Map<string, Blob>> {
+    const controller = new AbortController();
+    const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+
+    if (externalSignal) {
+      if (externalSignal.aborted) controller.abort();
+      else externalSignal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/src-audio-segments-tar/${videoIndex}`), {
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Error al descargar paquete TAR de segmentos originales (${res.status})`);
+      }
+      let buffer = await res.arrayBuffer();
+
+      const head = new Uint8Array(buffer, 0, Math.min(2, buffer.byteLength));
+      if (head.length >= 2 && head[0] === 0x1f && head[1] === 0x8b) {
+        if (typeof DecompressionStream !== "undefined") {
+          try {
+            const ds = new DecompressionStream("gzip");
+            const decompressedRes = new Response(new Blob([buffer]).stream().pipeThrough(ds));
+            buffer = await decompressedRes.arrayBuffer();
+          } catch (e) {
+            console.warn("[V2V] Error descomprimiendo gzip de TAR original:", e);
+          }
+        }
+      }
+
+      return parseTarArchive(buffer);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  },
+
   async downloadZipBlob(jobId: string): Promise<Blob> {
     const res = await fetch(url(`/api/job/${jobId}/zip`));
     if (!res.ok) {

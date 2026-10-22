@@ -88,6 +88,11 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const [segmentText, setSegmentText] = useState<string>("");
   const [segmentTimes, setSegmentTimes] = useState<{ start: number; end: number } | null>(null);
 
+  // Diccionario fonético: { palabra: pronunciacion }
+  const [phonemes, setPhonemes] = useState<Record<string, string>>({});
+  const [newPhWord, setNewPhWord] = useState<string>("");
+  const [newPhPron, setNewPhPron] = useState<string>("");
+
   const [sttLoading, setSttLoading] = useState(false);
   const [sttError, setSttError] = useState<string | null>(null);
 
@@ -149,6 +154,11 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           setSegmentText(segmentInfo.originalText);
         } else {
           setSegmentText(seg?.text ?? "");
+        }
+
+        // Cargar fonemas del segmento desde result.json
+        if (seg?.phonemes && Object.keys(seg.phonemes).length > 0) {
+          setPhonemes(seg.phonemes);
         }
         
         try {
@@ -290,6 +300,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         selectedVoice,
         effectiveSpeed,
         targetDuration,
+        { phonemes: Object.keys(phonemes).length > 0 ? phonemes : undefined },
       );
 
       const applyResult = await applyRegeneratedSegmentToTimeline({
@@ -562,6 +573,101 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
           placeholder="Edita el texto del segmento antes de regenerar..."
           disabled={regenLoading}
         />
+      </div>
+
+      {/* ─── Editor de fonemas ─── */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-[10px] text-text-secondary">Fonemas / Pronunciación</label>
+          {Object.keys(phonemes).length > 0 && (
+            <button
+              onClick={() => setPhonemes({})}
+              className="text-[9px] text-red-400 hover:text-red-300 transition-colors"
+              title="Borrar todos los fonemas"
+            >
+              Limpiar todo
+            </button>
+          )}
+        </div>
+
+        {/* Entradas existentes */}
+        {Object.entries(phonemes).map(([word, pron]) => (
+          <div key={word} className="flex items-center gap-1">
+            <input
+              type="text"
+              value={word}
+              readOnly
+              className="w-[38%] px-2 py-1 bg-background-secondary border border-border rounded text-[10px] text-text-muted font-mono cursor-default"
+              title="Palabra exacta en el texto"
+            />
+            <span className="text-text-muted text-[10px]">→</span>
+            <input
+              type="text"
+              value={pron}
+              onChange={(e) => setPhonemes(prev => ({ ...prev, [word]: e.target.value }))}
+              className="flex-1 px-2 py-1 bg-background-tertiary border border-border rounded text-[10px] text-text-primary font-mono focus:outline-none focus:border-primary"
+              placeholder="pronunciación"
+              title="Pronunciación fonética para el TTS"
+            />
+            <button
+              onClick={() => setPhonemes(prev => { const n = { ...prev }; delete n[word]; return n; })}
+              className="text-red-400 hover:text-red-300 text-[11px] px-1 transition-colors"
+              title="Eliminar"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+
+        {/* Agregar nueva entrada */}
+        <div className="flex items-center gap-1 pt-1 border-t border-border/50">
+          <input
+            type="text"
+            value={newPhWord}
+            onChange={(e) => setNewPhWord(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newPhWord.trim() && newPhPron.trim()) {
+                setPhonemes(prev => ({ ...prev, [newPhWord.trim()]: newPhPron.trim() }));
+                setNewPhWord("");
+                setNewPhPron("");
+              }
+            }}
+            className="w-[38%] px-2 py-1 bg-background-secondary border border-border rounded text-[10px] text-text-primary font-mono focus:outline-none focus:border-primary"
+            placeholder="Palabra..."
+          />
+          <span className="text-text-muted text-[10px]">→</span>
+          <input
+            type="text"
+            value={newPhPron}
+            onChange={(e) => setNewPhPron(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newPhWord.trim() && newPhPron.trim()) {
+                setPhonemes(prev => ({ ...prev, [newPhWord.trim()]: newPhPron.trim() }));
+                setNewPhWord("");
+                setNewPhPron("");
+              }
+            }}
+            className="flex-1 px-2 py-1 bg-background-tertiary border border-border rounded text-[10px] text-text-primary font-mono focus:outline-none focus:border-primary"
+            placeholder="pronunciación..."
+          />
+          <button
+            onClick={() => {
+              if (newPhWord.trim() && newPhPron.trim()) {
+                setPhonemes(prev => ({ ...prev, [newPhWord.trim()]: newPhPron.trim() }));
+                setNewPhWord("");
+                setNewPhPron("");
+              }
+            }}
+            disabled={!newPhWord.trim() || !newPhPron.trim()}
+            className="px-2 py-1 bg-primary/20 border border-primary/40 rounded text-[10px] text-primary hover:bg-primary/30 transition-all disabled:opacity-30"
+            title="Agregar (o presiona Enter)"
+          >
+            +
+          </button>
+        </div>
+        <p className="text-[9px] text-text-muted">
+          Agrega guía de pronunciación para términos técnicos o palabras extranjeras.
+        </p>
       </div>
 
       <div className="space-y-2">

@@ -12,6 +12,7 @@ import {
   Mic,
   Radio,
   Film,
+  Layers,
 } from "lucide-react";
 import { Button } from "@openreel/ui";
 import { v2vApi } from "../api/v2v-api";
@@ -70,6 +71,8 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
     setImportOriginalAudio,
     importOriginalVocals,
     setImportOriginalVocals,
+    importOriginalSegments,
+    setImportOriginalSegments,
     importMergedVideo,
     setImportMergedVideo,
   } = useV2VStore();
@@ -374,6 +377,27 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 type="checkbox"
                 checked={importOriginalVocals}
                 onChange={(e) => setImportOriginalVocals(e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+              />
+            </label>
+
+            {/* Segmentos de voz original recortados paralelos */}
+            <label className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
+              <div className="flex items-center gap-2">
+                <Layers size={13} className="text-blue-400" />
+                <div>
+                  <span className="text-[10px] font-medium text-text-primary block">
+                    Segmentos originales en pistas paralelas (Seqs_src/*.wav)
+                  </span>
+                  <span className="text-[9px] text-text-muted block">
+                    Clips originales alineados en el timeline (silenciados) para comparar con la traducción en paralelo
+                  </span>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={importOriginalSegments}
+                onChange={(e) => setImportOriginalSegments(e.target.checked)}
                 className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
               />
             </label>

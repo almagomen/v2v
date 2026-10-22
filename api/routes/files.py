@@ -303,3 +303,154 @@ def serve_audio_segments_tar(job_id: str, video_index: int):
         filename=filename,
     )
 
+
+# ── Segmentos de audio originales (Seqs_src) ───────────────────────────────────
+
+@router.get("/job/{job_id}/src-audio-segments/{video_index}")
+def list_src_audio_segments(job_id: str, video_index: int):
+    """List original audio segment WAVs for a job/video (Seqs_src/vocals_{NNN}.wav)."""
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    videos = job.get("videos", [])
+    if video_index < 0 or video_index >= len(videos):
+        raise HTTPException(status_code=404, detail="Video no encontrado")
+
+    folder = _get_video_folder(job_id, video_index)
+    seqs_src = folder / "Seqs_src"
+    segments = videos[video_index].get("segments", []) or []
+
+    # Si Seqs_src no existe o está vacío, pero vocals.wav y segmentos existen, generar on-demand
+    vocals_wav = folder / "vocals.wav"
+    if (not seqs_src.exists() or not any(seqs_src.glob("*.wav"))) and vocals_wav.exists() and segments:
+        try:
+            from src.pipeline import split_audio_sequences
+            split_audio_sequences(vocals_wav, segments, output_dir=seqs_src)
+        except Exception as e:
+            print(f"⚠️ Error generando cortes de Seqs_src en demanda: {e}")
+
+    items = []
+    for s in segments:
+        try:
+            seg = int(s.get("seg"))
+        except Exception:
+            continue
+
+        wav_path = None
+        filename = None
+        for candidate in seqs_src.glob(f"*_{seg:03d}.wav"):
+            wav_path = candidate
+            filename = candidate.name
+            break
+
+        if wav_path is None:
+            continue
+
+        items.append(
+            {
+                "seg": seg,
+                "start": s.get("start", 0.0),
+                "end": s.get("end", 0.0),
+                "speaker": s.get("speaker") or "",
+                "filename": filename,
+            }
+        )
+    return items
+
+
+@router.get("/job/{job_id}/src-audio-segments/{video_index}/{seg}")
+def serve_src_audio_segment(job_id: str, video_index: int, seg: int):
+    """Serve a single original WAV segment by seg index (1-based). Formato: vocals_{NNN}.wav."""
+    if seg <= 0 or seg > 999:
+        raise HTTPException(status_code=400, detail="Segmento inválido")
+    folder = _get_video_folder(job_id, video_index)
+    seqs_src = folder / "Seqs_src"
+
+    for candidate in seqs_src.glob(f"*_{seg:03d}.wav"):
+        return FileResponse(candidate, filename=candidate.name, media_type="audio/wav")
+
+    raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+
+def ensure_src_audio_segments_tar(folder: Path) -> Path | None:
+    """Empaqueta de forma atómica y anticipada los segmentos WAV originales en src_audio_segments.tar.gz."""
+    seqs_src = folder / "Seqs_src"
+
+    # Si Seqs_src no existe o está vacío, intentar corte on-demand si vocals.wav existe
+    if not seqs_src.exists() or not any(seqs_src.glob("*.wav")):
+        vocals_wav = folder / "vocals.wav"
+        if vocals_wav.exists():
+            try:
+                from src.result_store import load_result
+                from src.pipeline import split_audio_sequences
+                res_data = load_result(folder)
+                segs = res_data.get("segments", []) if res_data else []
+                if segs:
+                    split_audio_sequences(vocals_wav, segs, output_dir=seqs_src)
+            except Exception as e:
+                print(f"⚠️ Error generando cortes de Seqs_src on-demand: {e}")
+
+    if not seqs_src.exists() or not seqs_src.is_dir():
+        return None
+
+    wav_files = [
+        f for f in sorted(seqs_src.glob("*.wav"))
+        if f.is_file() and f.stat().st_size > 0 and not f.name.endswith("_raw.wav")
+    ]
+    if not wav_files:
+        return None
+
+    tar_gz_path = folder / "src_audio_segments.tar.gz"
+    tar_legacy_path = folder / "src_audio_segments.tar"
+    latest_wav_mtime = max(f.stat().st_mtime for f in wav_files)
+
+    if tar_gz_path.exists() and tar_gz_path.stat().st_mtime >= latest_wav_mtime:
+        return tar_gz_path
+
+    temp_tar = folder / "src_audio_segments.tar.gz.tmp"
+    try:
+        with tarfile.open(temp_tar, mode="w:gz", compresslevel=1) as tar:
+            for f in wav_files:
+                tar.add(f, arcname=f.name)
+        temp_tar.replace(tar_gz_path)
+        if tar_legacy_path.exists():
+            try:
+                tar_legacy_path.unlink()
+            except OSError:
+                pass
+        return tar_gz_path
+    except Exception:
+        if temp_tar.exists():
+            try:
+                temp_tar.unlink()
+            except OSError:
+                pass
+        try:
+            temp_flat = folder / "src_audio_segments.tar.tmp"
+            with tarfile.open(temp_flat, mode="w") as tar:
+                for f in wav_files:
+                    tar.add(f, arcname=f.name)
+            temp_flat.replace(tar_legacy_path)
+            return tar_legacy_path
+        except Exception:
+            return None
+
+
+@router.get("/job/{job_id}/src-audio-segments-tar/{video_index}")
+def serve_src_audio_segments_tar(job_id: str, video_index: int):
+    """Sirve todos los segmentos WAV originales de un video en un paquete TAR/GZ servido con FileResponse."""
+    folder = _get_video_folder(job_id, video_index)
+    tar_file = ensure_src_audio_segments_tar(folder)
+    if not tar_file or not tar_file.exists():
+        raise HTTPException(status_code=404, detail="No hay segmentos WAV originales disponibles para empaquetar")
+
+    media_type = "application/gzip" if tar_file.suffix == ".gz" else "application/x-tar"
+    filename = f"src_audio_segments_{video_index}.tar.gz" if tar_file.suffix == ".gz" else f"src_audio_segments_{video_index}.tar"
+
+    return FileResponse(
+        path=tar_file,
+        media_type=media_type,
+        filename=filename,
+    )
+
+

@@ -9,6 +9,7 @@ export interface V2VUserPreferences {
   importInstrumental: boolean;
   importOriginalAudio: boolean;
   importOriginalVocals: boolean;
+  importOriginalSegments: boolean;
   importMergedVideo: boolean;
 }
 
@@ -17,6 +18,7 @@ export const DEFAULT_V2V_PREFERENCES: V2VUserPreferences = {
   importInstrumental: true,
   importOriginalAudio: false,
   importOriginalVocals: false,
+  importOriginalSegments: true,
   importMergedVideo: false,
 };
 

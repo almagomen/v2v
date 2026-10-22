@@ -142,6 +142,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
     importInstrumental: loadV2VPreferences().importInstrumental,
     importOriginalAudio: loadV2VPreferences().importOriginalAudio,
     importOriginalVocals: loadV2VPreferences().importOriginalVocals,
+    importOriginalSegments: loadV2VPreferences().importOriginalSegments,
     importMergedVideo: loadV2VPreferences().importMergedVideo,
 
     setEnableEmotions: (enableEmotions) => {
@@ -159,6 +160,10 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
     setImportOriginalVocals: (importOriginalVocals) => {
       saveV2VPreferences({ importOriginalVocals });
       set({ importOriginalVocals });
+    },
+    setImportOriginalSegments: (importOriginalSegments) => {
+      saveV2VPreferences({ importOriginalSegments });
+      set({ importOriginalSegments });
     },
     setImportMergedVideo: (importMergedVideo) => {
       saveV2VPreferences({ importMergedVideo });
@@ -731,7 +736,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   const tStartDownload = performance.now();
                   const assetTasks = assets.map(fetchAssetBlob);
 
-                  const [downloadedAssetsRaw, downloadedSegs] = await Promise.all([
+                  const [downloadedAssetsRaw, downloadedSegs, downloadedSrcSegs] = await Promise.all([
                     Promise.all(assetTasks),
                     (async () => {
                       if (audioSegs.length === 0) return [];
@@ -790,13 +795,65 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       }
                       const res = individualResults.filter((d): d is { isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } => d !== null);
                       return res;
+                    })(),
+                    (async () => {
+                      if (!currentPrefs.importOriginalSegments || audioSegs.length === 0) return [];
+                      try {
+                        const tarMap = await v2vApi.fetchSrcAudioSegmentsTar(jobId, v.index);
+                        const srcSegsFromTar: Array<{ isSrcSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob }> = [];
+                        for (const seg of audioSegs) {
+                          const segSuffix = `_${String(seg.seg).padStart(3, "0")}.wav`;
+                          const logicalName = `vocals_${String(seg.seg).padStart(3, "0")}.wav`;
+                          let blob: Blob | undefined;
+                          if (tarMap.has(logicalName)) {
+                            blob = tarMap.get(logicalName);
+                          } else {
+                            for (const [name, b] of tarMap.entries()) {
+                              if (name.endsWith(segSuffix)) {
+                                blob = b;
+                                break;
+                              }
+                            }
+                          }
+                          if (blob) {
+                            srcSegsFromTar.push({ isSrcSegment: true, seg, logicalName, blob });
+                          }
+                        }
+                        if (srcSegsFromTar.length > 0) {
+                          return srcSegsFromTar;
+                        }
+                      } catch (e) {
+                        console.warn(`[V2V] Fallback a descargas individuales de audio original para ${folder}:`, e);
+                      }
+
+                      const CONCURRENCY_LIMIT = 5;
+                      const individualSrcResults: Array<{ isSrcSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } | null> = [];
+                      for (let i = 0; i < audioSegs.length; i += CONCURRENCY_LIMIT) {
+                        const chunk = audioSegs.slice(i, i + CONCURRENCY_LIMIT);
+                        const chunkResults = await Promise.all(
+                          chunk.map(async (seg) => {
+                            const logicalName = `vocals_${String(seg.seg).padStart(3, "0")}.wav`;
+                            for (let attempt = 0; attempt < 2; attempt++) {
+                              try {
+                                const blob = await v2vApi.fetchSrcAudioSegmentBlob(jobId, v.index, seg.seg);
+                                return { isSrcSegment: true as const, seg, logicalName, blob };
+                              } catch {
+                                if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
+                              }
+                            }
+                            return null;
+                          })
+                        );
+                        individualSrcResults.push(...chunkResults);
+                      }
+                      return individualSrcResults.filter((d): d is { isSrcSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } => d !== null);
                     })()
                   ]);
 
                   const downloadedAssets = downloadedAssetsRaw.filter((d): d is { asset: V2VAssetDef, blob: Blob } => d !== null);
                   const tTotalDlSec = ((performance.now() - tStartDownload) / 1000).toFixed(1);
                   if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `• 📦 Medios descargados en ${tTotalDlSec}s (${downloadedAssets.length + downloadedSegs.length} archivos)`);
+                    get().appendUrlLog(urlForLog, `• 📦 Medios descargados en ${tTotalDlSec}s (${downloadedAssets.length + downloadedSegs.length + downloadedSrcSegs.length} archivos)`);
                   }
 
                   if (audioSegs.length > 0 && downloadedSegs.length === 0) {
@@ -869,11 +926,41 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     );
                   }
 
+                  const srcMediaItems: MediaItem[] = [];
+                  for (const d of downloadedSrcSegs) {
+                    const fallbackDuration = Math.max(d.seg.end - d.seg.start, 0.1);
+                    const meta = {
+                      duration: fallbackDuration,
+                      width: 0,
+                      height: 0,
+                      frameRate: 0,
+                      codec: "pcm_s16le",
+                      sampleRate: 48000,
+                      channels: 1,
+                      fileSize: d.blob.size,
+                    };
+                    const item: MediaItem = {
+                      id: uuidv4(),
+                      name: d.logicalName,
+                      type: "audio",
+                      fileHandle: null,
+                      blob: d.blob,
+                      metadata: meta,
+                      thumbnailUrl: null,
+                      waveformData: null,
+                    };
+                    srcMediaItems.push(item);
+
+                    saveMediaBlob(workingProject.id, item.id, d.blob, meta).catch((err) =>
+                      console.warn(`[V2V] Error guardando blob en IndexedDB para ${d.logicalName}:`, err)
+                    );
+                  }
+
                   workingProject = {
                     ...workingProject,
                     mediaLibrary: {
                       ...workingProject.mediaLibrary,
-                      items: [...workingProject.mediaLibrary.items, ...ttsMediaItems],
+                      items: [...workingProject.mediaLibrary.items, ...ttsMediaItems, ...srcMediaItems],
                     },
                     modifiedAt: Date.now(),
                   };
@@ -977,6 +1064,30 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       console.warn(`[V2V] ${logMsg}`);
                       if (urlForLog) get().appendUrlLog(urlForLog, logMsg);
                     }
+
+                    if (currentPrefs.importOriginalSegments && downloadedSrcSegs.length > 0) {
+                      const origTrackName = `ORIG_${sKey}`;
+                      const { project: pOrig, trackId: origTrackId } = await addTrackAndGetId(workingProject, "audio");
+                      workingProject = pOrig;
+                      if (origTrackId) {
+                        workingProject = renameTrackInProject(workingProject, origTrackId, origTrackName);
+                        workingProject = muteTrackInProject(workingProject, origTrackId, true);
+
+                        for (const seg of segs) {
+                          const downloadedSrc = downloadedSrcSegs.find(d => d.seg.seg === seg.seg);
+                          if (downloadedSrc) {
+                            const media = workingProject.mediaLibrary.items.find(m => m.name === downloadedSrc.logicalName);
+                            if (media) {
+                              allClipsToBatchAdd.push({
+                                trackId: origTrackId,
+                                mediaId: media.id,
+                                startTime: seg.start,
+                              });
+                            }
+                          }
+                        }
+                      }
+                    }
                   }
 
                   if (allClipsToBatchAdd.length > 0) {
@@ -992,15 +1103,15 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   }
 
                   const audioSegmentsImported = workingProject.mediaLibrary.items.filter(
-                    m => m.type === "audio" && m.name.startsWith("tts_") && !m.waveformData && !m.isPlaceholder
+                    m => m.type === "audio" && (m.name.startsWith("tts_") || m.name.startsWith("vocals_")) && !m.waveformData && !m.isPlaceholder
                   );
                   
                   if (audioSegmentsImported.length > 0) {
                     generateWaveformsInBackground(workingProject.id, audioSegmentsImported);
                   }
                   
-                  const totalFilesCount = baseFilesToImport.length + ttsMediaItems.length;
-                  const nativeFiles = [...baseFilesToImport.map(f => f.name), ...ttsMediaItems.map(m => m.name)];
+                  const totalFilesCount = baseFilesToImport.length + ttsMediaItems.length + srcMediaItems.length;
+                  const nativeFiles = [...baseFilesToImport.map(f => f.name), ...ttsMediaItems.map(m => m.name), ...srcMediaItems.map(m => m.name)];
                   
                   get().setFolderRef(folder, { jobId: state.jobId!, videoIndex: v.index, outputName: v.output_name, nativeFiles, projectId: workingProject.id });
                   
