@@ -35,48 +35,13 @@ CANONICAL_FISH_EMOTIONS = {
     "break", "long-break", "audience laughing", "background laughter", "crowd laughing",
 }
 
-# Mapeo de normalización para tags no canónicos o sinónimos comunes
-TAG_NORMALIZATION = {
-    "whisper": "whispering",
-    "laughter": "laughing",
-    "laugh": "laughing",
-    "chuckle": "chuckling",
-    "sob": "sobbing",
-    "cry": "crying loudly",
-    "crying": "crying loudly",
-    "sigh": "sighing",
-    "groan": "groaning",
-    "pant": "panting",
-    "gasp": "gasping",
-    "yawn": "yawning",
-    "snore": "snoring",
-    "throat": "clear throat",
-    "yell": "shouting",
-    "shout": "shouting",
-    "scream": "screaming",
-    "fast": "in a hurry tone",
-    "hurried": "in a hurry tone",
-    "hurry": "in a hurry tone",
-    "urgent": "in a hurry tone",
-    "soft": "soft tone",
-    "gentle": "soft tone",
-    "joy": "happy",
-    "neutral": "calm",
-    "peaceful": "calm",
-    "anxiety": "anxious",
-    "doubt": "doubtful",
-    "confusion": "confused",
-}
-
-
 def normalize_emotion_tag(tag: str) -> str:
-    """Normaliza cualquier tag al catálogo canónico oficial de Fish Audio S2."""
+    """Valida y limpia el tag contra el catálogo canónico oficial de Fish Audio S2."""
     clean = re.sub(r"[\[\]]", "", tag).strip().lower()
-    if clean in TAG_NORMALIZATION:
-        clean = TAG_NORMALIZATION[clean]
     if clean in CANONICAL_FISH_EMOTIONS:
         return clean
     return "calm"
+
 
 
 def heuristic_detect_emotion(text: str) -> tuple[str, float]:
