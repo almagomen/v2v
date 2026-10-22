@@ -69,7 +69,8 @@ def translate_text_list(
     times: Optional[list[Tuple[float, float]]] = None,
     segments_meta: Optional[list[dict]] = None,
     enable_emotions: bool = True,
-) -> list[str] | None:
+    return_details: bool = False,
+) -> list[str] | Tuple[list[str], list[dict]] | None:
     """
     Traduce o adapta una lista de frases a un idioma objetivo usando Gemini (Interactions API).
     Soporta doblaje isométrico con presupuesto de sílabas, tiempo neto y tags prosódicos,
@@ -128,7 +129,7 @@ def translate_text_list(
         emotion_guideline = f"""   - Modulación prosódica y expresiones: Puedes integrar marcadores de emoción, estilo o reacciones vocales seleccionados del catálogo canónico activo del sistema:
      {emotions_catalog_str}
      * Ubicación flexible: Colócalos ya sea al inicio de la frase para definir la entonación general o en cualquier punto natural de la frase donde ocurra la inflexión emocional.
-     * Tono neutro: Si el tono de la frase es neutro, informativo o puramente descriptivo, déjala limpia sin ninguna etiqueta de emoción (no fuerces "calm" ni etiquetas artificiales)."""
+     * Tono neutro: Si el tono de la frase es neutro, déjala limpia sin ninguna etiqueta de emoción."""
         pacing_emotion_hint = "- MODULACIÓN PROSÓDICA DINÁMICA: Considera la pista acústica (nivel de energía y ritmo) provista en el segmento para integrar armónicamente, al inicio o en el punto de inflexión de la frase y solo si el contexto lo justifica, una modulación del catálogo de estilos activos disponible."
     else:
         emotion_guideline = """   - Modulación: Mantén una entonación natural y neutra, sin marcadores de emoción."""
@@ -172,7 +173,7 @@ Directrices obligatorias:
    - Puedes anteponer `[emphasis]` inmediatamente antes de una palabra clave para acentuarla con fuerza vocal.
    - Preserva estrictamente la entonación interrogativa (¿?) y exclamativa (¡!) para una modulación prosódica creíble.
 8. DETECCIÓN FONÉTICA Y GLOSARIO DE PRONUNCIACIÓN (TTS):
-   Identifica en cada frase cualquier vocablo cuya lectura ortográfica literal en {target_lang_name} pueda ser pronunciada de forma errónea, distorsionada o antinatural por un sintetizador de voz. Evalúa rigurosamente candidatos en cualquier área temática (ciencia, tecnología, medicina, finanzas, arte, deportes, leyes, cultura general, etc.) que cumplan con alguno de los siguientes criterios:
+   Identifica en cada frase cualquier vocablo cuya lectura ortográfica literal en {target_lang_name} pueda ser pronunciada de forma errónea, distorsionada o antinatural por un sintetizador de voz. Evalúa rigurosamente candidatos en cualquier área temática que cumplan con alguno de los siguientes criterios:
    a) Nombres propios, marcas, productos, entidades o topónimos de origen no nativo o grafía singular.
    b) Siglas, acrónimos o combinaciones alfanuméricas que deban pronunciarse con la fonética propia de su disciplina o mediante deletreo.
    c) Extranjerismos, vocablos foráneos o términos especializados que conserven la pronunciación de su idioma de origen y no sigan las reglas ortográficas del {target_lang_name}.
@@ -343,6 +344,9 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
 
                     if aligned_list and len(aligned_list) == total_count:
                         print(f"⏱️ [Etapa: Traducción | Gemini] Completada con '{model}' en {duration:.1f}s ({len(aligned_list)} frases)", flush=True)
+                        if return_details:
+                            phonemes_list = [phonemes_map.get(i, {}) for i in range(total_count)]
+                            return aligned_list, phonemes_list
                         return aligned_list
 
             except Exception as e:
@@ -365,6 +369,8 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
             print(f"🔄 [Traducción] Saltando a modelo de respaldo: '{models_to_try[m_idx + 1]}'...", flush=True)
 
     print(f"❌ [Traducción] Fallaron todos los modelos disponibles. Último error: {last_error}", flush=True)
+    if return_details:
+        return None, None
     return None
 
 

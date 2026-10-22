@@ -137,7 +137,7 @@ def get_segments_editor(job_id: str, video_index: int):
 def retranslate_segments(req: RetranslateSegmentsRequest):
     """Propose new translations for selected segments (does not regenerate audio)."""
     folder = _get_video_folder(req.job_id, req.video_index)
-    _tts_list, original_list, source_lang = _load_result_texts(folder)
+    tts_list, original_list, source_lang = _load_result_texts(folder)
 
     if not source_lang:
         source_lang = "en"
@@ -166,7 +166,7 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
         if not text:
             text = str(orig_d.get("text", "")).strip()
         if not text:
-            tts_d = _segment_dict_at(_tts_list, seg_idx - 1)
+            tts_d = _segment_dict_at(tts_list, seg_idx - 1)
             text = str(tts_d.get("text", "")).strip()
         if text:
             sentences.append(text)
@@ -181,32 +181,51 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
 
     from src.translation import translate_text_list
 
-    translated = translate_text_list(
+    res = translate_text_list(
         sentences,
         target_lang=target_lang,
         source_lang=source_lang,
         times=times_list if len(times_list) == len(sentences) else None,
         segments_meta=meta_list if len(meta_list) == len(sentences) else None,
+        return_details=True,
     )
-    if not translated or len(translated) != len(sentences):
+    if not res or not res[0] or len(res[0]) != len(sentences):
         raise HTTPException(status_code=500, detail="Error al retraducir con Gemini")
+
+    translated, phonemes_list = res
 
     # Actualizar result.json con los nuevos textos y fonemas de los segmentos retraducidos
     try:
-        from src.result_store import update_result_segments
-        for seg_idx, txt, meta in zip(valid_indices, translated, meta_list):
+        from src.result_store import create_segment_entry, update_result_segments
+        for seg_idx, txt, ph, meta in zip(valid_indices, translated, phonemes_list or [], meta_list):
             if 1 <= seg_idx <= len(tts_list):
-                tts_list[seg_idx - 1]["text"] = txt
-                if meta.get("phonemes"):
-                    tts_list[seg_idx - 1]["phonemes"] = meta["phonemes"]
+                curr = tts_list[seg_idx - 1]
+                tts_list[seg_idx - 1] = create_segment_entry(
+                    seg=seg_idx,
+                    start=curr.get("start", meta.get("start", 0.0)),
+                    end=curr.get("end", meta.get("end", 0.0)),
+                    text=txt,
+                    orig_text=meta.get("orig_text") or meta.get("original_text") or curr.get("orig_text") or txt,
+                    speaker=curr.get("speaker") or meta.get("speaker") or "mrbeast",
+                    original_speaker=meta.get("original_speaker") or curr.get("original_speaker") or "SPEAKER_00",
+                    phonemes=ph or meta.get("phonemes") or curr.get("phonemes"),
+                    extra={
+                        k: v for k, v in curr.items()
+                        if k not in (
+                            "seg", "start", "end", "duration", "text",
+                            "orig_text", "original_text", "speaker",
+                            "original_speaker", "phonemes"
+                        )
+                    },
+                )
         update_result_segments(folder, tts_list)
     except Exception as e_upd:
         print(f"⚠️ Error actualizando result.json tras retranslate: {e_upd}")
 
     return RetranslateSegmentsResponse(
         segments=[
-            RetranslateSegmentItem(seg=seg, text=txt, phonemes=meta.get("phonemes"))
-            for seg, txt, meta in zip(valid_indices, translated, meta_list)
+            RetranslateSegmentItem(seg=seg, text=txt, phonemes=ph or meta.get("phonemes"))
+            for seg, txt, ph, meta in zip(valid_indices, translated, phonemes_list or [None] * len(translated), meta_list)
         ]
     )
 

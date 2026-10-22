@@ -5,6 +5,8 @@ Utilidades de audio: ajuste de duración, clonado de segmentos, merge.
 from pathlib import Path
 from typing import Optional, Tuple, Any
 
+import numpy as np
+
 try:
     import torch
     import torchaudio
@@ -374,6 +376,126 @@ def get_audio_file_duration(file_path: Path | str, fallback: Optional[float] = N
     return fallback
 
 
+def synthesize_segment_audio(
+    text: str,
+    lang: str,
+    speaker: str,
+    out_audio_path: Optional[Path | str] = None,
+    raw_audio_path: Optional[Path | str] = None,
+    phonemes: Optional[dict[str, str]] = None,
+    speed: float = 1.0,
+    target_duration: Optional[float] = None,
+    orig_duration: Optional[float] = None,
+    slowdown_range: Optional[Tuple[float, float]] = None,
+    max_allowed_dur: Optional[float] = None,
+    tts_fn: Optional[callable] = None,
+    cached_arr_rate: Optional[Tuple[Any, int]] = None,
+    **tts_kwargs,
+) -> Tuple[Optional[Any], Optional[int], float, float, str]:
+    """
+    Función centralizada para sintetizar y procesar un segmento individual de audio TTS.
+
+    1. Invoca tts_fn (o usa cached_arr_rate si fue precalculado en paralelo).
+    2. Guarda copia intacta en raw_audio_path.
+    3. Aplica ajuste de tempo, sincronía de duración o padding orgánico de respiros.
+    4. Aplica micro-fade out de 256 muestras al final para evitar artefactos o clicks.
+    5. Guarda el audio final en out_audio_path.
+
+    Retorna: (arr, rate, raw_duration, final_duration, mode_tag)
+    """
+    if tts_fn is None:
+        from src.tts import model_tts
+        tts_fn = model_tts
+
+    if cached_arr_rate is not None and cached_arr_rate[0] is not None:
+        arr, rate = cached_arr_rate
+    else:
+        seg_kwargs = dict(tts_kwargs)
+        if phonemes:
+            from src.tts import normalize_pronunciation_dictionary
+            seg_dict = normalize_pronunciation_dictionary(phonemes)
+            if seg_dict:
+                seg_kwargs["pronunciation_dictionary"] = seg_dict
+        arr, rate = tts_fn(text, lang, speaker, **seg_kwargs)
+
+    if arr is None or rate is None:
+        return None, None, 0.0, 0.0, "error"
+
+    raw_dur = float(arr.shape[-1]) / float(rate)
+
+    if raw_audio_path and torchaudio is not None:
+        raw_p = Path(raw_audio_path)
+        raw_p.parent.mkdir(parents=True, exist_ok=True)
+        torchaudio.save(str(raw_p), arr, sample_rate=rate)
+
+    mode_tag = "✨ 1.00x (natural)"
+
+    # Sincronía orgánica respecto al audio original (si slowdown_range y orig_duration están activos)
+    if slowdown_range and orig_duration and orig_duration > 0:
+        if max_allowed_dur is not None and raw_dur > max_allowed_dur:
+            ratio_needed = raw_dur / max_allowed_dur
+            if ratio_needed <= 1.03:
+                mode_tag = "✨ 1.00x (natural)"
+            else:
+                safe_ratio = min(ratio_needed, 1.25)
+                mode_tag = f"⚡ {safe_ratio:.2f}x (sync)"
+                target_samples = int(arr.shape[-1] / safe_ratio)
+                arr = adjust_audio_duration(arr, target_samples, rate)
+        elif raw_dur < orig_duration:
+            ratio_slow = raw_dur / orig_duration
+            if ratio_slow >= 0.96:
+                pad_pct = int(round((1.0 - ratio_slow) * 100))
+                mode_tag = f"✨ 1.00x (+pad {pad_pct}%)" if pad_pct > 0 else "✨ 1.00x (natural)"
+                pad_samples = int((orig_duration - raw_dur) * rate)
+                if pad_samples > 0 and torch is not None:
+                    arr = distribute_silence_padding(arr, int(orig_duration * rate), rate)
+            else:
+                min_allowed_speed = 0.75
+                if ratio_slow < min_allowed_speed:
+                    effective_speed = min_allowed_speed
+                    mode_tag = f"🔉 {effective_speed:.2f}x (+pad)"
+                    stretch_samples = int(arr.shape[-1] / effective_speed)
+                    arr = adjust_audio_duration(arr, stretch_samples, rate)
+                    target_samples = int(orig_duration * rate)
+                    if target_samples > arr.shape[-1] and torch is not None:
+                        arr = distribute_silence_padding(arr, target_samples, rate)
+                else:
+                    mode_tag = f"🔉 {ratio_slow:.2f}x (expand)"
+                    target_samples = int(orig_duration * rate)
+                    arr = adjust_audio_duration(arr, target_samples, rate)
+        else:
+            mode_tag = "✨ 1.00x (natural)"
+
+    # Micro-fade out suave (256 muestras) al final para eliminar ruidos de corte abrupto
+    if arr.shape[-1] > 256 and torch is not None:
+        fade_len = min(256, arr.shape[-1])
+        fade = torch.linspace(1.0, 0.0, fade_len, device=arr.device)
+        arr = arr.clone()
+        arr[:, -fade_len:] *= fade
+
+    # Modo target_duration (fijar duración objetivo explícita)
+    dur_after_sync = float(arr.shape[-1]) / float(rate)
+    if target_duration is not None and target_duration > 0:
+        raw_speed = dur_after_sync / target_duration
+        effective_speed = max(0.5, min(raw_speed, 2.0))
+        mode_tag = f"🎯 {effective_speed:.2f}x (target)"
+        target_samples = int(target_duration * rate)
+        arr = adjust_audio_duration(arr, target_samples, rate)
+    elif speed is not None and abs(speed - 1.0) > 0.01 and speed > 0:
+        target_samples = int(arr.shape[-1] / speed)
+        mode_tag = f"🎛️ {speed:.2f}x (manual)"
+        arr = adjust_audio_duration(arr, target_samples, rate)
+
+    final_dur = float(arr.shape[-1]) / float(rate)
+
+    if out_audio_path and torchaudio is not None:
+        out_p = Path(out_audio_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        torchaudio.save(str(out_p), arr, sample_rate=rate)
+
+    return arr, rate, raw_dur, final_dur, mode_tag
+
+
 def clone_voice_segments(
     path: Path,
     texts: list[dict],
@@ -561,29 +683,6 @@ def clone_voice_segments(
         arr_en, rate_en = torchaudio.load(str(audio_en_path))
         dur_en = arr_en.shape[-1] / rate_en
 
-        if idx in tts_results:
-            arr, rate = tts_results[idx]
-        else:
-            s_phonemes = text_dict.get("phonemes") or {}
-            single_kwargs = dict(kwargs)
-            if s_phonemes:
-                from src.tts import normalize_pronunciation_dictionary
-                seg_dict = normalize_pronunciation_dictionary(s_phonemes)
-                if seg_dict:
-                    single_kwargs["pronunciation_dictionary"] = seg_dict
-            arr, rate = tts_fn(text, language, seg_audio_ref, **single_kwargs)
-
-        if arr is None or rate is None:
-            continue
-
-        # --- GUARDAR COPIA RAW INTACTA PARA "APPLY SPEED" FUTURO ---
-        raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"
-        torchaudio.save(str(raw_es_path), arr, sample_rate=rate)
-        # --------------------------------------------------------
-
-        dur_es = arr.shape[-1] / rate
-        raw_dur_es = dur_es
-
         # ─── BÚSQUEDA DEL PRÓXIMO SEGMENTO CRONOLÓGICO Y LÍMITE DE PAUSA ───
         # Buscar el inicio del siguiente segmento cronológico (de cualquier interlocutor)
         next_starts = [
@@ -605,66 +704,29 @@ def clone_voice_segments(
         else:
             max_allowed_dur = dur_en * 1.15
 
-        mode_tag = "✨ 1.00x (natural)"
+        audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.wav"
+        raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"
 
-        if slowdown_range:
-            if max_allowed_dur is not None and dur_es > max_allowed_dur:
-                ratio_needed = dur_es / max_allowed_dur
-                if ratio_needed <= 1.03:
-                    mode_tag = "✨ 1.00x (natural)"
-                else:
-                    # Aceleración suave con FFmpeg hasta un tope seguro de 1.25x para sincronía exacta
-                    safe_ratio = min(ratio_needed, 1.25)
-                    mode_tag = f"⚡ {safe_ratio:.2f}x (sync)"
-                    target_samples = int(arr.shape[-1] / safe_ratio)
-                    arr = adjust_audio_duration(arr, target_samples, rate)
-            elif dur_es < dur_en:
-                # El audio traducido es más corto que el original:
-                # Expandir con atempo hasta cubrir dur_en y eliminar el silencio muerto entre segmentos
-                ratio_slow = dur_es / dur_en
-                if ratio_slow >= 0.96:
-                    pad_pct = int(round((1.0 - ratio_slow) * 100))
-                    mode_tag = f"✨ 1.00x (+pad {pad_pct}%)" if pad_pct > 0 else "✨ 1.00x (natural)"
-                    pad_samples = int((dur_en - dur_es) * rate)
-                    if pad_samples > 0 and torch is not None:
-                        arr = distribute_silence_padding(arr, int(dur_en * rate), rate)
-                else:
-                    # Estirar con atempo para equiparar la duración del segmento original
-                    # Piso seguro de velocidad de 0.75x para preservar naturalidad; el remanente se distribuye orgánicamente
-                    min_allowed_speed = 0.75
-                    if ratio_slow < min_allowed_speed:
-                        effective_speed = min_allowed_speed
-                        mode_tag = f"🔉 {effective_speed:.2f}x (+pad)"
-                        stretch_samples = int(arr.shape[-1] / effective_speed)
-                        arr = adjust_audio_duration(arr, stretch_samples, rate)
-                        target_samples = int(dur_en * rate)
-                        if target_samples > arr.shape[-1] and torch is not None:
-                            arr = distribute_silence_padding(arr, target_samples, rate)
-                    else:
-                        mode_tag = f"🔉 {ratio_slow:.2f}x (expand)"
-                        target_samples = int(dur_en * rate)
-                        arr = adjust_audio_duration(arr, target_samples, rate)
-            else:
-                mode_tag = "✨ 1.00x (natural)"
+        cached_tts = tts_results.get(idx)
+        arr, rate, raw_dur_es, final_dur, mode_tag = synthesize_segment_audio(
+            text=text,
+            lang=language,
+            speaker=seg_audio_ref,
+            out_audio_path=audio_es_path,
+            raw_audio_path=raw_es_path,
+            phonemes=text_dict.get("phonemes"),
+            speed=speed,
+            target_duration=target_duration,
+            orig_duration=dur_en,
+            slowdown_range=slowdown_range,
+            max_allowed_dur=max_allowed_dur,
+            tts_fn=tts_fn,
+            cached_arr_rate=cached_tts,
+            **kwargs,
+        )
 
-        # Micro-fade out suave (256 muestras) al final del audio para eliminar ruidos de corte abrupto
-        if arr.shape[-1] > 256 and torch is not None:
-            fade_len = min(256, arr.shape[-1])
-            fade = torch.linspace(1.0, 0.0, fade_len, device=arr.device)
-            arr[:, -fade_len:] *= fade
-
-        # Aplicar target_duration (modo 's') si está presente
-        if target_duration is not None and target_duration > 0:
-            raw_speed = dur_es / target_duration if target_duration > 0 else 1.0
-            effective_speed = max(0.5, min(raw_speed, 2.0))
-            mode_tag = f"🎯 {effective_speed:.2f}x (target)"
-            target_samples = int(target_duration * rate)
-            arr = adjust_audio_duration(arr, target_samples, rate)
-        # Aplicar speed manual del usuario si es distinto de 1.0 y no se aplicó target_duration
-        elif speed != 1.0:
-            target_samples = int(arr.shape[-1] / speed)
-            mode_tag = f"🎛️ {speed:.2f}x (manual)"
-            arr = adjust_audio_duration(arr, target_samples, rate)
+        if arr is None or rate is None:
+            continue
 
         # Tope final estricto: ningún segmento puede exceder la duración total del video
         if video_total_duration is not None:
@@ -674,10 +736,12 @@ def clone_voice_segments(
                 allowed_sec = max(0.1, max_end - start_time)
                 target_samples = int(allowed_sec * rate)
                 arr = adjust_audio_duration(arr, target_samples, rate)
+                if torchaudio is not None:
+                    torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
+                final_dur = arr.shape[-1] / rate
                 mode_tag = "✂️ clamp (fin video)"
 
         # Actualizar metadatos de duración y fin real del segmento
-        final_dur = arr.shape[-1] / rate
         text_dict["end"] = round(start_time + final_dur, 3)
         text_dict["duration"] = round(final_dur, 3)
 

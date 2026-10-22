@@ -7,7 +7,7 @@ from pathlib import Path
 
 from api.job_store import create_job, update_job, append_log, get_job
 from src.assets import load_assets
-from src.result_store import load_result, save_result, update_result_segments
+from src.result_store import load_result, save_result, update_result_segments, create_segment_entry
 
 SPEAKER_OPTIONS = {
     "mrbeast": "49898752f6994bc9a6ef1502214190de",
@@ -153,17 +153,17 @@ def _run_pipeline(
 
             def make_segments(texts_list: list) -> list:
                 return [
-                    {
-                        "seg": i + 1,
-                        "start": t["start"],
-                        "end": t["end"],
-                        "text": t["text"],
-                        "orig_text": t.get("orig_text") or t.get("original_text", ""),
-                        "original_text": t.get("original_text") or t.get("orig_text", ""),
-                        "speaker": t.get("speaker", speaker_name),
-                        "original_speaker": t.get("original_speaker") or t.get("speaker") or "SPEAKER_00",
-                        **({"phonemes": t["phonemes"]} if t.get("phonemes") else {}),
-                    }
+                    create_segment_entry(
+                        seg=t.get("seg", i + 1),
+                        start=t["start"],
+                        end=t["end"],
+                        text=t["text"],
+                        orig_text=t.get("orig_text") or t.get("original_text", ""),
+                        speaker=t.get("speaker", speaker_name),
+                        original_speaker=t.get("original_speaker") or t.get("speaker") or "SPEAKER_00",
+                        phonemes=t.get("phonemes"),
+                        internal_pause_sec=t.get("internal_pause_sec"),
+                    )
                     for i, t in enumerate(texts_list)
                 ]
 
@@ -215,33 +215,7 @@ def _run_pipeline(
                 else:
                     t["speaker"] = speaker_name
 
-            # ─── ANÁLISIS EXPRESIVO Y EMOCIONAL POR SEGMENTO (Fase 3) ───
-            # Si enable_emotions está activo y no hay prosodia previa, inferir dinámicamente con Gemini
-            if enable_emotions:
-                has_existing_emotions = any(
-                    t.get("emotion") or (t.get("text", "").startswith("[") and "]" in t.get("text", "").split(maxsplit=1)[0])
-                    for t in texts
-                )
-                if not has_existing_emotions:
-                    try:
-                        from src.expression import analyze_segments_expression
-                        exp_results = analyze_segments_expression(
-                            texts,
-                            source_lang=r.get("source_lang", "en"),
-                            enable_emotions=enable_emotions,
-                        )
-                        for t, exp in zip(texts, exp_results):
-                            if exp.get("text"):
-                                t["text"] = exp["text"]
-                            t_emo = exp.get("emotion")
-                            if t_emo and t_emo != "calm":
-                                t["emotion"] = t_emo
-                            if exp.get("phonemes"):
-                                t["phonemes"] = {**t.get("phonemes", {}), **exp["phonemes"]}
-                    except Exception as ex_exp:
-                        print(f"⚠️ [Expresión] No se pudo clasificar emociones: {ex_exp}")
-
-            # Si se especificó una emoción en el proceso inicial, actúa como fallback/override para segmentos sin emoción
+            # Fallback opcional si se especificó una emoción inicial global legacy
             if emotion and emotion != "none":
                 clean_tag = emotion if emotion.startswith("[") else f"[{emotion}]"
                 for t in texts:

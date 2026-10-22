@@ -145,6 +145,89 @@ def update_result_segments(folder: Path, segments: list[dict]) -> None:
     save_result(folder, data)
 
 
+def create_segment_entry(
+    seg: int,
+    start: float,
+    end: float,
+    text: str,
+    orig_text: Optional[str] = None,
+    original_text: Optional[str] = None,
+    speaker: Optional[str] = None,
+    original_speaker: Optional[str] = None,
+    phonemes: Optional[dict[str, str]] = None,
+    word_count: Optional[int] = None,
+    char_count: Optional[int] = None,
+    syllable_count: Optional[int] = None,
+    speech_rate: Optional[float] = None,
+    syllable_rate: Optional[float] = None,
+    internal_pause_sec: Optional[float] = None,
+    **extra,
+) -> dict:
+    """
+    Construye de forma centralizada y canónica la estructura de un segmento V2V.
+    Normaliza 'orig_text' y 'original_text', redondea tiempos y calcula métricas si no vienen provistas.
+    """
+    import re
+    s_val = round(float(start), 3)
+    e_val = round(float(end), 3)
+    dur = max(0.1, round(e_val - s_val, 3))
+
+    resolved_orig = orig_text if orig_text is not None else (original_text or text)
+    clean_text = re.sub(r"\[.*?\]", "", str(text)).strip()
+    words = clean_text.split()
+
+    c_cnt = char_count if char_count is not None else len(clean_text)
+    w_cnt = word_count if word_count is not None else len(words)
+
+    if syllable_count is None:
+        try:
+            from src.diarization import count_syllables_approx
+            syl_cnt = count_syllables_approx(clean_text)
+        except Exception:
+            syl_cnt = max(1, int(len(clean_text) / 3))
+    else:
+        syl_cnt = syllable_count
+
+    i_pause = float(internal_pause_sec or 0.0)
+    net_dur = max(0.1, round(dur - i_pause, 3))
+
+    sp_rate = speech_rate if speech_rate is not None else (round(w_cnt / net_dur, 2) if net_dur > 0 else 0.0)
+    syl_rate = syllable_rate if syllable_rate is not None else (round(syl_cnt / net_dur, 2) if net_dur > 0 else 0.0)
+
+    clean_phonemes = (
+        {str(k).strip(): str(v).strip() for k, v in phonemes.items() if k and v}
+        if isinstance(phonemes, dict)
+        else {}
+    )
+
+    entry = {
+        "seg": int(seg),
+        "start": s_val,
+        "end": e_val,
+        "duration": dur,
+        "text": str(text),
+        "orig_text": str(resolved_orig),
+        "original_text": str(resolved_orig),
+        "speaker": speaker or "mrbeast",
+        "original_speaker": original_speaker or speaker or "SPEAKER_00",
+        "word_count": w_cnt,
+        "char_count": c_cnt,
+        "syllable_count": syl_cnt,
+        "speech_rate": sp_rate,
+        "syllable_rate": syl_rate,
+    }
+    if clean_phonemes:
+        entry["phonemes"] = clean_phonemes
+    if internal_pause_sec:
+        entry["internal_pause_sec"] = i_pause
+
+    for k, v in extra.items():
+        if k not in entry and k != "acoustic_hint":
+            entry[k] = v
+
+    return entry
+
+
 def update_result_output_name(folder: Path, output_name: str) -> None:
     """Actualiza el output_name (título viral) en result.json."""
     data = load_result(folder)

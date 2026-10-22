@@ -21,6 +21,7 @@ from src.config import DEVICE, DRIVE_DIR, KAGGLE_INPUT_DIR
 from src.models import get_or_load_model
 from src.diarization import get_diarization_model, speaker_diarization, process_audio
 from src.translation import translate_text_list, generate_tiktok_title
+from src.result_store import create_segment_entry
 
 WHISPER_DIR = DRIVE_DIR / "whisper_turbo" if DRIVE_DIR else None
 if not WHISPER_DIR and KAGGLE_INPUT_DIR and KAGGLE_INPUT_DIR.exists():
@@ -202,65 +203,101 @@ def run_main(
 
     translated_result = result
     t_trans = 0.0
-    if translate:
+
+    target_language = translate if translate else detected_language
+    should_infer = bool(translate or enable_emotions)
+
+    if should_infer:
         t0_trans = time.perf_counter()
-        translated_texts = translate_text_list(
+        translated_texts, phonemes_list = translate_text_list(
             texts,
-            target_lang=translate,
+            target_lang=target_language,
             source_lang=detected_language,
             times=times,
             segments_meta=result,
             enable_emotions=enable_emotions,
+            return_details=True,
         )
         t_trans = time.perf_counter() - t0_trans
-        def _enrich_translated_segment(orig_seg: dict, start_t: float, end_t: float, raw_txt: str) -> dict:
-            from src.diarization import count_syllables_approx
-            import re
-            d = dict(orig_seg)
-            orig_raw = orig_seg.get("orig_text") or orig_seg.get("original_text") or orig_seg.get("text", "")
-            d["orig_text"] = orig_raw
-            d["original_text"] = orig_raw
-            d["start"] = start_t
-            d["end"] = end_t
-            d["text"] = raw_txt
-            c_txt = re.sub(r"\[.*?\]", "", raw_txt).strip()
-            w_list = c_txt.split()
-            dur_calc = max(0.1, round(end_t - start_t, 3))
-            i_pause = float(orig_seg.get("internal_pause_sec", 0.0))
-            net_d = max(0.1, round(dur_calc - i_pause, 3))
-            syl_c = count_syllables_approx(c_txt)
-            d["word_count"] = len(w_list)
-            d["char_count"] = len(c_txt)
-            d["syllable_count"] = syl_c
-            d["speech_rate"] = round(len(w_list) / net_d, 2) if net_d > 0 else 0.0
-            d["syllable_rate"] = round(syl_c / net_d, 2) if net_d > 0 else 0.0
-            d["phonemes"] = orig_seg.get("phonemes") or {}
-            d.pop("acoustic_hint", None)
-            return d
-
 
         if translated_texts and len(translated_texts) == len(result):
             translated_result = [
-                _enrich_translated_segment(orig, s, e, txt)
-                for (s, e), txt, orig in zip(times, translated_texts, result)
+                create_segment_entry(
+                    seg=orig.get("seg", i + 1),
+                    start=s,
+                    end=e,
+                    text=txt,
+                    orig_text=orig.get("orig_text") or orig.get("original_text") or orig.get("text", ""),
+                    speaker=orig.get("speaker"),
+                    original_speaker=orig.get("original_speaker") or orig.get("speaker"),
+                    phonemes=phonemes_list[i] if phonemes_list and i < len(phonemes_list) else orig.get("phonemes"),
+                    internal_pause_sec=orig.get("internal_pause_sec"),
+                )
+                for i, ((s, e), txt, orig) in enumerate(zip(times, translated_texts, result))
             ]
         elif translated_texts:
-            print(f"⚠️ Reconciliando {len(translated_texts)} traducciones con {len(result)} segmentos originales...", flush=True)
+            print(f"⚠️ Reconciliando {len(translated_texts)} inferencias con {len(result)} segmentos originales...", flush=True)
             translated_result = [
-                _enrich_translated_segment(orig, s, e, translated_texts[i] if i < len(translated_texts) else orig.get("text", ""))
+                create_segment_entry(
+                    seg=orig.get("seg", i + 1),
+                    start=s,
+                    end=e,
+                    text=translated_texts[i] if i < len(translated_texts) else orig.get("text", ""),
+                    orig_text=orig.get("orig_text") or orig.get("original_text") or orig.get("text", ""),
+                    speaker=orig.get("speaker"),
+                    original_speaker=orig.get("original_speaker") or orig.get("speaker"),
+                    phonemes=phonemes_list[i] if phonemes_list and i < len(phonemes_list) else orig.get("phonemes"),
+                    internal_pause_sec=orig.get("internal_pause_sec"),
+                )
                 for i, ((s, e), orig) in enumerate(zip(times, result))
             ]
         else:
-            print("⚠️ No se pudo traducir, usando texto original", flush=True)
-            for r in result:
-                r["orig_text"] = r.get("orig_text") or r.get("text", "")
-                r["original_text"] = r.get("original_text") or r.get("text", "")
-            translated_result = result
+            print("⚠️ No se pudo procesar inferencia, usando texto original", flush=True)
+            translated_result = [
+                create_segment_entry(
+                    seg=r.get("seg", i + 1),
+                    start=r["start"],
+                    end=r["end"],
+                    text=r["text"],
+                    orig_text=r.get("orig_text") or r.get("original_text") or r.get("text", ""),
+                    speaker=r.get("speaker"),
+                    original_speaker=r.get("original_speaker") or r.get("speaker"),
+                    phonemes=r.get("phonemes"),
+                    internal_pause_sec=r.get("internal_pause_sec"),
+                )
+                for i, r in enumerate(result)
+            ]
     else:
-        for r in result:
-            r["orig_text"] = r.get("orig_text") or r.get("text", "")
-            r["original_text"] = r.get("original_text") or r.get("text", "")
-        translated_result = result
+        translated_result = [
+            create_segment_entry(
+                seg=r.get("seg", i + 1),
+                start=r["start"],
+                end=r["end"],
+                text=r["text"],
+                orig_text=r.get("orig_text") or r.get("original_text") or r.get("text", ""),
+                speaker=r.get("speaker"),
+                original_speaker=r.get("original_speaker") or r.get("speaker"),
+                phonemes=r.get("phonemes"),
+                internal_pause_sec=r.get("internal_pause_sec"),
+            )
+            for i, r in enumerate(result)
+        ]
+
+    # Normalizar también result original con create_segment_entry
+    result = [
+        create_segment_entry(
+            seg=r.get("seg", i + 1),
+            start=r["start"],
+            end=r["end"],
+            text=r.get("orig_text") or r.get("original_text") or r.get("text", ""),
+            orig_text=r.get("orig_text") or r.get("original_text") or r.get("text", ""),
+            speaker=r.get("speaker"),
+            original_speaker=r.get("original_speaker") or r.get("speaker"),
+            phonemes=r.get("phonemes"),
+            internal_pause_sec=r.get("internal_pause_sec"),
+        )
+        for i, r in enumerate(result)
+    ]
 
     # Limpiar clave temporal de pista acústica de los segmentos originales
     for r in result:

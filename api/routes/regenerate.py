@@ -244,26 +244,13 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
 
     texts_original = list(result_data.get("segments", []))
 
-    from src.tts import model_tts
-    from src.audio_utils import adjust_audio_duration
-    import torchaudio
+    from src.audio_utils import synthesize_segment_audio
+    from src.result_store import create_segment_entry
 
     speaker_audio = SPEAKER_OPTIONS.get(req.speaker, req.speaker)
     lang = result_data.get("source_lang") or "es"
     speaker_key = resolve_speaker_key(req.speaker)
     safe_speaker = speaker_key.replace(" ", "_").replace("/", "_").replace("\\", "_")
-
-    arr, rate = model_tts(
-        req.text,
-        lang,
-        speaker_audio,
-        temperature=req.temperature,
-        top_p=req.top_p,
-        repetition_penalty=req.repetition_penalty,
-        volume=req.volume,
-    )
-    if arr is None or rate is None:
-        raise HTTPException(status_code=500, detail="Error en modelo TTS")
 
     seqs_trg_dir = path.parent / "Seqs_trg"
     seqs_trg_dir.mkdir(exist_ok=True)
@@ -274,28 +261,32 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}.wav"
     raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}_raw.wav"
 
-    from src.audio_utils import adjust_audio_duration
-
-    # Guardar siempre el RAW sin ajustes
-    torchaudio.save(str(raw_es_path), arr, sample_rate=rate)
-
-    # Aplicar velocidad si es diferente de 1.0
-    if req.speed and req.speed > 0 and abs(req.speed - 1.0) > 0.01:
-        source_samples = arr.shape[-1]
-        target_samples = int(source_samples / req.speed)
-        arr = adjust_audio_duration(arr, target_samples, rate)
-
-    torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
-
-    duration = float(arr.shape[-1]) / float(rate)
+    arr, rate, raw_dur, duration, _ = synthesize_segment_audio(
+        text=req.text,
+        lang=lang,
+        speaker=speaker_audio,
+        out_audio_path=audio_es_path,
+        raw_audio_path=raw_es_path,
+        phonemes=req.phonemes,
+        speed=req.speed or 1.0,
+        temperature=req.temperature,
+        top_p=req.top_p,
+        repetition_penalty=req.repetition_penalty,
+        volume=req.volume,
+    )
+    if arr is None or rate is None:
+        raise HTTPException(status_code=500, detail="Error en modelo TTS")
 
     # Registrar el nuevo segmento en result.json al final (N + 1)
-    new_segment = {
-        "start": round(float(req.start or 0.0), 3),
-        "end": round(float(req.start or 0.0) + duration, 3),
-        "text": req.text,
-        "speaker": speaker_key,
-    }
+    new_segment = create_segment_entry(
+        seg=new_seg_idx,
+        start=round(float(req.start or 0.0), 3),
+        end=round(float(req.start or 0.0) + duration, 3),
+        text=req.text,
+        orig_text=req.text,
+        speaker=speaker_key,
+        phonemes=req.phonemes,
+    )
     texts_original.append(new_segment)
     update_result_segments(path.parent, texts_original)
 

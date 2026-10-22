@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import json
 import re
-import time
 from pathlib import Path
 from typing import Optional
-
-from google import genai
-from src.config import get_google_api_keys, rotate_google_api_key
 
 # Catálogo canónico oficial de Fish Audio S2 / S2.1 (64+ expresiones y efectos)
 CANONICAL_FISH_EMOTIONS = {
@@ -51,125 +46,47 @@ def analyze_segments_expression(
     enable_emotions: bool = True,
 ) -> list[dict]:
     """
-    Enriquece de forma contextual la prosodia de cada segmento usando Gemini
-    en una sola llamada indexada por lote (1 a N).
+    Enriquece de forma contextual la prosodia de cada segmento delegando al motor
+    canónico de adaptación en el mismo idioma en translation.py.
     Retorna: list[dict] con {"text": str, "emotion": Optional[str], "phonemes": dict}.
-    Si no hay API disponible o falla la llamada, retorna lista vacía sin inventar prosodia offline.
     """
-    total = len(texts)
-    if total == 0:
+    if not texts:
         return []
 
-    available_keys = get_google_api_keys()
-    if not available_keys:
+    from src.translation import translate_text_list
+
+    sentences = [t.get("text", "").strip() for t in texts]
+    times_list = [(float(t.get("start", 0.0)), float(t.get("end", 0.0))) for t in texts]
+    has_valid_times = all(e > s for s, e in times_list)
+
+    res = translate_text_list(
+        sentences,
+        target_lang=source_lang,
+        source_lang=source_lang,
+        model_name=model_name,
+        times=times_list if has_valid_times else None,
+        segments_meta=texts,
+        enable_emotions=enable_emotions,
+        return_details=True,
+    )
+
+    if not res or not res[0]:
         return []
 
-    input_dict = {str(i + 1): t.get("text", "").strip() for i, t in enumerate(texts)}
+    translated_texts, phonemes_list = res
 
-    active_emotions_list = sorted([e for e in CANONICAL_FISH_EMOTIONS if not ("break" in e or "laughing" in e and "crowd" in e)])
-    catalog_display = ", ".join(f"[{e}]" for e in active_emotions_list)
+    results = []
+    for i, (orig, txt) in enumerate(zip(texts, translated_texts)):
+        ph = phonemes_list[i] if phonemes_list and i < len(phonemes_list) else {}
+        m_tag = re.match(r"^\[([a-zA-Z\s\-]+)\]", txt)
+        detected_emo = normalize_emotion_tag(m_tag.group(1)) if m_tag else None
+        results.append({
+            "text": txt,
+            "emotion": detected_emo,
+            "phonemes": ph,
+        })
 
-    if enable_emotions:
-        emotion_rule = f"""- MODULACIÓN PROSÓDICA Y EXPRESIONES: Puedes integrar marcadores del catálogo canónico oficial de Fish Audio:
-     {catalog_display}
-     * Ubicación: Colócalos ya sea al inicio de la frase para guiar la entonación general, o en cualquier punto natural de la frase donde ocurra una inflexión, énfasis o reacción dramática.
-     * Tono neutro: Si la frase es neutra, informativa o puramente descriptiva, déjala limpia sin ninguna etiqueta de emoción (no fuerces "calm" ni etiquetas artificiales)."""
-    else:
-        emotion_rule = """- MODULACIÓN PROSÓDICA: Mantén entonación neutra y natural, sin etiquetas de emoción."""
-
-    prompt = f"""Eres un director de voz y especialista en adaptación prosódica para modelos de síntesis de voz (TTS).
-Tu misión es ENRIQUECER cada frase de diálogo con modulaciones prosódicas, pausas naturales y énfasis vocal orgánico, para que suene 100% convincente y humana al ser leída por un motor de voz.
-
-Directrices de prosodia y adaptación oral:
-1. Responde ÚNICAMENTE con un objeto JSON con exactamente {total} claves numéricas del "1" al "{total}".
-2. Para cada clave entrega un objeto con:
-   - "text": la frase con las modulaciones, pausas y énfasis integrados en el punto natural del discurso:
-{emotion_rule}
-     * Pausas internas: `[break]` para pausas breves o respiros naturales entre dos cláusulas; `[long-break]` para pausas prolongadas o reflexiones (nunca al inicio ni final absoluto).
-     * Énfasis vocal: `[emphasis]` inmediatamente antes de una palabra clave con especial fuerza de entonación.
-     * Reacciones vocales: si el orador ríe o suspira en medio de una frase, puedes incluir `[laughing]` o `[sighing]`.
-     * Preserva la entonación interrogativa (¿?) y exclamativa (¡!).
-   - "phonemes": diccionario {{"Palabra": "Pronunciación"}} para nombres propios, siglas, extranjerismos o tecnicismos cuya lectura literal pueda inducir a error fonético en la voz sintética (o {{}} si no hay).
-
-Frases indexadas:
----
-{json.dumps(input_dict, indent=2, ensure_ascii=False)}
----
-
-Devuelve ÚNICAMENTE el JSON:
-{{
-  "1": {{
-    "text": "frase con modulaciones o pausas naturales",
-    "phonemes": {{}}
-  }},
-  ...
-  "{total}": {{
-    "text": "frase final adaptada",
-    "phonemes": {{}}
-  }}
-}}"""
-
-    for attempt in range(len(available_keys)):
-        key = available_keys[0]
-        try:
-            client = genai.Client(api_key=key)
-            resp = client.interactions.create(
-                model=model_name,
-                input=prompt,
-                response_format=[{"type": "text", "mime_type": "application/json"}],
-            )
-            raw = getattr(resp, "output_text", "") or ""
-            clean = raw.strip()
-            m_block = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-            if m_block:
-                clean = m_block.group(1)
-
-            parsed = json.loads(clean)
-            results = []
-            for i in range(1, total + 1):
-                entry = parsed.get(str(i)) or parsed.get(i)
-                txt = ""
-                ph = {}
-                detected_emo = None
-
-                if isinstance(entry, dict):
-                    txt = str(entry.get("text", "")).strip()
-                    ph_raw = entry.get("phonemes")
-                    if isinstance(ph_raw, dict):
-                        ph = {str(k).strip(): str(v).strip() for k, v in ph_raw.items() if k and v}
-                    if "emotion" in entry and entry["emotion"]:
-                        detected_emo = normalize_emotion_tag(str(entry["emotion"]))
-                elif isinstance(entry, str):
-                    txt = entry.strip()
-
-                if not txt:
-                    txt = texts[i - 1].get("text", "")
-
-                # Extraer emoción inicial si el texto trae tag entre corchetes
-                m_tag = re.match(r"^\[([a-zA-Z\s\-]+)\]", txt)
-                if m_tag:
-                    norm = normalize_emotion_tag(m_tag.group(1))
-                    if norm:
-                        detected_emo = norm
-
-                results.append({
-                    "text": txt,
-                    "emotion": detected_emo,
-                    "phonemes": ph,
-                })
-
-            if len(results) == total:
-                return results
-
-        except Exception as e:
-            err_str = str(e).lower()
-            if any(c in err_str for c in ("429", "quota", "resource_exhausted")):
-                rotate_google_api_key()
-                continue
-            break
-
-    # Cero inventos offline: si no hay respuesta de la IA, no se inyectan emociones
-    return []
+    return results
 
 
 def extract_acoustic_prosody(vocals_path: Path | str, segments: list[dict]) -> list[dict]:
