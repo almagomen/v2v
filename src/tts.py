@@ -56,14 +56,15 @@ def normalize_pronunciation_dictionary(dict_input: Any) -> Optional[list[dict]]:
 
             if isinstance(v, str):
                 v_str = v.strip()
-                # Heurística inteligente: siglas o palabras de <= 4 letras requieren coincidencia exacta
-                case_sensitive = len(k_str) <= 4 or k_str.isupper()
+                # Criterio natural: acrónimos/siglas en MAYÚSCULAS requieren coincidencia exacta
+                case_sensitive = k_str.isupper() and len(k_str) > 1
             elif isinstance(v, dict):
                 k_str = str(v.get("key", k_str)).strip()
                 v_str = str(v.get("value", "")).strip()
-                case_sensitive = bool(v.get("case_sensitive", len(k_str) <= 4 or k_str.isupper()))
+                case_sensitive = bool(v.get("case_sensitive", k_str.isupper() and len(k_str) > 1))
             else:
                 continue
+
 
             dedup_key = k_str if case_sensitive else k_str.lower()
             if dedup_key in seen_keys:
