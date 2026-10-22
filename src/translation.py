@@ -98,11 +98,12 @@ def translate_text_list(
             net_dur = float(meta.get("net_speech_duration") or total_dur)
             orig_syl = int(meta.get("syllable_count") or count_syllables_approx(s))
             orig_chars = len(s)
-            breaks_count = s.count("[break]")
+            long_breaks_count = s.count("[long-break]")
+            short_breaks_count = max(0, s.count("[break]") - long_breaks_count)
 
-            # En Fish Audio cada [break] consume ~0.35s de respiro.
+            # En síntesis de voz: cada [break] consume ~0.35s y cada [long-break] consume ~0.85s de respiro.
             # El tiempo de locución objetivo debe cubrir armónicamente el espacio del clip.
-            speech_target_sec = max(0.4, total_dur - (breaks_count * 0.35))
+            speech_target_sec = max(0.4, total_dur - (short_breaks_count * 0.35) - (long_breaks_count * 0.85))
 
             # Tasa natural de locución en doblaje español: ~5.0 a 5.6 sílabas/s y ~15.0 a 17.5 chars/s
             target_chars = int(round(max(orig_chars * 0.95, speech_target_sec * 15.5)))
@@ -118,14 +119,22 @@ def translate_text_list(
         else:
             input_dict[k] = s
 
+    from src.expression import CANONICAL_FISH_EMOTIONS
+    # Catálogo dinámico de emociones y modulaciones activas (excluyendo pausas que se manejan por separado)
+    active_emotions = sorted([e for e in CANONICAL_FISH_EMOTIONS if not ("break" in e or "laughing" in e and "crowd" in e)])
+    emotions_catalog_str = ", ".join(f"[{e}]" for e in active_emotions)
+
     pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO (CONTROL DE TIEMPO Y RANGO DE CARACTERES):
-   Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars | tono]: texto original`.
+   Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars | pista acústica]: texto original`.
    En doblaje audiovisual profesional, el ritmo debe ser fluido y natural (~15 a 17 caracteres por segundo).
    - ISOMORFISMO DE LONGITUD: Ajusta la extensión de tu traducción en {target_lang_name} para que caiga DENTRO del rango de ~M-Z chars (proporcional al tiempo del video). No hagas la frase excesivamente corta (dejaría silencios muertos) ni excesivamente larga (se aceleraría la voz).
-   - PRESERVACIÓN DE PAUSAS INTERNAS ([break]): Si la frase original incluye `[break]`, representa una pausa real del hablante en cámara; DEBES mantener `[break]` en el punto equivalente de la frase traducida.
-   - TONO ACÚSTICO: Usa la pista acústica provista para elegir si corresponde anteponer un tag oficial de Fish Audio S2.1 ([excited], [confident], [calm], [curious], [surprised], [soft tone], [in a hurry tone]).
-   - SEGMENTOS BREVES (< 2.0s): Mantén la traducción en 1 a 3 palabras directas.
-   - En tu JSON de salida entrega ÚNICAMENTE el texto como string, SIN repetir el prefijo de metadatos (prohibido poner `[Xs slot | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
+   - PRESERVACIÓN Y MANEJO DE PAUSAS: Si la escena contiene silencios naturales o respiraciones, puedes usar marcadores de pausa:
+     * `[break]`: para pausas breves, respiros naturales y cesuras lógicas entre dos oraciones o cláusulas.
+     * `[long-break]`: para pausas prolongadas, transiciones de plano o silencios deliberados.
+     (Nunca ubiques marcadores de pausa al inicio o al final absoluto de una frase).
+   - MODULACIÓN PROSÓDICA DINÁMICA: Considera la pista acústica (nivel de energía y ritmo) provista en el segmento para seleccionar armónicamente, al inicio de la frase y solo si el contexto lo justifica, una modulación del catálogo de estilos activos disponible.
+   - SEGMENTOS BREVES (< 2.0s): Respeta la concisión temporal manteniendo la traducción breve y directa sin adiciones innecesarias.
+   - En tu JSON de salida entrega ÚNICAMENTE el texto adaptado dentro de cada objeto, SIN repetir el prefijo de metadatos (prohibido poner `[Xs slot | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
 
     empty_dict_str = "{}"
     prompt = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
@@ -133,22 +142,31 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
 
 Directrices obligatorias:
 1. REGLA ESTRICTA 1-A-1 E ISOMORFISMO: La entrada contiene EXACTAMENTE {total_count} frases indexadas con claves numéricas del "1" al "{total_count}". Tu salida DEBE ser un objeto JSON con EXACTAMENTE las mismas {total_count} claves numéricas (del "1" al "{total_count}").
-2. PROHIBIDO DIVIDIR, FUSIONAR O ADELANTAR FRASES: Cada clave numérica "N" representa un clip de audio individual fijado en el tiempo exacto del video original. NO agregues claves nuevas, NO omitas claves y NO traslades contenido entre claves. Si una frase original es una micro-expresión, conector o reacción (ej. "Y", "Listo", "Pronto", "Mira esto", "Funciona"), tradúcela de forma concisa y breve en SU PROPIA clave numérica "N". NUNCA tomes texto del segmento siguiente ("N+1") para rellenar la clave "N". La clave final "{total_count}" debe corresponder al cierre del video.
+2. INTEGRIDAD TEMPORAL Y SEGMENTOS INDIVIDUALES: Cada clave numérica "N" representa un clip de audio individual fijado en la línea de tiempo del video. No agregues claves nuevas, no omitas claves y no traslades contenido entre claves adyacentes. Cuando un segmento corresponda a unidades mínimas de habla (interjecciones, partículas discursivas o de enlace, afirmaciones breves, muletillas o reacciones espontáneas del hablante), adáptalo de forma concisa y directa en su propia clave "N" respetando su duración temporal, sin intentar rellenar artificialmente ni tomar texto del segmento siguiente. La clave final "{total_count}" debe corresponder al cierre del video.
 3. REESCRIBE MANTENIENDO LA IDEA: No hagas una traducción literal o palabra por palabra. Reformula y reescribe preservando la misma idea central y sentido, usando expresiones coloquiales y naturales adecuadas al {target_lang_name}.
 4. VOZ HABLADA Y DOBLAJE: El texto será sintetizado por modelos de voz (TTS). La frase debe tener ritmo fonético natural, ser directa y sonar convincente y orgánica al ser escuchada.
 {pacing_instruction}
 6. COHERENCIA Y CONTINUIDAD ENTRE FRASES: Las frases forman parte de una narración continua en un timeline audiovisual. Si una frase continúa la idea de la clave anterior (o deja una idea abierta para la clave siguiente), preserva la ilación gramatical natural, usando puntuación de enlace (comas o puntos seguidos) para que al reproducirse consecutivamente en el reproductor suenen como un discurso fluido y continuo, sin interrupciones abruptas ni pausas antinaturales.
-7. PRESERVACIÓN DE EMOCIONES, ÉNFASIS Y PAUSAS HUMANAS (FISH AUDIO S2.1):
-   - Conserva o adapta marcadores de emoción a los tags oficiales de Fish Audio S2.1: [happy], [whispering], [laughing], [sad], [excited], [angry], [calm], [confident], [curious], [surprised], [satisfied]. Prohibido usar [whisper] o [laughter] (cámbialos siempre por [whispering] y [laughing]).
-   - Si una frase es larga y requiere un respiro o pausa breve interna, puedes insertar la etiqueta `[break]` en medio de dos cláusulas lógicas (nunca al inicio ni al final de la frase).
-   - Puedes anteponer `[emphasis]` inmediatamente antes de una palabra clave para acentuarla con fuerza.
+7. MODULACIÓN PROSÓDICA, ÉNFASIS Y PAUSAS:
+   - Puedes anteponer un marcador de emoción o estilo al inicio de la frase, seleccionado exclusivamente del catálogo activo del sistema:
+     {emotions_catalog_str}
+   - Control de pausas internas:
+     * `[break]`: para pausas breves, respiros naturales y cesuras lógicas entre dos oraciones o cláusulas.
+     * `[long-break]`: para silencios prolongados deliberados, momentos de reflexión o transiciones de escena.
+     * Nunca coloques marcadores de pausa al inicio ni al final absoluto de una frase.
+   - Puedes anteponer `[emphasis]` inmediatamente antes de una palabra clave para acentuarla con fuerza vocal.
    - Preserva estrictamente la entonación interrogativa (¿?) y exclamativa (¡!) para una modulación prosódica creíble.
 8. DETECCIÓN FONÉTICA Y GLOSARIO DE PRONUNCIACIÓN (TTS):
-   Para cada frase, identifica si contiene términos técnicos, software, marcas, siglas o palabras extranjeras cuya pronunciación natural deba especificarse para el sintetizador de voz (ej. "Rhea": "Ré-a", "OpenCode": "Ópen Coud", "Ghidra": "Gí-dra", "SQL": "Sí-kuel", "Nemotron": "Né-mo-tron", "Dan": "Dan").
-   - Devuelve cada clave numérica "N" como un objeto con:
-     - "text": "frase traducida adaptada",
-     - "phonemes": {{"PalabraExacta": "Pronunciación fonética legible"}}
-   - Si la frase no contiene palabras especiales que requieran pronunciación explícita, deja "phonemes": {empty_dict_str} o devuelve solo la frase como string.
+   Identifica en cada frase cualquier vocablo cuya lectura ortográfica literal en {target_lang_name} pueda ser pronunciada de forma errónea, distorsionada o antinatural por un sintetizador de voz. Evalúa rigurosamente candidatos en cualquier área temática (ciencia, tecnología, medicina, finanzas, arte, deportes, leyes, cultura general, etc.) que cumplan con alguno de los siguientes criterios:
+   a) Nombres propios, marcas, productos, entidades o topónimos de origen no nativo o grafía singular.
+   b) Siglas, acrónimos o combinaciones alfanuméricas que deban pronunciarse con la fonética propia de su disciplina o mediante deletreo.
+   c) Extranjerismos, vocablos foráneos o términos especializados que conserven la pronunciación de su idioma de origen y no sigan las reglas ortográficas del {target_lang_name}.
+   d) Palabras cuya ortografía estándar en {target_lang_name} resulte propensa a una lectura defectuosa o robótica por modelos de voz.
+
+   Para cada vocablo detectado en la frase:
+   - Como clave: la palabra exacta tal como está escrita en tu texto traducido.
+   - Como valor: su transcripción fonética legible e intuitiva para un hablante de {target_lang_name}, marcando con tilde la sílaba con mayor fuerza de entonación (acento prosódico) para guiar con precisión la pronunciación de la voz sintética.
+   - En tu salida, asocia el diccionario al campo "phonemes": {{"Palabra": "Pronunciación"}}. Si una frase contiene únicamente vocabulario cotidiano estándar de {target_lang_name}, deja "phonemes": {empty_dict_str}.
 
 Texto original ({source_lang_name}) indexado por segmento:
 ---
@@ -159,9 +177,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
 {{
   "1": {{
     "text": "frase 1 adaptada al {target_lang_name}",
-    "phonemes": {{
-      "TérminoEspecial": "Pronunciación"
-    }}
+    "phonemes": {empty_dict_str}
   }},
   "2": {{
     "text": "frase 2 adaptada al {target_lang_name}",
@@ -173,6 +189,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
     "phonemes": {empty_dict_str}
   }}
 }}"""
+
 
 
     # En la celda del cuaderno se puede activar el prompt completo; en el panel V2V mantenemos logs limpios y descriptivos
@@ -493,8 +510,8 @@ Tu misión es REESCRIBIR Y EXPANDIR cada frase en {target_lang_name} preservando
 
 Directrices:
 1. Mantén la numeración idéntica en el JSON de salida.
-2. Si la frase original tenía marcadores de emoción ([excited], [confident], [calm], [in a hurry tone]), presérvalos.
-3. Si la frase es larga, puedes incluir [break] en una pausa lógica interna.
+2. Si la frase original contiene marcadores prosódicos o de emoción entre corchetes, consérvalos o adáptalos coherentemente.
+3. Si la frase extendida requiere pausas naturales de respiración o cambio de ritmo, puedes emplear [break] para pausas breves o [long-break] para pausas más extensas (nunca al inicio ni al final absoluto).
 4. Devuelve ÚNICAMENTE un JSON con las claves numéricas y el nuevo texto expandido.
 
 Entrada:

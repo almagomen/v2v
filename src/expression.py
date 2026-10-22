@@ -119,26 +119,26 @@ def analyze_segments_expression(
 
     input_dict = {str(i + 1): t.get("text", "").strip() for i, t in enumerate(texts)}
 
-    prompt = f"""Eres un director de voz y experto en prosodia audiovisual para doblaje profesional.
-Analiza la siguiente lista de {total} frases consecutivas de un video y determina la emoción y estilo de locución más natural y adecuado para cada una, dentro del catálogo oficial de Fish Audio S2 (64+ emociones).
+    active_emotions_list = sorted([e for e in CANONICAL_FISH_EMOTIONS if not ("break" in e or "laughing" in e and "crowd" in e)])
+    catalog_display = ", ".join(f"[{e}]" for e in active_emotions_list)
 
-Catálogo oficial Fish Audio S2:
-- BÁSICAS: happy, sad, angry, excited, calm, nervous, confident, surprised, satisfied, delighted, scared, worried, upset, frustrated, depressed, empathetic, embarrassed, disgusted, moved, proud, relaxed, grateful, curious, sarcastic
-- AVANZADAS: hopeful, optimistic, determined, nostalgic, sympathetic, compassionate, anxious, confused, doubtful, uncertain, disappointed, regretful, guilty, bored, resigned
-- TONOS / ENTREGA: in a hurry tone, soft tone, whispering, shouting, screaming
-- EFECTOS: laughing, chuckling, sighing, groaning, panting, gasping
+    prompt = f"""Eres un director de voz y experto en prosodia audiovisual para doblaje profesional.
+Analiza la siguiente lista de {total} frases consecutivas de un video y determina la emoción y estilo de locución más natural y adecuado para cada una, dentro del catálogo oficial soportado por el motor de voz.
+
+Catálogo oficial de modulaciones disponibles:
+{catalog_display}
 
 Directrices de dirección de doblaje:
 1. Responde ÚNICAMENTE con un JSON con exactamente {total} claves numéricas del "1" al "{total}".
 2. Para cada clave asigna:
-   - "emotion": un valor exacto del catálogo oficial.
+   - "emotion": un valor exacto del catálogo oficial (sin corchetes).
    - "intensity": float de 0.5 a 1.0 (0.6 neutro, 0.8 enérgico, 0.95 intenso).
-3. Si el orador está explicando tutoriales, comandos o código con soltura: usa "confident" o "calm".
-4. Si está llamando la atención, festejando o mostrando un logro importante: usa "excited" o "delighted".
-5. Si hace preguntas o reflexiones: usa "curious", "doubtful" o "confused".
-6. Si describe prisas o acciones rápidas: usa "in a hurry tone".
-7. Si expresa alivio o desahogo: usa "sighing" o "relaxed".
-8. Si expresa ironía o broma: usa "sarcastic" o "laughing".
+3. Si el orador expone explicaciones, argumentaciones o narrativa con soltura y seguridad: usa "confident" o "calm".
+4. Si está llamando la atención, festejando o mostrando un hito importante: usa "excited" o "delighted".
+5. Si formula preguntas, dilemas o reflexiones: usa "curious", "doubtful" o "confused".
+6. Si describe prisas, urgencias o acciones vertiginosas: usa "in a hurry tone".
+7. Si expresa alivio, sosiego o desahogo: usa "sighing" o "relaxed".
+8. Si expresa ironía, humor o picardía: usa "sarcastic" o "laughing".
 
 Frases indexadas:
 ---
@@ -232,22 +232,22 @@ def extract_acoustic_prosody(vocals_path: Path | str, segments: list[dict]) -> l
             syl_rate = float(seg.get("syllable_rate") or (float(seg.get("speech_rate", 2.5)) * 1.6))
 
             if rel_db >= 3.2 and syl_rate >= 5.0:
-                seg["acoustic_hint"] = "alta energía y entusiasmo ([excited])"
+                seg["acoustic_hint"] = "alta energía | ritmo acelerado"
                 seg["suggested_emotion"] = "excited"
             elif rel_db >= 2.8:
-                seg["acoustic_hint"] = "voz firme y enfática ([confident])"
+                seg["acoustic_hint"] = "voz firme y enfática | ritmo natural"
                 seg["suggested_emotion"] = "confident"
             elif rel_db <= -4.5:
-                seg["acoustic_hint"] = "voz baja o suave ([soft tone])"
+                seg["acoustic_hint"] = "voz suave / baja | ritmo moderado"
                 seg["suggested_emotion"] = "soft tone"
             elif syl_rate >= 5.8:
-                seg["acoustic_hint"] = "ritmo rápido y urgente ([in a hurry tone])"
+                seg["acoustic_hint"] = "ritmo rápido y urgente | energía moderada"
                 seg["suggested_emotion"] = "in a hurry tone"
             elif syl_rate <= 3.2:
-                seg["acoustic_hint"] = "ritmo pausado y sereno ([calm])"
+                seg["acoustic_hint"] = "ritmo pausado y sereno | energía tranquila"
                 seg["suggested_emotion"] = "calm"
             else:
-                seg["acoustic_hint"] = "tono natural fluido ([calm])"
+                seg["acoustic_hint"] = "tono natural fluido | energía moderada"
                 seg["suggested_emotion"] = "calm"
     except Exception as e:
         print(f"⚠️ [Prosodia Acústica] No se pudo analizar vocals.wav: {e}")
