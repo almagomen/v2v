@@ -88,7 +88,11 @@ export interface Segment {
   text: string;
   speaker?: string;
   original_speaker?: string;
+  orig_text?: string;
+  original_text?: string;
+  phonemes?: Record<string, string>;
 }
+
 
 export interface VideoResult {
   index: number;
@@ -157,7 +161,9 @@ export interface SegmentEditorRow {
   speaker?: string | null;
   original_speaker?: string | null;
   filename?: string | null;
+  phonemes?: Record<string, string>;
 }
+
 
 export interface SegmentsEditorResponse {
   job_id: string;
@@ -498,6 +504,7 @@ export const v2vApi = {
       top_p?: number;
       repetition_penalty?: number;
       volume?: number;
+      phonemes?: Record<string, string>;
       signal?: AbortSignal;
     },
     signal?: AbortSignal,
@@ -522,8 +529,10 @@ export const v2vApi = {
         top_p: options?.top_p ?? 0.7,
         repetition_penalty: options?.repetition_penalty ?? 1.2,
         volume: options?.volume ?? 0.0,
+        phonemes: options?.phonemes,
       }),
     });
+
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || "Error al regenerar segmento");
@@ -760,7 +769,7 @@ export const v2vApi = {
     segIndices: number[],
     targetLang?: string | null,
     customTexts?: Record<number, string>,
-  ): Promise<{ segments: Array<{ seg: number; text: string }> }> {
+  ): Promise<{ segments: Array<{ seg: number; text: string; phonemes?: Record<string, string> }> }> {
     const res = await fetch(url("/api/retranslate-segments"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -776,8 +785,9 @@ export const v2vApi = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || "Error al retraducir segmentos");
     }
-    return readJsonOrThrow<{ segments: Array<{ seg: number; text: string }> }>(res);
+    return readJsonOrThrow<{ segments: Array<{ seg: number; text: string; phonemes?: Record<string, string> }> }>(res);
   },
+
 
   /**
    * Upload a local file to the Colab server before rendering.

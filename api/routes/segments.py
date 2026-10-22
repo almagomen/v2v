@@ -100,6 +100,7 @@ def get_segments_editor(job_id: str, video_index: int):
         )
 
         slot = max(0.0, end - start)
+        seg_ph = tts_d.get("phonemes") or orig_d.get("phonemes") or (js.get("phonemes") if i < len(job_segments) else None)
         rows.append(
             SegmentEditorRow(
                 seg=seg_num,
@@ -111,8 +112,10 @@ def get_segments_editor(job_id: str, video_index: int):
                 speaker=speaker,
                 original_speaker=orig_spk,
                 filename=_find_tts_filename(folder, seg_num),
+                phonemes=seg_ph,
             )
         )
+
 
     translate_lang = job.get("translate_lang")
     if not translate_lang and job.get("items"):
@@ -188,9 +191,22 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
     if not translated or len(translated) != len(sentences):
         raise HTTPException(status_code=500, detail="Error al retraducir con Gemini")
 
+    # Actualizar result.json con los nuevos textos y fonemas de los segmentos retraducidos
+    try:
+        from src.result_store import update_result_segments
+        for seg_idx, txt, meta in zip(valid_indices, translated, meta_list):
+            if 1 <= seg_idx <= len(tts_list):
+                tts_list[seg_idx - 1]["text"] = txt
+                if meta.get("phonemes"):
+                    tts_list[seg_idx - 1]["phonemes"] = meta["phonemes"]
+        update_result_segments(folder, tts_list)
+    except Exception as e_upd:
+        print(f"⚠️ Error actualizando result.json tras retranslate: {e_upd}")
+
     return RetranslateSegmentsResponse(
         segments=[
-            RetranslateSegmentItem(seg=seg, text=txt)
-            for seg, txt in zip(valid_indices, translated)
+            RetranslateSegmentItem(seg=seg, text=txt, phonemes=meta.get("phonemes"))
+            for seg, txt, meta in zip(valid_indices, translated, meta_list)
         ]
     )
+

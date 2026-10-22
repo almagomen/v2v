@@ -445,16 +445,23 @@ def clone_voice_segments(
             seg_audio_ref = audio_ref
 
         seq_num = only_indices[idx] if only_indices else idx + 1
-        tts_tasks.append((idx, text, seg_audio_ref, seq_num))
+        seg_phonemes = text_dict.get("phonemes") or {}
+        tts_tasks.append((idx, text, seg_audio_ref, seq_num, seg_phonemes))
 
     # Si hay múltiples segmentos, paralelizamos las solicitudes HTTP (hasta 5 hilos)
     tts_results: dict[int, tuple] = {}
     if len(tts_tasks) > 1:
         max_workers = min(5, len(tts_tasks))
         def _fetch_tts(item):
-            i, txt, voice_ref, s_num = item
+            i, txt, voice_ref, s_num, s_phonemes = item
             try:
-                res = tts_fn(txt, language, voice_ref, **kwargs)
+                seg_kwargs = dict(kwargs)
+                if s_phonemes:
+                    from src.tts import normalize_pronunciation_dictionary
+                    seg_dict = normalize_pronunciation_dictionary(s_phonemes)
+                    if seg_dict:
+                        seg_kwargs["pronunciation_dictionary"] = seg_dict
+                res = tts_fn(txt, language, voice_ref, **seg_kwargs)
                 return i, res
             except Exception as ex:
                 print(f"\n⚠️ Error en síntesis TTS #{s_num}: {ex}")
@@ -499,7 +506,14 @@ def clone_voice_segments(
                         new_txt = healed_map[idx]
                         seq_num = item["seq_num"]
                         seg_audio_ref = tts_tasks[idx][2]
-                        new_arr, new_rate = tts_fn(new_txt, language, seg_audio_ref, **kwargs)
+                        s_phonemes = texts_to_process[idx].get("phonemes") or {}
+                        heal_kwargs = dict(kwargs)
+                        if s_phonemes:
+                            from src.tts import normalize_pronunciation_dictionary
+                            seg_dict = normalize_pronunciation_dictionary(s_phonemes)
+                            if seg_dict:
+                                heal_kwargs["pronunciation_dictionary"] = seg_dict
+                        new_arr, new_rate = tts_fn(new_txt, language, seg_audio_ref, **heal_kwargs)
                         if new_arr is not None and new_rate is not None:
                             new_dur = new_arr.shape[-1] / new_rate
                             old_dur = item["dur_es"]
@@ -550,7 +564,14 @@ def clone_voice_segments(
         if idx in tts_results:
             arr, rate = tts_results[idx]
         else:
-            arr, rate = tts_fn(text, language, seg_audio_ref, **kwargs)
+            s_phonemes = text_dict.get("phonemes") or {}
+            single_kwargs = dict(kwargs)
+            if s_phonemes:
+                from src.tts import normalize_pronunciation_dictionary
+                seg_dict = normalize_pronunciation_dictionary(s_phonemes)
+                if seg_dict:
+                    single_kwargs["pronunciation_dictionary"] = seg_dict
+            arr, rate = tts_fn(text, language, seg_audio_ref, **single_kwargs)
 
         if arr is None or rate is None:
             continue

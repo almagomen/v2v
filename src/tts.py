@@ -48,16 +48,35 @@ def normalize_pronunciation_dictionary(dict_input: Any) -> Optional[list[dict]]:
         if "items" in dict_input or "id" in dict_input:
             return [dict_input]
         items = []
+        seen_keys = set()
         for k, v in dict_input.items():
+            k_str = str(k).strip()
+            if not k_str:
+                continue
+
             if isinstance(v, str):
-                items.append({"key": str(k), "value": str(v), "case_sensitive": False})
+                v_str = v.strip()
+                # Heurística inteligente: siglas o palabras de <= 4 letras requieren coincidencia exacta
+                case_sensitive = len(k_str) <= 4 or k_str.isupper()
             elif isinstance(v, dict):
-                items.append({
-                    "key": str(v.get("key", k)),
-                    "value": str(v.get("value", "")),
-                    "case_sensitive": bool(v.get("case_sensitive", False)),
-                })
+                k_str = str(v.get("key", k_str)).strip()
+                v_str = str(v.get("value", "")).strip()
+                case_sensitive = bool(v.get("case_sensitive", len(k_str) <= 4 or k_str.isupper()))
+            else:
+                continue
+
+            dedup_key = k_str if case_sensitive else k_str.lower()
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+
+            items.append({
+                "key": k_str,
+                "value": v_str,
+                "case_sensitive": case_sensitive,
+            })
         return [{"items": items}] if items else None
+
 
     # Si ya es una lista
     if isinstance(dict_input, list):

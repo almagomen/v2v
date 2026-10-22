@@ -103,6 +103,8 @@ class RegenerateSegmentRequest(BaseModel):
     top_p: float = Field(0.7, ge=0.1, le=1.0, description="Fish Audio diversidad sampling")
     repetition_penalty: float = Field(1.2, ge=1.0, le=2.0, description="Fish Audio control de repetición")
     volume: float = Field(0.0, ge=-10.0, le=10.0, description="Fish Audio ajuste volumen en dB")
+    phonemes: Optional[dict[str, str]] = Field(None, description="Diccionario de pronunciación fonética para términos especiales")
+
 
 
 class RegenerateVideoRequest(BaseModel):
@@ -170,6 +172,8 @@ class SegmentEditorRow(BaseModel):
     speaker: Optional[str] = None
     original_speaker: Optional[str] = None
     filename: Optional[str] = None
+    phonemes: Optional[dict[str, str]] = None
+
 
 
 class SpeakerMapRequest(BaseModel):
@@ -203,6 +207,8 @@ class RetranslateSegmentsRequest(BaseModel):
 class RetranslateSegmentItem(BaseModel):
     seg: int
     text: str
+    phonemes: Optional[dict[str, str]] = None
+
 
 
 class RetranslateSegmentsResponse(BaseModel):

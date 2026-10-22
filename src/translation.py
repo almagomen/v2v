@@ -127,6 +127,7 @@ def translate_text_list(
    - SEGMENTOS BREVES (< 2.0s): Mantén la traducción en 1 a 3 palabras directas.
    - En tu JSON de salida entrega ÚNICAMENTE el texto como string, SIN repetir el prefijo de metadatos (prohibido poner `[Xs slot | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
 
+    empty_dict_str = "{}"
     prompt = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
 Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo.
 
@@ -142,6 +143,12 @@ Directrices obligatorias:
    - Si una frase es larga y requiere un respiro o pausa breve interna, puedes insertar la etiqueta `[break]` en medio de dos cláusulas lógicas (nunca al inicio ni al final de la frase).
    - Puedes anteponer `[emphasis]` inmediatamente antes de una palabra clave para acentuarla con fuerza.
    - Preserva estrictamente la entonación interrogativa (¿?) y exclamativa (¡!) para una modulación prosódica creíble.
+8. DETECCIÓN FONÉTICA Y GLOSARIO DE PRONUNCIACIÓN (TTS):
+   Para cada frase, identifica si contiene términos técnicos, software, marcas, siglas o palabras extranjeras cuya pronunciación natural deba especificarse para el sintetizador de voz (ej. "Rhea": "Ré-a", "OpenCode": "Ópen Coud", "Ghidra": "Gí-dra", "SQL": "Sí-kuel", "Nemotron": "Né-mo-tron", "Dan": "Dan").
+   - Devuelve cada clave numérica "N" como un objeto con:
+     - "text": "frase traducida adaptada",
+     - "phonemes": {{"PalabraExacta": "Pronunciación fonética legible"}}
+   - Si la frase no contiene palabras especiales que requieran pronunciación explícita, deja "phonemes": {empty_dict_str} o devuelve solo la frase como string.
 
 Texto original ({source_lang_name}) indexado por segmento:
 ---
@@ -150,11 +157,23 @@ Texto original ({source_lang_name}) indexado por segmento:
 
 Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves numéricas del "1" al "{total_count}":
 {{
-  "1": "frase 1 adaptada al {target_lang_name}",
-  "2": "frase 2 adaptada al {target_lang_name}",
+  "1": {{
+    "text": "frase 1 adaptada al {target_lang_name}",
+    "phonemes": {{
+      "TérminoEspecial": "Pronunciación"
+    }}
+  }},
+  "2": {{
+    "text": "frase 2 adaptada al {target_lang_name}",
+    "phonemes": {empty_dict_str}
+  }},
   ...
-  "{total_count}": "frase {total_count} adaptada al {target_lang_name}"
+  "{total_count}": {{
+    "text": "frase {total_count} adaptada al {target_lang_name}",
+    "phonemes": {empty_dict_str}
+  }}
 }}"""
+
 
     # En la celda del cuaderno se puede activar el prompt completo; en el panel V2V mantenemos logs limpios y descriptivos
     if print_full_prompt:
@@ -226,23 +245,69 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         parsed = json.loads(sanitized_json)
 
                     aligned_list: list[str] = []
+                    phonemes_map: dict[int, dict[str, str]] = {}
+
                     if isinstance(parsed, dict):
                         for i in range(1, total_count + 1):
                             val = parsed.get(str(i)) or parsed.get(i)
-                            if val and isinstance(val, str) and val.strip():
-                                clean_val = re.sub(r"^\[[^\]]*(?:\||habla|sílabas|palabras|chars)[^\]]*\]:?\s*", "", val, flags=re.IGNORECASE).strip()
+                            txt_raw = ""
+                            seg_phonemes: dict[str, str] = {}
+
+                            if isinstance(val, dict):
+                                txt_raw = str(val.get("text", "")).strip()
+                                ph = val.get("phonemes")
+                                if isinstance(ph, dict):
+                                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in ph.items() if k and v}
+                            elif isinstance(val, list):
+                                txt_raw = str(val[0]).strip() if len(val) > 0 else ""
+                                if len(val) > 1 and isinstance(val[1], dict):
+                                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in val[1].items() if k and v}
+                            elif isinstance(val, str):
+                                txt_raw = val.strip()
+
+                            if txt_raw:
+                                clean_val = re.sub(r"^\[[^\]]*(?:\||habla|sílabas|palabras|chars)[^\]]*\]:?\s*", "", txt_raw, flags=re.IGNORECASE).strip()
                                 clean_val = re.sub(r"^\[[^\]]+\]:\s*", "", clean_val).strip()
                                 aligned_list.append(clean_val if clean_val else list_sentences[i - 1])
                             else:
                                 aligned_list.append(list_sentences[i - 1])
+
+                            phonemes_map[i - 1] = seg_phonemes
+
                     elif isinstance(parsed, list):
                         for i in range(total_count):
-                            if i < len(parsed) and isinstance(parsed[i], str) and parsed[i].strip():
-                                clean_val = re.sub(r"^\[[^\]]*(?:\||habla|sílabas|palabras|chars)[^\]]*\]:?\s*", "", parsed[i], flags=re.IGNORECASE).strip()
+                            val = parsed[i] if i < len(parsed) else ""
+                            txt_raw = ""
+                            seg_phonemes = {}
+                            if isinstance(val, dict):
+                                txt_raw = str(val.get("text", "")).strip()
+                                ph = val.get("phonemes")
+                                if isinstance(ph, dict):
+                                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in ph.items() if k and v}
+                            elif isinstance(val, list):
+                                txt_raw = str(val[0]).strip() if len(val) > 0 else ""
+                                if len(val) > 1 and isinstance(val[1], dict):
+                                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in val[1].items() if k and v}
+                            elif isinstance(val, str):
+                                txt_raw = val.strip()
+
+                            if txt_raw:
+                                clean_val = re.sub(r"^\[[^\]]*(?:\||habla|sílabas|palabras|chars)[^\]]*\]:?\s*", "", txt_raw, flags=re.IGNORECASE).strip()
                                 clean_val = re.sub(r"^\[[^\]]+\]:\s*", "", clean_val).strip()
                                 aligned_list.append(clean_val if clean_val else list_sentences[i])
                             else:
                                 aligned_list.append(list_sentences[i])
+
+                            phonemes_map[i] = seg_phonemes
+
+                    # Inyectar fonemas detectados en segments_meta si está provisto
+                    if segments_meta and len(segments_meta) == total_count:
+                        for idx, meta_item in enumerate(segments_meta):
+                            if idx in phonemes_map and phonemes_map[idx]:
+                                meta_item["phonemes"] = phonemes_map[idx]
+                            elif "phonemes" not in meta_item:
+                                meta_item["phonemes"] = {}
+
 
                     if aligned_list and len(aligned_list) == total_count:
                         print(f"⏱️ [Etapa: Traducción | Gemini] Completada con '{model}' en {duration:.1f}s ({len(aligned_list)} frases)", flush=True)

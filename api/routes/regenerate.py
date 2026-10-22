@@ -67,6 +67,7 @@ async def regenerate_segment(req: RegenerateSegmentRequest):
         top_p=req.top_p,
         repetition_penalty=req.repetition_penalty,
         volume=req.volume,
+        phonemes=req.phonemes,
     )
 
 
@@ -84,6 +85,7 @@ def _do_regenerate_segment(
     top_p: float = 0.7,
     repetition_penalty: float = 1.2,
     volume: float = 0.0,
+    phonemes: dict[str, str] | None = None,
 ):
     from src.pipeline import split_audio_sequences
     from src.audio_utils import clone_voice_segments
@@ -99,6 +101,9 @@ def _do_regenerate_segment(
     if seg_idx < 1 or seg_idx > len(texts_original):
         raise HTTPException(status_code=400, detail="Índice de segmento inválido")
 
+    # Recuperar fonemas previos si no se pasaron explícitamente en el request
+    seg_phonemes = phonemes if phonemes is not None else texts_original[seg_idx - 1].get("phonemes", {})
+
     orig_txt_val = texts_original[seg_idx - 1].get("orig_text") or texts_original[seg_idx - 1].get("original_text", "")
     t_edit = {
         "start": start,
@@ -106,6 +111,7 @@ def _do_regenerate_segment(
         "text": text,
         "orig_text": orig_txt_val,
         "original_text": orig_txt_val,
+        "phonemes": seg_phonemes,
         # Resolvemos siempre a la clave legible del diccionario (ej: 'mrbeast')
         # aunque el frontend haya enviado el ID de Fish Audio como speaker.
         # Esto garantiza que el archivo en disco se llame tts_mrbeast_001.wav
@@ -115,6 +121,7 @@ def _do_regenerate_segment(
     }
     texts_edited = list(texts_original)
     texts_edited[seg_idx - 1] = t_edit
+
 
     split_audio_sequences(
         path.with_name("vocals.wav"), texts_edited, edit_indices=[seg_idx]

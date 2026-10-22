@@ -43,7 +43,9 @@ export type BulkSegmentRow = {
   topP: number;
   repetitionPenalty: number;
   volume: number;
+  phonemes?: Record<string, string>;
 };
+
 
 export interface SegmentRowProps {
   row: BulkSegmentRow;

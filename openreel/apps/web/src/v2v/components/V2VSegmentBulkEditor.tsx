@@ -185,11 +185,13 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         topP: 0.7,
         repetitionPenalty: 1.2,
         volume: 0.0,
+        phonemes: apiRow.phonemes || {},
       };
       // Si el audio falta, forzamos dirty=true para que "Aplicar todos" lo incluya automáticamente
       const forceDirty = missingAudio && ttsText.trim().length > 0;
       return { ...base, dirty: forceDirty || rowIsDirty(base) };
     },
+
     [folder, getFolderRef, jobId, videoIndex, defaultSpeaker, speakers, getMediaItem],
   );
 
@@ -308,12 +310,16 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         effectiveTargetLang,
         Object.keys(customMap).length > 0 ? customMap : undefined,
       );
-      const bySeg = new Map(segments.map((s) => [s.seg, s.text]));
+      const bySeg = new Map(segments.map((s) => [s.seg, s]));
       setRows((prev) =>
         prev.map((r) => {
-          const text = bySeg.get(r.seg);
-          if (text == null) return r;
-          const next = { ...r, draftText: text };
+          const item = bySeg.get(r.seg);
+          if (item == null) return r;
+          const next = {
+            ...r,
+            draftText: item.text,
+            phonemes: item.phonemes ? { ...(r.phonemes || {}), ...item.phonemes } : r.phonemes,
+          };
           return { ...next, dirty: rowIsDirty(next) };
         }),
       );
@@ -363,8 +369,10 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           top_p: row.topP,
           repetition_penalty: row.repetitionPenalty,
           volume: row.volume,
+          phonemes: row.phonemes,
         },
       );
+
 
       const result = await applyRegeneratedSegmentToTimeline({
         folder,
@@ -536,8 +544,10 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
             top_p: row.topP,
             repetition_penalty: row.repetitionPenalty,
             volume: row.volume,
+            phonemes: row.phonemes,
           },
         );
+
 
         const result = await applyRegeneratedSegmentToTimeline({
           folder,

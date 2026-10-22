@@ -232,7 +232,9 @@ def run_main(
             d["syllable_count"] = syl_c
             d["speech_rate"] = round(len(w_list) / net_d, 2) if net_d > 0 else 0.0
             d["syllable_rate"] = round(syl_c / net_d, 2) if net_d > 0 else 0.0
+            d["phonemes"] = orig_seg.get("phonemes") or {}
             return d
+
 
         if translated_texts and len(translated_texts) == len(result):
             translated_result = [
