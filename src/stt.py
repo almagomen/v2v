@@ -170,6 +170,7 @@ def run_main(
     url: str,
     translate: Union[bool, str] = False,
     title: Optional[str] = None,
+    enable_emotions: bool = True,
 ) -> Tuple[list[dict], str, list[dict], str, dict]:
     """
     Pipeline principal: transcribe, opcionalmente traduce, genera título.
@@ -209,6 +210,7 @@ def run_main(
             source_lang=detected_language,
             times=times,
             segments_meta=result,
+            enable_emotions=enable_emotions,
         )
         t_trans = time.perf_counter() - t0_trans
         def _enrich_translated_segment(orig_seg: dict, start_t: float, end_t: float, raw_txt: str) -> dict:

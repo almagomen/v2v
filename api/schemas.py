@@ -19,6 +19,9 @@ class ProcessUrlsRequest(BaseModel):
     speaker_map: Optional[dict[str, str]] = Field(
         None, description="Mapeo de speaker diarizado a voz, ej: {'SPEAKER_00': 'mrbeast'}"
     )
+    enable_emotions: Optional[bool] = Field(
+        True, description="Habilitar inferencia y modulación de emociones/prosodia en el modelo"
+    )
 
 
 class ProcessUrlsResponse(BaseModel):

@@ -35,12 +35,12 @@ CANONICAL_FISH_EMOTIONS = {
     "break", "long-break", "audience laughing", "background laughter", "crowd laughing",
 }
 
-def normalize_emotion_tag(tag: str) -> str:
+def normalize_emotion_tag(tag: str) -> Optional[str]:
     """Valida y limpia el tag contra el catálogo canónico oficial de Fish Audio S2."""
     clean = re.sub(r"[\[\]]", "", tag).strip().lower()
     if clean in CANONICAL_FISH_EMOTIONS:
         return clean
-    return "calm"
+    return None
 
 
 
@@ -48,12 +48,13 @@ def analyze_segments_expression(
     texts: list[dict],
     source_lang: str = "es",
     model_name: str = "gemini-flash-lite-latest",
+    enable_emotions: bool = True,
 ) -> list[dict]:
     """
-    Clasifica de forma contextual la emoción de cada segmento usando Gemini
+    Enriquece de forma contextual la prosodia de cada segmento usando Gemini
     en una sola llamada indexada por lote (1 a N).
-    Retorna: list[dict] con {"emotion": str}.
-    Si no hay API disponible o falla la llamada, retorna lista vacía sin inventar emociones offline.
+    Retorna: list[dict] con {"text": str, "emotion": Optional[str], "phonemes": dict}.
+    Si no hay API disponible o falla la llamada, retorna lista vacía sin inventar prosodia offline.
     """
     total = len(texts)
     if total == 0:
@@ -68,16 +69,27 @@ def analyze_segments_expression(
     active_emotions_list = sorted([e for e in CANONICAL_FISH_EMOTIONS if not ("break" in e or "laughing" in e and "crowd" in e)])
     catalog_display = ", ".join(f"[{e}]" for e in active_emotions_list)
 
-    prompt = f"""Eres un director de voz y experto en prosodia audiovisual para doblaje profesional.
-Analiza la siguiente lista de {total} frases consecutivas de un video y determina la emoción de locución más adecuada para cada una, dentro del catálogo oficial soportado por el motor de voz.
+    if enable_emotions:
+        emotion_rule = f"""- MODULACIÓN PROSÓDICA Y EXPRESIONES: Puedes integrar marcadores del catálogo canónico oficial de Fish Audio:
+     {catalog_display}
+     * Ubicación: Colócalos ya sea al inicio de la frase para guiar la entonación general, o en cualquier punto natural de la frase donde ocurra una inflexión, énfasis o reacción dramática.
+     * Tono neutro: Si la frase es neutra, informativa o puramente descriptiva, déjala limpia sin ninguna etiqueta de emoción (no fuerces "calm" ni etiquetas artificiales)."""
+    else:
+        emotion_rule = """- MODULACIÓN PROSÓDICA: Mantén entonación neutra y natural, sin etiquetas de emoción."""
 
-Catálogo oficial de modulaciones disponibles:
-{catalog_display}
+    prompt = f"""Eres un director de voz y especialista en adaptación prosódica para modelos de síntesis de voz (TTS).
+Tu misión es ENRIQUECER cada frase de diálogo con modulaciones prosódicas, pausas naturales y énfasis vocal orgánico, para que suene 100% convincente y humana al ser leída por un motor de voz.
 
-Directrices:
-1. Responde ÚNICAMENTE con un JSON con exactamente {total} claves numéricas del "1" al "{total}".
-2. Para cada clave asigna exclusivamente el nombre de la emoción del catálogo oficial que mejor refleje el estado afectivo, la intención dramática y el tono oral del hablante (sin corchetes), o "calm" si la frase es puramente neutra o informativa estándar.
-3. Evalúa con total libertad toda la diversidad de matices del catálogo oficial disponible, seleccionando la opción más orgánica y precisa sin restringirte a un subconjunto limitado.
+Directrices de prosodia y adaptación oral:
+1. Responde ÚNICAMENTE con un objeto JSON con exactamente {total} claves numéricas del "1" al "{total}".
+2. Para cada clave entrega un objeto con:
+   - "text": la frase con las modulaciones, pausas y énfasis integrados en el punto natural del discurso:
+{emotion_rule}
+     * Pausas internas: `[break]` para pausas breves o respiros naturales entre dos cláusulas; `[long-break]` para pausas prolongadas o reflexiones (nunca al inicio ni final absoluto).
+     * Énfasis vocal: `[emphasis]` inmediatamente antes de una palabra clave con especial fuerza de entonación.
+     * Reacciones vocales: si el orador ríe o suspira en medio de una frase, puedes incluir `[laughing]` o `[sighing]`.
+     * Preserva la entonación interrogativa (¿?) y exclamativa (¡!).
+   - "phonemes": diccionario {{"Palabra": "Pronunciación"}} para nombres propios, siglas, extranjerismos o tecnicismos cuya lectura literal pueda inducir a error fonético en la voz sintética (o {{}} si no hay).
 
 Frases indexadas:
 ---
@@ -86,9 +98,15 @@ Frases indexadas:
 
 Devuelve ÚNICAMENTE el JSON:
 {{
-  "1": "excited",
+  "1": {{
+    "text": "frase con modulaciones o pausas naturales",
+    "phonemes": {{}}
+  }},
   ...
-  "{total}": "confident"
+  "{total}": {{
+    "text": "frase final adaptada",
+    "phonemes": {{}}
+  }}
 }}"""
 
     for attempt in range(len(available_keys)):
@@ -110,13 +128,35 @@ Devuelve ÚNICAMENTE el JSON:
             results = []
             for i in range(1, total + 1):
                 entry = parsed.get(str(i)) or parsed.get(i)
-                if isinstance(entry, dict) and "emotion" in entry:
-                    emo = normalize_emotion_tag(str(entry.get("emotion", "calm")))
+                txt = ""
+                ph = {}
+                detected_emo = None
+
+                if isinstance(entry, dict):
+                    txt = str(entry.get("text", "")).strip()
+                    ph_raw = entry.get("phonemes")
+                    if isinstance(ph_raw, dict):
+                        ph = {str(k).strip(): str(v).strip() for k, v in ph_raw.items() if k and v}
+                    if "emotion" in entry and entry["emotion"]:
+                        detected_emo = normalize_emotion_tag(str(entry["emotion"]))
                 elif isinstance(entry, str):
-                    emo = normalize_emotion_tag(entry)
-                else:
-                    emo = "calm"
-                results.append({"emotion": emo})
+                    txt = entry.strip()
+
+                if not txt:
+                    txt = texts[i - 1].get("text", "")
+
+                # Extraer emoción inicial si el texto trae tag entre corchetes
+                m_tag = re.match(r"^\[([a-zA-Z\s\-]+)\]", txt)
+                if m_tag:
+                    norm = normalize_emotion_tag(m_tag.group(1))
+                    if norm:
+                        detected_emo = norm
+
+                results.append({
+                    "text": txt,
+                    "emotion": detected_emo,
+                    "phonemes": ph,
+                })
 
             if len(results) == total:
                 return results

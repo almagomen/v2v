@@ -1,7 +1,21 @@
 import React, { useState } from "react";
-import { Eye, EyeOff, Loader2, Server, CheckCircle2, XCircle } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  Loader2,
+  Server,
+  CheckCircle2,
+  XCircle,
+  Sparkles,
+  Sliders,
+  Music,
+  Mic,
+  Radio,
+  Film,
+} from "lucide-react";
 import { Button } from "@openreel/ui";
 import { v2vApi } from "../api/v2v-api";
+import { useV2VStore } from "../stores/v2v-store";
 
 export interface TokensConfigSectionProps {
   backendUrl: string;
@@ -46,6 +60,19 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
   const [showGoogleApiKey, setShowGoogleApiKey] = useState(false);
   const [isTestingBackend, setIsTestingBackend] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const {
+    enableEmotions,
+    setEnableEmotions,
+    importInstrumental,
+    setImportInstrumental,
+    importOriginalAudio,
+    setImportOriginalAudio,
+    importOriginalVocals,
+    setImportOriginalVocals,
+    importMergedVideo,
+    setImportMergedVideo,
+  } = useV2VStore();
 
   const handleTestConnection = async () => {
     setIsTestingBackend(true);
@@ -268,6 +295,130 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 />
               )}
             </div>
+          </div>
+        </div>
+
+        {/* Modulación de Expresión y Emociones (IA) */}
+        <div className="pt-2.5 border-t border-border/60 space-y-2">
+          <div className="text-[10px] font-semibold text-text-primary flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Sparkles size={12} className="text-primary" />
+              <span>Modulación y Expresión de Voz (IA)</span>
+            </div>
+            <span className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+              Fish Audio S2.1
+            </span>
+          </div>
+
+          <label className="flex items-start gap-2.5 p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
+            <input
+              type="checkbox"
+              checked={enableEmotions}
+              onChange={(e) => setEnableEmotions(e.target.checked)}
+              className="mt-0.5 rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+            />
+            <div className="flex-1 text-[10px] leading-tight">
+              <span className="font-medium text-text-primary block">
+                Inferencia Contextual de Emociones y Prosodia
+              </span>
+              <span className="text-text-muted text-[9px] mt-0.5 block leading-normal">
+                Detecta entonación, pausas <code className="text-[8px] bg-background-tertiary px-1 py-0.5 rounded">[break]</code>, énfasis y emociones canónicas en cualquier punto del diálogo. Si la frase es neutra, se mantiene limpia sin forzar modulaciones.
+              </span>
+            </div>
+          </label>
+        </div>
+
+        {/* Pistas a Importar al Timeline de OpenReel */}
+        <div className="pt-2.5 border-t border-border/60 space-y-2">
+          <div className="text-[10px] font-semibold text-text-primary flex items-center gap-1.5">
+            <Sliders size={12} className="text-primary" />
+            <span>Pistas de Audio y Video en Línea de Tiempo (Importación)</span>
+          </div>
+
+          <div className="space-y-1.5">
+            {/* Instrumental */}
+            <label className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
+              <div className="flex items-center gap-2">
+                <Music size={13} className="text-emerald-400" />
+                <div>
+                  <span className="text-[10px] font-medium text-text-primary block">
+                    Pista Instrumental aislada (no_vocals.wav)
+                  </span>
+                  <span className="text-[9px] text-text-muted block">
+                    Música y efectos de fondo extraídos con Demucs (Recomendado)
+                  </span>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={importInstrumental}
+                onChange={(e) => setImportInstrumental(e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+              />
+            </label>
+
+            {/* Voces originales aisladas */}
+            <label className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
+              <div className="flex items-center gap-2">
+                <Mic size={13} className="text-amber-400" />
+                <div>
+                  <span className="text-[10px] font-medium text-text-primary block">
+                    Voces originales aisladas (vocals.wav)
+                  </span>
+                  <span className="text-[9px] text-text-muted block">
+                    Pista de voz original (silenciada por defecto para referencia)
+                  </span>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={importOriginalVocals}
+                onChange={(e) => setImportOriginalVocals(e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+              />
+            </label>
+
+            {/* Audio original completo */}
+            <label className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
+              <div className="flex items-center gap-2">
+                <Radio size={13} className="text-cyan-400" />
+                <div>
+                  <span className="text-[10px] font-medium text-text-primary block">
+                    Audio original completo (original_audio.webm)
+                  </span>
+                  <span className="text-[9px] text-text-muted block">
+                    Audio completo sin separar del video original (silenciado)
+                  </span>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={importOriginalAudio}
+                onChange={(e) => setImportOriginalAudio(e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+              />
+            </label>
+
+            {/* Video renderizado */}
+            <label className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
+              <div className="flex items-center gap-2">
+                <Film size={13} className="text-purple-400" />
+                <div>
+                  <span className="text-[10px] font-medium text-text-primary block">
+                    Video renderizado con audio (merged.mp4)
+                  </span>
+                  <span className="text-[9px] text-text-muted block">
+                    Pista adicional de video con audio combinado
+                  </span>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={importMergedVideo}
+                onChange={(e) => setImportMergedVideo(e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+              />
+            </label>
           </div>
         </div>
 

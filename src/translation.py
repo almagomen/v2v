@@ -68,11 +68,12 @@ def translate_text_list(
     print_full_prompt: bool = False,
     times: Optional[list[Tuple[float, float]]] = None,
     segments_meta: Optional[list[dict]] = None,
+    enable_emotions: bool = True,
 ) -> list[str] | None:
     """
-    Traduce una lista de frases a un idioma objetivo usando Gemini (Interactions API).
-    Soporta traducción isométrica con presupuesto de sílabas, tiempo neto y tags prosódicos,
-    cascada limpia de modelos (lite -> gemma) y rotación de API Keys.
+    Traduce o adapta una lista de frases a un idioma objetivo usando Gemini (Interactions API).
+    Soporta doblaje isométrico con presupuesto de sílabas, tiempo neto y tags prosódicos,
+    cascada limpia de modelos (lite -> gemma), control de enable_emotions y rotación de API Keys.
     """
     if not list_sentences:
         return []
@@ -84,6 +85,7 @@ def translate_text_list(
 
     source_lang_name = LANGUAGE_NAMES.get(source_lang, "español")
     target_lang_name = LANGUAGE_NAMES.get(target_lang, "español")
+    is_same_lang = (source_lang.strip().lower() == target_lang.strip().lower())
 
     total_count = len(list_sentences)
     has_times = bool(times and len(times) == total_count)
@@ -119,10 +121,18 @@ def translate_text_list(
         else:
             input_dict[k] = s
 
-    from src.expression import CANONICAL_FISH_EMOTIONS
-    # Catálogo dinámico de emociones y modulaciones activas (excluyendo pausas que se manejan por separado)
-    active_emotions = sorted([e for e in CANONICAL_FISH_EMOTIONS if not ("break" in e or "laughing" in e and "crowd" in e)])
-    emotions_catalog_str = ", ".join(f"[{e}]" for e in active_emotions)
+    if enable_emotions:
+        from src.expression import CANONICAL_FISH_EMOTIONS
+        active_emotions = sorted([e for e in CANONICAL_FISH_EMOTIONS if not ("break" in e or "laughing" in e and "crowd" in e)])
+        emotions_catalog_str = ", ".join(f"[{e}]" for e in active_emotions)
+        emotion_guideline = f"""   - Modulación prosódica y expresiones: Puedes integrar marcadores de emoción, estilo o reacciones vocales seleccionados del catálogo canónico activo del sistema:
+     {emotions_catalog_str}
+     * Ubicación flexible: Colócalos ya sea al inicio de la frase para definir la entonación general o en cualquier punto natural de la frase donde ocurra la inflexión emocional.
+     * Tono neutro: Si el tono de la frase es neutro, informativo o puramente descriptivo, déjala limpia sin ninguna etiqueta de emoción (no fuerces "calm" ni etiquetas artificiales)."""
+        pacing_emotion_hint = "- MODULACIÓN PROSÓDICA DINÁMICA: Considera la pista acústica (nivel de energía y ritmo) provista en el segmento para integrar armónicamente, al inicio o en el punto de inflexión de la frase y solo si el contexto lo justifica, una modulación del catálogo de estilos activos disponible."
+    else:
+        emotion_guideline = """   - Modulación: Mantén una entonación natural y neutra, sin marcadores de emoción."""
+        pacing_emotion_hint = "- MODULACIÓN: Entrega la locución con entonación neutra y natural."
 
     pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO (CONTROL DE TIEMPO Y RANGO DE CARACTERES):
    Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars | pista acústica]: texto original`.
@@ -132,24 +142,29 @@ def translate_text_list(
      * `[break]`: para pausas breves, respiros naturales y cesuras lógicas entre dos oraciones o cláusulas.
      * `[long-break]`: para pausas prolongadas, transiciones de plano o silencios deliberados.
      (Nunca ubiques marcadores de pausa al inicio o al final absoluto de una frase).
-   - MODULACIÓN PROSÓDICA DINÁMICA: Considera la pista acústica (nivel de energía y ritmo) provista en el segmento para seleccionar armónicamente, al inicio de la frase y solo si el contexto lo justifica, una modulación del catálogo de estilos activos disponible.
+   {pacing_emotion_hint}
    - SEGMENTOS BREVES (< 2.0s): Respeta la concisión temporal manteniendo la traducción breve y directa sin adiciones innecesarias.
    - En tu JSON de salida entrega ÚNICAMENTE el texto adaptado dentro de cada objeto, SIN repetir el prefijo de metadatos (prohibido poner `[Xs slot | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
 
     empty_dict_str = "{}"
-    prompt = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
-Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo.
+    if is_same_lang:
+        role_mission = f"""Eres un director de voz y especialista en adaptación prosódica de diálogos para síntesis de voz (TTS).
+Tu misión es ADAPTAR cada frase en {target_lang_name} para su locución por modelos de voz (TTS), preservando con total fidelidad el texto, la idea y la intención original del {source_lang_name}, pero dotándola de ritmo oral natural, pausas orgánicas y modulaciones vocales adecuadas."""
+    else:
+        role_mission = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
+Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo."""
+
+    prompt = f"""{role_mission}
 
 Directrices obligatorias:
 1. REGLA ESTRICTA 1-A-1 E ISOMORFISMO: La entrada contiene EXACTAMENTE {total_count} frases indexadas con claves numéricas del "1" al "{total_count}". Tu salida DEBE ser un objeto JSON con EXACTAMENTE las mismas {total_count} claves numéricas (del "1" al "{total_count}").
 2. INTEGRIDAD TEMPORAL Y SEGMENTOS INDIVIDUALES: Cada clave numérica "N" representa un clip de audio individual fijado en la línea de tiempo del video. No agregues claves nuevas, no omitas claves y no traslades contenido entre claves adyacentes. Cuando un segmento corresponda a unidades mínimas de habla (interjecciones, partículas discursivas o de enlace, afirmaciones breves, muletillas o reacciones espontáneas del hablante), adáptalo de forma concisa y directa en su propia clave "N" respetando su duración temporal, sin intentar rellenar artificialmente ni tomar texto del segmento siguiente. La clave final "{total_count}" debe corresponder al cierre del video.
-3. REESCRIBE MANTENIENDO LA IDEA: No hagas una traducción literal o palabra por palabra. Reformula y reescribe preservando la misma idea central y sentido, usando expresiones coloquiales y naturales adecuadas al {target_lang_name}.
+3. REESCRIBE MANTENIENDO LA IDEA: Preserva la misma idea central y sentido, usando expresiones coloquiales y naturales adecuadas al {target_lang_name}.
 4. VOZ HABLADA Y DOBLAJE: El texto será sintetizado por modelos de voz (TTS). La frase debe tener ritmo fonético natural, ser directa y sonar convincente y orgánica al ser escuchada.
 {pacing_instruction}
 6. COHERENCIA Y CONTINUIDAD ENTRE FRASES: Las frases forman parte de una narración continua en un timeline audiovisual. Si una frase continúa la idea de la clave anterior (o deja una idea abierta para la clave siguiente), preserva la ilación gramatical natural, usando puntuación de enlace (comas o puntos seguidos) para que al reproducirse consecutivamente en el reproductor suenen como un discurso fluido y continuo, sin interrupciones abruptas ni pausas antinaturales.
 7. MODULACIÓN PROSÓDICA, ÉNFASIS Y PAUSAS:
-   - Puedes anteponer un marcador de emoción o estilo al inicio de la frase, seleccionado exclusivamente del catálogo activo del sistema:
-     {emotions_catalog_str}
+{emotion_guideline}
    - Control de pausas internas:
      * `[break]`: para pausas breves, respiros naturales y cesuras lógicas entre dos oraciones o cláusulas.
      * `[long-break]`: para silencios prolongados deliberados, momentos de reflexión o transiciones de escena.

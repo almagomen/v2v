@@ -19,7 +19,6 @@ import { V2VGenerateTTSSection } from "./V2VGenerateTTSSection";
 import { TokensConfigSection } from "./TokensConfigSection";
 import { SpeakerSelector } from "./SpeakerSelector";
 import { JobProgressIndicator } from "./JobProgressIndicator";
-import { DEFAULT_EMOTION_TAG } from "../utils/v2v-emotions";
 
 const TRANSLATE_OPTIONS = [
   { value: "None", label: "Sin traducción" },
@@ -88,7 +87,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [customTitleModel, setCustomTitleModel] = React.useState<string>("");
   const [translationModel, setTranslationModel] = React.useState<string>("gemini-flash-lite-latest");
   const [customTranslationModel, setCustomTranslationModel] = React.useState<string>("");
-  const [initialEmotion, setInitialEmotion] = React.useState<string>(DEFAULT_EMOTION_TAG);
   const [reprocessUrls, setReprocessUrls] = React.useState<Set<string>>(new Set());
   const [showTokenSettings, setShowTokenSettings] = React.useState(false);
   const [isSavingTokens, setIsSavingTokens] = React.useState(false);
@@ -283,9 +281,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         urlsToProcess,
         translateLang === "None" ? null : translateLang,
         speaker,
-        initialEmotion === "none" ? null : initialEmotion,
+        null,
         {
           forceReprocess: isForcingReprocess,
+          enableEmotions: useV2VStore.getState().enableEmotions,
         }
       );
       setJobId(res.job_id);
@@ -307,7 +306,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     urlItems,
     translateLang,
     speaker,
-    initialEmotion,
     reprocessUrls,
     startPolling,
     setJobId,
@@ -443,10 +441,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
                 ? "bg-primary/10 border-primary/20 text-primary shadow-sm" 
                 : "bg-background-tertiary border-border text-text-muted hover:text-text-primary hover:bg-background-secondary"
             }`}
-            title="Configurar tokens de Fish Audio y Gemini"
+            title="Configurar tokens, modelos IA, modulación de emociones y pistas del timeline"
           >
             <Settings size={13} className={showTokenSettings ? "animate-spin" : ""} style={{ animationDuration: "3s" }} />
-            Tokens
+            Ajustes
           </button>
         </div>
 
@@ -502,7 +500,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-[10px] text-text-muted block mb-1">Idioma</label>
             <select
@@ -522,8 +520,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             speaker={speaker}
             setSpeaker={setSpeaker}
             speakers={speakers}
-            initialEmotion={initialEmotion}
-            setInitialEmotion={setInitialEmotion}
             disabled={isProcessing}
           />
         </div>

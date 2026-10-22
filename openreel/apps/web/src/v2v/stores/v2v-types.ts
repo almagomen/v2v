@@ -101,6 +101,13 @@ export interface JobState {
   bulkEditorOpen: boolean;
   timelineHeight: number;
   currentProjectId: string | null;
+
+  // Preferencias de inferencia y montaje en timeline
+  enableEmotions: boolean;
+  importInstrumental: boolean;
+  importOriginalAudio: boolean;
+  importOriginalVocals: boolean;
+  importMergedVideo: boolean;
 }
 
 export interface JobActions {
@@ -108,6 +115,12 @@ export interface JobActions {
   setBulkEditorOpen: (open: boolean) => void;
   setTimelineHeight: (height: number) => void;
   syncWithProject: (projectId: string | null) => void;
+
+  setEnableEmotions: (enabled: boolean) => void;
+  setImportInstrumental: (enabled: boolean) => void;
+  setImportOriginalAudio: (enabled: boolean) => void;
+  setImportOriginalVocals: (enabled: boolean) => void;
+  setImportMergedVideo: (enabled: boolean) => void;
 
   setUrls: (urls: string) => void;
   setJobId: (jobId: string | null) => void;

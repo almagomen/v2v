@@ -39,6 +39,8 @@ import {
   loadJobStateForProject,
   saveJobStateForProject,
   clearJobStateForProject,
+  loadV2VPreferences,
+  saveV2VPreferences,
 } from "./v2v-storage";
 import {
   saveFolderRefsToStorage,
@@ -135,6 +137,33 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
     setBulkEditorOpen: (bulkEditorOpen) => set({ bulkEditorOpen }),
     timelineHeight: 320,
     setTimelineHeight: (timelineHeight) => set({ timelineHeight }),
+
+    enableEmotions: loadV2VPreferences().enableEmotions,
+    importInstrumental: loadV2VPreferences().importInstrumental,
+    importOriginalAudio: loadV2VPreferences().importOriginalAudio,
+    importOriginalVocals: loadV2VPreferences().importOriginalVocals,
+    importMergedVideo: loadV2VPreferences().importMergedVideo,
+
+    setEnableEmotions: (enableEmotions) => {
+      saveV2VPreferences({ enableEmotions });
+      set({ enableEmotions });
+    },
+    setImportInstrumental: (importInstrumental) => {
+      saveV2VPreferences({ importInstrumental });
+      set({ importInstrumental });
+    },
+    setImportOriginalAudio: (importOriginalAudio) => {
+      saveV2VPreferences({ importOriginalAudio });
+      set({ importOriginalAudio });
+    },
+    setImportOriginalVocals: (importOriginalVocals) => {
+      saveV2VPreferences({ importOriginalVocals });
+      set({ importOriginalVocals });
+    },
+    setImportMergedVideo: (importMergedVideo) => {
+      saveV2VPreferences({ importMergedVideo });
+      set({ importMergedVideo });
+    },
 
     syncWithProject: (projectId: string | null) => {
       if (!projectId) {
@@ -613,6 +642,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     enabled: boolean;
                   }
 
+                  const currentPrefs = get();
                   const assets: V2VAssetDef[] = [
                     { 
                       id: 'video_only', 
@@ -630,9 +660,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       serverFn: v.instrumental_path?.split(/[\\/]/).pop() || "no_vocals.wav", 
                       logicalName: "no_vocals.wav", 
                       type: 'audio', 
-                      toTimeline: true, 
+                      toTimeline: currentPrefs.importInstrumental, 
                       trackPrefix: 'INSTRUMENTAL',
-                      enabled: !!v.instrumental_path 
+                      enabled: !!v.instrumental_path && currentPrefs.importInstrumental 
                     },
                     { 
                       id: 'merged_video', 
@@ -640,8 +670,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       serverFn: v.video_path?.split(/[\\/]/).pop() || "", 
                       logicalName: v.video_path?.split(/[\\/]/).pop() || "merged.mp4", 
                       type: 'video', 
-                      toTimeline: false, 
-                      enabled: false // Deshabilitado en auto-import para evitar sobrecarga del túnel Cloudflare
+                      toTimeline: currentPrefs.importMergedVideo, 
+                      trackPrefix: 'MERGED_VIDEO',
+                      enabled: !!v.video_path && currentPrefs.importMergedVideo 
                     },
                     { 
                       id: 'original_audio', 
@@ -649,8 +680,10 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       serverFn: v.original_audio_path?.split(/[\\/]/).pop() || "", 
                       logicalName: v.original_audio_path?.split(/[\\/]/).pop() || "original_audio.webm", 
                       type: 'audio', 
-                      toTimeline: false, 
-                      enabled: false 
+                      toTimeline: currentPrefs.importOriginalAudio, 
+                      trackPrefix: 'ORIGINAL_AUDIO',
+                      muted: true,
+                      enabled: !!v.original_audio_path && currentPrefs.importOriginalAudio 
                     },
                     { 
                       id: 'vocals_original', 
@@ -658,8 +691,10 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       serverFn: v.vocals_path?.split(/[\\/]/).pop() || "vocals.wav", 
                       logicalName: "vocals.wav", 
                       type: 'audio', 
-                      toTimeline: false, 
-                      enabled: false 
+                      toTimeline: currentPrefs.importOriginalVocals, 
+                      trackPrefix: 'VOCALS_ORIGINAL',
+                      muted: true,
+                      enabled: !!v.vocals_path && currentPrefs.importOriginalVocals 
                     }
                   ];
 

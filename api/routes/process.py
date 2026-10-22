@@ -35,6 +35,7 @@ def process_urls(req: ProcessUrlsRequest):
         emotion=req.emotion,
         force_reprocess=bool(req.force_reprocess),
         speaker_map=req.speaker_map,
+        enable_emotions=True if req.enable_emotions is None else bool(req.enable_emotions),
     )
     return ProcessUrlsResponse(job_id=job_id, message="Procesamiento iniciado")
 

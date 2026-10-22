@@ -33,6 +33,7 @@ def process_video_queue(
     current_idx: Optional[int] = None,
     total_count: Optional[int] = None,
     force_reprocess: bool = False,
+    enable_emotions: bool = True,
 ) -> list[dict]:
     """
     Procesa una cola de videos: descarga, transcribe y traduce.
@@ -149,6 +150,7 @@ def process_video_queue(
                 u,
                 translate=translate_lang,
                 title=safe_title,
+                enable_emotions=enable_emotions,
             )
             translated_result = run_res[0]
             output_name = run_res[1]

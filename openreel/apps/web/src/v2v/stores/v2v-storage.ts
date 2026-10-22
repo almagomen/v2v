@@ -2,6 +2,41 @@ import type { PersistedJobState } from "./v2v-types";
 
 export const JOB_STATE_STORAGE_KEY = "openreel.v2v.jobState";
 export const PROJECT_JOB_STORAGE_PREFIX = "openreel.v2v.projectJob.";
+export const V2V_PREFERENCES_STORAGE_KEY = "openreel.v2v.preferences";
+
+export interface V2VUserPreferences {
+  enableEmotions: boolean;
+  importInstrumental: boolean;
+  importOriginalAudio: boolean;
+  importOriginalVocals: boolean;
+  importMergedVideo: boolean;
+}
+
+export const DEFAULT_V2V_PREFERENCES: V2VUserPreferences = {
+  enableEmotions: true,
+  importInstrumental: true,
+  importOriginalAudio: false,
+  importOriginalVocals: false,
+  importMergedVideo: false,
+};
+
+export function loadV2VPreferences(): V2VUserPreferences {
+  if (typeof window === "undefined") return DEFAULT_V2V_PREFERENCES;
+  try {
+    const raw = localStorage.getItem(V2V_PREFERENCES_STORAGE_KEY);
+    return raw ? { ...DEFAULT_V2V_PREFERENCES, ...JSON.parse(raw) } : DEFAULT_V2V_PREFERENCES;
+  } catch {
+    return DEFAULT_V2V_PREFERENCES;
+  }
+}
+
+export function saveV2VPreferences(prefs: Partial<V2VUserPreferences>): void {
+  if (typeof window === "undefined") return;
+  try {
+    const current = loadV2VPreferences();
+    localStorage.setItem(V2V_PREFERENCES_STORAGE_KEY, JSON.stringify({ ...current, ...prefs }));
+  } catch {}
+}
 
 export function loadJobStateForProject(projectId: string | null): Partial<PersistedJobState> {
   if (typeof window === "undefined" || !projectId) return {};

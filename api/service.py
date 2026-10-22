@@ -69,6 +69,7 @@ def _run_pipeline(
     emotion: str | None = None,
     force_reprocess: bool = False,
     speaker_map: dict[str, str] | None = None,
+    enable_emotions: bool = True,
 ) -> None:
     """Run pipeline with stdout redirected to job log."""
     from src.pipeline import process_video_queue, split_all_sequences
@@ -132,6 +133,7 @@ def _run_pipeline(
                 current_idx=idx + 1,
                 total_count=len(urls),
                 force_reprocess=force_reprocess,
+                enable_emotions=enable_emotions,
             )
 
             if not res_list:
@@ -214,20 +216,30 @@ def _run_pipeline(
                     t["speaker"] = speaker_name
 
             # ─── ANÁLISIS EXPRESIVO Y EMOCIONAL POR SEGMENTO (Fase 3) ───
-            # Si no hay emociones predefinidas en los segmentos, inferir dinámicamente con Gemini
-            has_existing_emotions = any(t.get("emotion") or (t.get("text", "").startswith("[") and "]" in t.get("text", "").split(maxsplit=1)[0]) for t in texts)
-            if not has_existing_emotions:
-                try:
-                    from src.expression import analyze_segments_expression
-                    exp_results = analyze_segments_expression(texts, source_lang=r.get("source_lang", "en"))
-                    for t, exp in zip(texts, exp_results):
-                        t_emo = exp.get("emotion")
-                        if t_emo and t_emo != "calm":
-                            t["emotion"] = t_emo
-                            cur_txt = t.get("text", "").strip()
-                            t["text"] = f"[{t_emo}] {cur_txt}"
-                except Exception as ex_exp:
-                    print(f"⚠️ [Expresión] No se pudo clasificar emociones: {ex_exp}")
+            # Si enable_emotions está activo y no hay prosodia previa, inferir dinámicamente con Gemini
+            if enable_emotions:
+                has_existing_emotions = any(
+                    t.get("emotion") or (t.get("text", "").startswith("[") and "]" in t.get("text", "").split(maxsplit=1)[0])
+                    for t in texts
+                )
+                if not has_existing_emotions:
+                    try:
+                        from src.expression import analyze_segments_expression
+                        exp_results = analyze_segments_expression(
+                            texts,
+                            source_lang=r.get("source_lang", "en"),
+                            enable_emotions=enable_emotions,
+                        )
+                        for t, exp in zip(texts, exp_results):
+                            if exp.get("text"):
+                                t["text"] = exp["text"]
+                            t_emo = exp.get("emotion")
+                            if t_emo and t_emo != "calm":
+                                t["emotion"] = t_emo
+                            if exp.get("phonemes"):
+                                t["phonemes"] = {**t.get("phonemes", {}), **exp["phonemes"]}
+                    except Exception as ex_exp:
+                        print(f"⚠️ [Expresión] No se pudo clasificar emociones: {ex_exp}")
 
             # Si se especificó una emoción en el proceso inicial, actúa como fallback/override para segmentos sin emoción
             if emotion and emotion != "none":
@@ -357,6 +369,7 @@ def start_process(
     emotion: str | None = None,
     force_reprocess: bool = False,
     speaker_map: dict[str, str] | None = None,
+    enable_emotions: bool = True,
 ) -> str:
     """Start pipeline in background, return job_id."""
     job_id = create_job()
@@ -370,6 +383,7 @@ def start_process(
             emotion,
             force_reprocess,
             speaker_map,
+            enable_emotions,
         ),
     )
     thread.start()
