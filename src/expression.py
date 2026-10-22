@@ -9,38 +9,68 @@ from typing import Optional
 from google import genai
 from src.config import get_google_api_keys, rotate_google_api_key
 
-# Catálogo canónico oficial de Fish Audio S2 / S2.1
+# Catálogo canónico oficial de Fish Audio S2 / S2.1 (64+ expresiones y efectos)
 CANONICAL_FISH_EMOTIONS = {
-    # Básicas
+    # 1. Emociones Básicas (24)
     "happy", "sad", "angry", "excited", "calm", "nervous", "confident",
     "surprised", "satisfied", "delighted", "scared", "worried", "upset",
     "frustrated", "depressed", "empathetic", "embarrassed", "disgusted",
     "moved", "proud", "relaxed", "grateful", "curious", "sarcastic",
-    # Modulaciones de tono / entrega
-    "whispering", "laughing", "in a hurry tone", "soft tone", "shouting",
-    # Avanzadas
-    "hopeful", "optimistic", "determined", "nostalgic", "sympathetic"
+
+    # 2. Emociones Avanzadas (25)
+    "disdainful", "unhappy", "anxious", "hysterical", "indifferent",
+    "uncertain", "doubtful", "confused", "disappointed", "regretful",
+    "guilty", "ashamed", "jealous", "envious", "hopeful", "optimistic",
+    "pessimistic", "nostalgic", "lonely", "bored", "contemptuous",
+    "sympathetic", "compassionate", "determined", "resigned",
+
+    # 3. Modulaciones de Tono y Entrega (6)
+    "in a hurry tone", "shouting", "screaming", "whispering", "soft tone", "emphasis",
+
+    # 4. Efectos Humanos de Audio (11)
+    "laughing", "chuckling", "sobbing", "crying loudly", "sighing",
+    "groaning", "panting", "gasping", "yawning", "snoring", "clear throat",
+
+    # 5. Efectos Especiales y Pausas
+    "break", "long-break", "audience laughing", "background laughter", "crowd laughing",
 }
 
-# Mapeo de normalización para tags antiguos o no estándar
+# Mapeo de normalización para tags no canónicos o sinónimos comunes
 TAG_NORMALIZATION = {
     "whisper": "whispering",
     "laughter": "laughing",
     "laugh": "laughing",
-    "cry": "crying",
+    "chuckle": "chuckling",
+    "sob": "sobbing",
+    "cry": "crying loudly",
+    "crying": "crying loudly",
     "sigh": "sighing",
+    "groan": "groaning",
+    "pant": "panting",
+    "gasp": "gasping",
+    "yawn": "yawning",
+    "snore": "snoring",
+    "throat": "clear throat",
     "yell": "shouting",
     "shout": "shouting",
+    "scream": "screaming",
     "fast": "in a hurry tone",
     "hurried": "in a hurry tone",
+    "hurry": "in a hurry tone",
+    "urgent": "in a hurry tone",
     "soft": "soft tone",
+    "gentle": "soft tone",
     "joy": "happy",
     "neutral": "calm",
+    "peaceful": "calm",
+    "anxiety": "anxious",
+    "doubt": "doubtful",
+    "confusion": "confused",
 }
 
 
 def normalize_emotion_tag(tag: str) -> str:
-    """Normaliza cualquier tag al catálogo canónico de Fish Audio S2."""
+    """Normaliza cualquier tag al catálogo canónico oficial de Fish Audio S2."""
     clean = re.sub(r"[\[\]]", "", tag).strip().lower()
     if clean in TAG_NORMALIZATION:
         clean = TAG_NORMALIZATION[clean]
@@ -63,24 +93,40 @@ def heuristic_detect_emotion(text: str) -> tuple[str, float]:
     if m:
         return normalize_emotion_tag(m.group(1)), 0.8
 
-    # Signos fuertes
+    low = txt.lower()
+
+    # Risas textuales
+    if re.search(r"\b(ja(ja)+|ha(ha)+|k(k)+|je(je)+)\b", low):
+        return "laughing", 0.90
+
+    # Suspiros o expresiones de cansancio / alivio
+    if any(w in low for w in ["uf", "uff", "ay dios", "por fin", "phew", "sigh"]):
+        return "sighing", 0.80
+
+    # Signos fuertes de exclamación o urgencia
     if "¡" in txt or "!" in txt:
-        # Si tiene signos exclamativos múltiples o palabras de urgencia
-        if any(w in txt.lower() for w in ["cuidado", "rápido", "corre", "alerta", "urgente"]):
+        if any(w in low for w in ["cuidado", "rápido", "corre", "alerta", "urgente", "ya mismo"]):
             return "in a hurry tone", 0.85
-        if any(w in txt.lower() for w in ["genial", "increíble", "excelente", "vamos", "mira", "wow", "gratis", "hack"]):
+        if any(w in low for w in ["socorro", "ayuda", "peligro", "nooo"]):
+            return "shouting", 0.85
+        if any(w in low for w in ["genial", "increíble", "excelente", "vamos", "mira", "wow", "gratis", "hack", "espectacular"]):
             return "excited", 0.85
         return "excited", 0.75
 
+    # Preguntas o dudas
     if "¿" in txt or "?" in txt:
+        if any(w in low for w in ["cómo", "dónde", "por qué", "qué es", "cuál"]):
+            return "curious", 0.75
+        if any(w in low for w in ["seguro", "será", "acaso", "dudas"]):
+            return "doubtful", 0.70
         return "curious", 0.70
 
-    # Risas textuales
-    if re.search(r"\b(ja(ja)+|ha(ha)+|k(k)+)\b", txt, re.IGNORECASE):
-        return "laughing", 0.90
+    # Indecisión o confusión
+    if any(w in low for w in ["no entiendo", "no sé", "espera un momento", "qué raro", "extraño"]):
+        return "confused", 0.70
 
-    # Términos explicativos / técnicos tranquilos
-    if any(w in txt.lower() for w in ["primero", "luego", "después", "configurar", "instalar", "código", "terminal"]):
+    # Términos explicativos / técnicos de seguridad y confianza
+    if any(w in low for w in ["primero", "luego", "después", "configurar", "instalar", "código", "terminal", "paso a paso", "vamos a"]):
         return "confident", 0.65
 
     return "calm", 0.60
@@ -109,19 +155,25 @@ def analyze_segments_expression(
     input_dict = {str(i + 1): t.get("text", "").strip() for i, t in enumerate(texts)}
 
     prompt = f"""Eres un director de voz y experto en prosodia audiovisual para doblaje profesional.
-Analiza la siguiente lista de {total} frases consecutivas de un video y determina la emoción y estilo de locución más natural y adecuado para cada una, dentro del catálogo oficial de Fish Audio S2.
+Analiza la siguiente lista de {total} frases consecutivas de un video y determina la emoción y estilo de locución más natural y adecuado para cada una, dentro del catálogo oficial de Fish Audio S2 (64+ emociones).
 
-Catálogo de emociones permitidas:
-[excited, happy, calm, confident, curious, surprised, satisfied, delighted, nervous, worried, frustrated, angry, whispering, laughing, in a hurry tone, soft tone]
+Catálogo oficial Fish Audio S2:
+- BÁSICAS: happy, sad, angry, excited, calm, nervous, confident, surprised, satisfied, delighted, scared, worried, upset, frustrated, depressed, empathetic, embarrassed, disgusted, moved, proud, relaxed, grateful, curious, sarcastic
+- AVANZADAS: hopeful, optimistic, determined, nostalgic, sympathetic, compassionate, anxious, confused, doubtful, uncertain, disappointed, regretful, guilty, bored, resigned
+- TONOS / ENTREGA: in a hurry tone, soft tone, whispering, shouting, screaming
+- EFECTOS: laughing, chuckling, sighing, groaning, panting, gasping
 
-Directrices:
+Directrices de dirección de doblaje:
 1. Responde ÚNICAMENTE con un JSON con exactamente {total} claves numéricas del "1" al "{total}".
-2. Para cada clave asigna un objeto con:
-   - "emotion": uno de los valores del catálogo (o "calm" para explicaciones neutras).
-   - "intensity": valor float de 0.5 a 1.0.
-3. Si el orador está explicando tutoriales o código con fluidez, usa "confident" o "calm".
-4. Si está llamando la atención, festejando o mostrando algo sorprendente, usa "excited".
-5. Si hace preguntas o busca algo, usa "curious".
+2. Para cada clave asigna:
+   - "emotion": un valor exacto del catálogo oficial.
+   - "intensity": float de 0.5 a 1.0 (0.6 neutro, 0.8 enérgico, 0.95 intenso).
+3. Si el orador está explicando tutoriales, comandos o código con soltura: usa "confident" o "calm".
+4. Si está llamando la atención, festejando o mostrando un logro importante: usa "excited" o "delighted".
+5. Si hace preguntas o reflexiones: usa "curious", "doubtful" o "confused".
+6. Si describe prisas o acciones rápidas: usa "in a hurry tone".
+7. Si expresa alivio o desahogo: usa "sighing" o "relaxed".
+8. Si expresa ironía o broma: usa "sarcastic" o "laughing".
 
 Frases indexadas:
 ---
@@ -130,9 +182,9 @@ Frases indexadas:
 
 Devuelve ÚNICAMENTE el JSON:
 {{
-  "1": {{"emotion": "excited", "intensity": 0.8}},
+  "1": {{"emotion": "excited", "intensity": 0.85}},
   ...
-  "{total}": {{"emotion": "confident", "intensity": 0.7}}
+  "{total}": {{"emotion": "confident", "intensity": 0.70}}
 }}"""
 
     for attempt in range(len(available_keys)):

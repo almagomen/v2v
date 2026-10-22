@@ -1,11 +1,8 @@
-"""
-TTS vía API Fish Audio (modelo s2.1-pro-free).
-Usa FISH_API_KEY desde config (env o Colab Secrets).
-"""
 import io
+import json
 import time
 from pathlib import Path
-from typing import Any, Tuple, Optional
+from typing import Any, Tuple, Optional, Union
 
 import requests
 
@@ -22,6 +19,92 @@ FISH_TTS_URL = "https://api.fish.audio/v1/tts"
 DEFAULT_MODEL = "s2.1-pro-free"
 
 
+def normalize_pronunciation_dictionary(dict_input: Any) -> Optional[list[dict]]:
+    """
+    Normaliza cualquier entrada de diccionario de pronunciación al formato oficial de Fish Audio S2:
+    - Lista de reglas inline: [{"items": [{"key": "...", "value": "...", "case_sensitive": bool}]}]
+    - Lista de managed dictionaries: [{"id": "...", "version": "..."}]
+    - Diccionario plano Python: {"Ghidra": "Gí-dra"} -> inline rules
+    - Ruta (str o Path) hacia archivo JSON local
+    """
+    if dict_input is None:
+        return None
+
+    # Si es una ruta hacia un archivo JSON
+    if isinstance(dict_input, (str, Path)):
+        p = Path(dict_input)
+        if p.exists() and p.is_file():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return normalize_pronunciation_dictionary(data)
+            except Exception as e:
+                print(f"⚠️ Error al leer archivo de pronunciación {p}: {e}")
+                return None
+        return None
+
+    # Si es un dict directo {"palabra": "fonética"} o estructurado
+    if isinstance(dict_input, dict):
+        if "items" in dict_input or "id" in dict_input:
+            return [dict_input]
+        items = []
+        for k, v in dict_input.items():
+            if isinstance(v, str):
+                items.append({"key": str(k), "value": str(v), "case_sensitive": False})
+            elif isinstance(v, dict):
+                items.append({
+                    "key": str(v.get("key", k)),
+                    "value": str(v.get("value", "")),
+                    "case_sensitive": bool(v.get("case_sensitive", False)),
+                })
+        return [{"items": items}] if items else None
+
+    # Si ya es una lista
+    if isinstance(dict_input, list):
+        normalized = []
+        for entry in dict_input:
+            if isinstance(entry, dict):
+                if "items" in entry or "id" in entry:
+                    normalized.append(entry)
+                elif "key" in entry and "value" in entry:
+                    normalized.append({
+                        "items": [{
+                            "key": str(entry["key"]),
+                            "value": str(entry["value"]),
+                            "case_sensitive": bool(entry.get("case_sensitive", False)),
+                        }]
+                    })
+        return normalized if normalized else None
+
+    return None
+
+
+def find_pronunciation_dictionary(search_dir: Optional[Union[str, Path]] = None) -> Optional[list[dict]]:
+    """
+    Busca automáticamente un archivo de diccionario de pronunciación si no se pasa explícitamente:
+    1. search_dir / "pronunciation.json"
+    2. search_dir / "pronunciation_dictionary.json"
+    3. Path.cwd() / "pronunciation.json"
+    """
+    candidates = []
+    if search_dir:
+        sd = Path(search_dir)
+        if sd.is_file():
+            sd = sd.parent
+        candidates.append(sd / "pronunciation.json")
+        candidates.append(sd / "pronunciation_dictionary.json")
+
+    candidates.append(Path.cwd() / "pronunciation.json")
+    candidates.append(Path.cwd() / "pronunciation_dictionary.json")
+
+    for cand in candidates:
+        if cand.exists() and cand.is_file():
+            res = normalize_pronunciation_dictionary(cand)
+            if res:
+                return res
+    return None
+
+
 def fish_tts(
     text: str,
     language: str = "es",
@@ -30,12 +113,17 @@ def fish_tts(
     temperature: float = 0.7,
     sample_rate: Optional[int] = 44100,
     model: str = DEFAULT_MODEL,
+    pronunciation_dictionary: Optional[Any] = None,
     **kwargs,
 ) -> Tuple[Any, Optional[int]]:
     """
-    Genera audio con Fish Audio usando el modelo s2.1-pro-free.
+    Genera audio con Fish Audio usando el modelo s2.1-pro-free / S2.
     voice_id puede ser un ID de modelo de Fish Audio (reference_id) o None para voz por defecto.
-    Parámetros opcionales vía **kwargs: top_p (0.7), repetition_penalty (1.2), speed (1.0).
+    Parámetros opcionales vía **kwargs:
+      - top_p (0.7), repetition_penalty (1.2), speed (1.0), volume (0.0)
+      - latency ("normal" | "balanced")
+      - chunk_length (int 100-300)
+      - pronunciation_dictionary (inline rules, managed id o path a json)
     Returns: (waveform, sample_rate) o (None, None) en caso de error.
     """
     api_key = get_fish_api_key()
@@ -68,6 +156,30 @@ def fish_tts(
 
     if sample_rate:
         payload["sample_rate"] = sample_rate
+
+    # Latencia (normal | balanced)
+    latency = kwargs.get("latency")
+    if latency in ("normal", "balanced"):
+        payload["latency"] = latency
+
+    # Longitud de chunk
+    chunk_length = kwargs.get("chunk_length")
+    if chunk_length and isinstance(chunk_length, int):
+        payload["chunk_length"] = chunk_length
+
+    # Bitrate opcional para mp3 u opus
+    if format == "mp3" and kwargs.get("mp3_bitrate"):
+        payload["mp3_bitrate"] = int(kwargs["mp3_bitrate"])
+    elif format == "opus" and kwargs.get("opus_bitrate"):
+        payload["opus_bitrate"] = int(kwargs["opus_bitrate"])
+
+    # Diccionario de pronunciación oficial de Fish Audio S2
+    dict_source = pronunciation_dictionary if pronunciation_dictionary is not None else kwargs.get("pronunciation_dictionary")
+    norm_dict = normalize_pronunciation_dictionary(dict_source)
+    if not norm_dict:
+        norm_dict = find_pronunciation_dictionary(kwargs.get("search_dir"))
+    if norm_dict:
+        payload["pronunciation_dictionary"] = norm_dict
 
     # Si se especificó un voice_id / reference_id
     if voice_id and str(voice_id).strip():
@@ -136,3 +248,4 @@ def model_tts(text: str, language: str, audio_ref: str, **kwargs) -> tuple:
 
 # Alias para compatibilidad con notebooks y scripts
 synthesize_speech = model_tts
+
