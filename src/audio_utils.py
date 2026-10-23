@@ -329,6 +329,104 @@ def distribute_silence_padding(arr: Any, target_samples: int, rate: int) -> Any:
     return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
 
 
+def compact_silence_valleys(
+    arr: Any,
+    rate: int,
+    target_samples: int,
+    min_pause_sec: float = 0.12,
+    target_pause_sec: float = 0.08,
+) -> Any:
+    """
+    Comprime quirúrgicamente los valles de silencio internos (pausas entre oraciones / respiraciones)
+    reduciendo el tiempo muerto sin alterar la velocidad ni el timbre de las partes habladas (1.00x natural).
+    """
+    if arr is None or arr.shape[-1] <= target_samples:
+        return arr
+
+    needed_reduction = arr.shape[-1] - target_samples
+    if needed_reduction <= 0:
+        return arr
+
+    is_torch = hasattr(arr, "device") and hasattr(arr, "cpu")
+    arr_np = arr.detach().cpu().numpy() if is_torch else arr
+
+    window_size = int(0.04 * rate)
+    hop_size = int(0.02 * rate)
+    total_samples = arr_np.shape[-1]
+
+    if total_samples < window_size * 2:
+        return arr
+
+    mono = np.mean(arr_np, axis=0) if arr_np.shape[0] > 1 else arr_np[0]
+    num_frames = (total_samples - window_size) // hop_size + 1
+    if num_frames <= 0:
+        return arr
+
+    frame_rms = np.zeros(num_frames, dtype=np.float32)
+    for f in range(num_frames):
+        start = f * hop_size
+        chunk = mono[start:start + window_size]
+        frame_rms[f] = np.sqrt(np.mean(chunk ** 2))
+
+    max_rms = float(np.max(frame_rms))
+    if max_rms < 1e-4:
+        return arr
+
+    silence_threshold = max(0.005, max_rms * 0.08)
+    is_silent = frame_rms < silence_threshold
+
+    min_frames = max(3, int(min_pause_sec / 0.02))
+    valleys = []
+    start_f = None
+    for f_idx, silent in enumerate(is_silent):
+        if silent:
+            if start_f is None:
+                start_f = f_idx
+        else:
+            if start_f is not None:
+                dur_f = f_idx - start_f
+                if dur_f >= min_frames:
+                    v_start_sample = start_f * hop_size
+                    v_end_sample = f_idx * hop_size
+                    valleys.append((v_start_sample, v_end_sample))
+                start_f = None
+
+    # Proteger márgenes de inicio y fin (primeros y últimos 300ms)
+    min_edge = int(0.30 * rate)
+    valleys = [(vs, ve) for (vs, ve) in valleys if vs > min_edge and ve < (total_samples - min_edge)]
+
+    if not valleys:
+        return arr
+
+    target_pause_samples = int(target_pause_sec * rate)
+    reducible_samples_list = []
+    for vs, ve in valleys:
+        dur = ve - vs
+        can_cut = max(0, dur - target_pause_samples)
+        reducible_samples_list.append(can_cut)
+
+    total_reducible = sum(reducible_samples_list)
+    if total_reducible <= 0:
+        return arr
+
+    cut_ratio = min(1.0, needed_reduction / total_reducible)
+
+    parts = []
+    prev_idx = 0
+    for (vs, ve), can_cut in zip(valleys, reducible_samples_list):
+        cut_amount = int(round(can_cut * cut_ratio))
+        keep_silence = (ve - vs) - cut_amount
+        parts.append(arr_np[:, prev_idx:vs])
+        if keep_silence > 0:
+            parts.append(np.zeros((arr_np.shape[0], keep_silence), dtype=arr_np.dtype))
+        prev_idx = ve
+
+    parts.append(arr_np[:, prev_idx:])
+    res_np = np.concatenate(parts, axis=-1)
+
+    return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
+
+
 def get_audio_file_duration(file_path: Path | str, fallback: Optional[float] = None) -> Optional[float]:
     """
     Obtiene la duración en segundos de un archivo de audio de forma robusta y rápida.
@@ -432,39 +530,55 @@ def synthesize_segment_audio(
 
     # Sincronía orgánica respecto al audio original (si slowdown_range y orig_duration están activos)
     if slowdown_range and orig_duration and orig_duration > 0:
+        # 1. CASO OVERFLOW / RIESGO DE CHOQUE:
+        # El audio excede el tiempo disponible antes del siguiente segmento
         if max_allowed_dur is not None and raw_dur > max_allowed_dur:
-            ratio_needed = raw_dur / max_allowed_dur
-            if ratio_needed <= 1.03:
-                mode_tag = "✨ 1.00x (natural)"
+            # Primero intentar compactar quirúrgicamente los valles de silencio internos (respiros/pausas)
+            arr_compact = compact_silence_valleys(arr, rate, int(max_allowed_dur * rate))
+            compact_dur = float(arr_compact.shape[-1]) / float(rate)
+
+            if compact_dur <= max_allowed_dur:
+                arr = arr_compact
+                gained_pct = max(1, int(round((1.0 - compact_dur / raw_dur) * 100)))
+                mode_tag = f"✂️ 1.00x (-{gained_pct}%)"
             else:
-                safe_ratio = min(ratio_needed, 1.25)
-                mode_tag = f"⚡ {safe_ratio:.2f}x (sync)"
-                target_samples = int(arr.shape[-1] / safe_ratio)
+                # Si aún excede, aplicar compresión de tempo para forzar que quepa sin chocar
+                arr = arr_compact
+                target_samples = int(max_allowed_dur * rate)
+                ratio_needed = float(arr.shape[-1]) / float(target_samples)
+                if ratio_needed <= 1.25:
+                    mode_tag = f"⚡ {ratio_needed:.2f}x"
+                else:
+                    mode_tag = f"🔥 {ratio_needed:.2f}x"
                 arr = adjust_audio_duration(arr, target_samples, rate)
-        elif raw_dur < orig_duration:
+
+        # 2. CASO EN QUE NO CHOCA CON EL SIGUIENTE SEGMENTO:
+        else:
             ratio_slow = raw_dur / orig_duration
-            if ratio_slow >= 0.96:
-                pad_pct = int(round((1.0 - ratio_slow) * 100))
-                mode_tag = f"✨ 1.00x (+pad {pad_pct}%)" if pad_pct > 0 else "✨ 1.00x (natural)"
-                pad_samples = int((orig_duration - raw_dur) * rate)
-                if pad_samples > 0 and torch is not None:
-                    arr = distribute_silence_padding(arr, int(orig_duration * rate), rate)
+            diff_pct = int(round((ratio_slow - 1.0) * 100))
+            diff_str = f"+{diff_pct}%" if diff_pct > 0 else f"{diff_pct}%" if diff_pct < 0 else "0%"
+
+            # Margen Neutro y extensión sin colisión:
+            # Se conserva el audio 100% puro y tal cual (sin recorte de ondas ni relleno artificial de silencio)
+            if ratio_slow >= 0.95:
+                mode_tag = f"✨ 1.00x ({diff_str})"
             else:
+                # Sub-duración (< 0.95x):
                 min_allowed_speed = 0.75
                 if ratio_slow < min_allowed_speed:
+                    # Freno Inteligente en 0.75x: ralentizar al piso seguro y distribuir el sobrante en pausas
                     effective_speed = min_allowed_speed
-                    mode_tag = f"🔉 {effective_speed:.2f}x (+pad)"
                     stretch_samples = int(arr.shape[-1] / effective_speed)
                     arr = adjust_audio_duration(arr, stretch_samples, rate)
+                    mode_tag = f"🔉 {effective_speed:.2f}x"
                     target_samples = int(orig_duration * rate)
                     if target_samples > arr.shape[-1] and torch is not None:
                         arr = distribute_silence_padding(arr, target_samples, rate)
                 else:
-                    mode_tag = f"🔉 {ratio_slow:.2f}x (expand)"
+                    # En rango seguro [0.75x, 0.95x): expandir suavemente al tiempo original
+                    mode_tag = f"🔉 {ratio_slow:.2f}x"
                     target_samples = int(orig_duration * rate)
                     arr = adjust_audio_duration(arr, target_samples, rate)
-        else:
-            mode_tag = "✨ 1.00x (natural)"
 
     # Micro-fade out suave (256 muestras) al final para eliminar ruidos de corte abrupto
     if arr.shape[-1] > 256 and torch is not None:
@@ -593,117 +707,7 @@ def clone_voice_segments(
             for i, res in executor.map(_fetch_tts, tts_tasks):
                 tts_results[i] = res
 
-        # --- AUTO-HEALER BIDIRECCIONAL: Anomalías severas de sub-duración (<0.65x) y sobre-duración (>1.22x o desborde) ---
-        underflow_items = []
-        overflow_items = []
-        for idx, text_dict in enumerate(texts_to_process):
-            seq_num = only_indices[idx] if only_indices else idx + 1
-            audio_en_path = seqs_src_dir / f"vocals_{seq_num:03d}.wav"
-            if not audio_en_path.exists() or idx not in tts_results:
-                continue
-            arr_cand, rate_cand = tts_results[idx]
-            if arr_cand is None or rate_cand is None:
-                continue
-            meta_fallback = float(text_dict.get("duration") or max(0.1, float(text_dict.get("end", 0)) - float(text_dict.get("start", 0))))
-            dur_en_cand = get_audio_file_duration(audio_en_path, fallback=meta_fallback) or meta_fallback
-            dur_es_cand = arr_cand.shape[-1] / rate_cand
-            clean_txt = re.sub(r"\[.*?\]", "", text_dict.get("text", "")).strip()
-
-            start_t = float(text_dict.get("start", 0.0))
-            nxt_starts = [float(t["start"]) for t in texts if float(t["start"]) > start_t + 0.01]
-            avail_slot = (min(nxt_starts) - start_t - 0.06) if nxt_starts else (dur_en_cand * 1.15)
-
-            # 1. Sub-duración severa (dejaría vacíos de silencio):
-            if dur_en_cand >= 3.5 and (dur_es_cand / dur_en_cand) < 0.65 and len(clean_txt) >= 20:
-                underflow_items.append({
-                    "idx": idx,
-                    "seq_num": seq_num,
-                    "text_dict": text_dict,
-                    "dur_en": dur_en_cand,
-                    "dur_es": dur_es_cand,
-                })
-            # 2. Sobre-duración severa (desbordaría el slot temporal o exigiría velocidad excesiva >1.22x):
-            elif (dur_es_cand / dur_en_cand) > 1.22 or (avail_slot > 0 and (dur_es_cand / 1.18) > avail_slot):
-                overflow_items.append({
-                    "idx": idx,
-                    "seq_num": seq_num,
-                    "text_dict": text_dict,
-                    "dur_en": min(dur_en_cand, avail_slot) if avail_slot > 0 else dur_en_cand,
-                    "dur_es": dur_es_cand,
-                })
-
         healed_records: dict[int, dict] = {}
-        if underflow_items:
-            try:
-                from src.translation import auto_heal_short_segments
-                healed_map = auto_heal_short_segments(underflow_items, target_lang=language)
-                for item in underflow_items:
-                    idx = item["idx"]
-                    if idx in healed_map:
-                        new_txt = healed_map[idx]
-                        seq_num = item["seq_num"]
-                        seg_audio_ref = tts_tasks[idx][2]
-                        s_phonemes = texts_to_process[idx].get("phonemes") or {}
-                        heal_kwargs = dict(kwargs)
-                        if s_phonemes:
-                            from src.tts import normalize_pronunciation_dictionary
-                            seg_dict = normalize_pronunciation_dictionary(s_phonemes)
-                            if seg_dict:
-                                heal_kwargs["pronunciation_dictionary"] = seg_dict
-                        new_arr, new_rate = tts_fn(new_txt, language, seg_audio_ref, **heal_kwargs)
-                        if new_arr is not None and new_rate is not None:
-                            new_dur = new_arr.shape[-1] / new_rate
-                            old_dur = item["dur_es"]
-                            dur_en_c = item["dur_en"]
-                            if abs(dur_en_c - new_dur) < abs(dur_en_c - old_dur):
-                                healed_records[idx] = {
-                                    "type": "underflow",
-                                    "old_dur": old_dur,
-                                    "new_dur": new_dur,
-                                    "target_dur": dur_en_c,
-                                    "old_text": item["text_dict"].get("text", ""),
-                                }
-                                tts_results[idx] = (new_arr, new_rate)
-                                texts_to_process[idx]["text"] = new_txt
-                                texts_to_process[idx]["healed"] = "underflow"
-            except Exception as e_heal:
-                print(f"\n⚠️ [Auto-Heal Underflow] Excepción en re-inferencia: {e_heal}", flush=True)
-
-        if overflow_items:
-            try:
-                from src.translation import auto_heal_long_segments
-                healed_map_long = auto_heal_long_segments(overflow_items, target_lang=language, source_lang=src_lang)
-                for item in overflow_items:
-                    idx = item["idx"]
-                    if idx in healed_map_long:
-                        new_txt = healed_map_long[idx]
-                        seq_num = item["seq_num"]
-                        seg_audio_ref = tts_tasks[idx][2]
-                        s_phonemes = texts_to_process[idx].get("phonemes") or {}
-                        heal_kwargs = dict(kwargs)
-                        if s_phonemes:
-                            from src.tts import normalize_pronunciation_dictionary
-                            seg_dict = normalize_pronunciation_dictionary(s_phonemes)
-                            if seg_dict:
-                                heal_kwargs["pronunciation_dictionary"] = seg_dict
-                        new_arr, new_rate = tts_fn(new_txt, language, seg_audio_ref, **heal_kwargs)
-                        if new_arr is not None and new_rate is not None:
-                            new_dur = new_arr.shape[-1] / new_rate
-                            old_dur = item["dur_es"]
-                            dur_en_c = item["dur_en"]
-                            if new_dur < old_dur:
-                                healed_records[idx] = {
-                                    "type": "overflow",
-                                    "old_dur": old_dur,
-                                    "new_dur": new_dur,
-                                    "target_dur": dur_en_c,
-                                    "old_text": item["text_dict"].get("text", ""),
-                                }
-                                tts_results[idx] = (new_arr, new_rate)
-                                texts_to_process[idx]["text"] = new_txt
-                                texts_to_process[idx]["healed"] = "overflow"
-            except Exception as e_heal_of:
-                print(f"\n⚠️ [Auto-Heal Overflow] Excepción en re-inferencia concisa: {e_heal_of}", flush=True)
 
     if only_indices is None or len(only_indices) > 1:
         header = f"{' #':<5}{'MODO':<20}{'DURACIONES [ORIG | FISH]'}"
@@ -713,7 +717,7 @@ def clone_voice_segments(
 
     for idx, text_dict in enumerate(texts_to_process):
         text = text_dict["text"]
-        start_time = text_dict["start"]
+        start_time = float(text_dict["start"])
         speaker = text_dict.get("speaker", "SPEAKER_00")
         orig_spk = text_dict.get("original_speaker") or speaker
         target_spk = (speaker_map.get(orig_spk) if speaker_map else None) or speaker
@@ -736,8 +740,7 @@ def clone_voice_segments(
         arr_en, rate_en = torchaudio.load(str(audio_en_path))
         dur_en = arr_en.shape[-1] / rate_en
 
-        # ─── BÚSQUEDA DEL PRÓXIMO SEGMENTO CRONOLÓGICO Y LÍMITE DE PAUSA ───
-        # Buscar el inicio del siguiente segmento cronológico (de cualquier interlocutor)
+        # ─── BÚSQUEDA DEL PRÓXIMO SEGMENTO CRONOLÓGICO Y ESPACIO DISPONIBLE ───
         next_starts = [
             float(t["start"])
             for t in texts
@@ -745,17 +748,13 @@ def clone_voice_segments(
         ]
         next_seg_start = min(next_starts) if next_starts else None
 
-        # Determinar el límite máximo disponible evitando invadir silencios largos de escena
+        # Límite máximo disponible antes de chocar con el siguiente clip (menos zona segura de 40ms)
         if next_seg_start is not None:
-            hard_limit = max(0.2, next_seg_start - start_time - 0.08)
-            natural_limit = dur_en + max(0.35, min(0.85, dur_en * 0.20))
-            max_allowed_dur = min(hard_limit, max(dur_en, natural_limit))
+            max_allowed_dur = max(0.2, next_seg_start - start_time - 0.04)
         elif video_total_duration is not None:
-            hard_limit = max(0.2, video_total_duration - start_time - 0.05)
-            natural_limit = dur_en + max(0.35, min(0.85, dur_en * 0.20))
-            max_allowed_dur = min(hard_limit, max(dur_en, natural_limit))
+            max_allowed_dur = max(0.2, video_total_duration - start_time - 0.05)
         else:
-            max_allowed_dur = dur_en * 1.15
+            max_allowed_dur = None
 
         audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.wav"
         raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"
@@ -781,32 +780,6 @@ def clone_voice_segments(
         if arr is None or rate is None:
             continue
 
-        # ─── CLAMP ANTI-SOLAPE CON SIGUIENTE SEGMENTO ───
-        curr_dur = arr.shape[-1] / rate
-        if next_seg_start is not None:
-            max_safe_end = next_seg_start - 0.04
-            if start_time + curr_dur > max_safe_end:
-                allowed_sec = max(0.2, max_safe_end - start_time)
-                target_samples = int(allowed_sec * rate)
-                arr = adjust_audio_duration(arr, target_samples, rate)
-                if torchaudio is not None:
-                    torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
-                final_dur = arr.shape[-1] / rate
-                mode_tag = "✂️ clamp (anti-solape)"
-
-        # Tope final estricto: ningún segmento puede exceder la duración total del video
-        if video_total_duration is not None:
-            max_end = video_total_duration - 0.05
-            curr_dur = arr.shape[-1] / rate
-            if start_time + curr_dur > max_end:
-                allowed_sec = max(0.1, max_end - start_time)
-                target_samples = int(allowed_sec * rate)
-                arr = adjust_audio_duration(arr, target_samples, rate)
-                if torchaudio is not None:
-                    torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
-                final_dur = arr.shape[-1] / rate
-                mode_tag = "✂️ clamp (fin video)"
-
         # Actualizar metadatos del segmento: preservando las coordenadas del audio original intactas
         text_dict["orig_start"] = round(float(text_dict.get("orig_start", start_time)), 3)
         text_dict["orig_end"] = round(float(text_dict.get("orig_end", start_time + dur_en)), 3)
@@ -819,16 +792,17 @@ def clone_voice_segments(
         seq_col = f"{seq_num:>3d}. "
         mode_col = _pad_visible_tag(mode_tag, 20)
 
-        # Si hubo auto-heal, incluir short en la caja de duraciones
+        # Si hubo auto-heal, incluir long o short según corresponda en la caja de duraciones
         h = healed_records.get(idx)
-        short_part = f" | short: {h['old_dur']:5.2f}s" if h else ""
+        tag_name = "long" if h and h.get("type") == "overflow" else "short"
+        dur_tag_part = f" | {tag_name}: {h['old_dur']:5.2f}s" if h else ""
 
         # Solo si la duración final difiere sustancialmente tanto de orig como de fish (ej. clamp final de video)
         extra_fin = ""
         if abs(final_dur - dur_en) > 0.08 and abs(final_dur - raw_dur_es) > 0.08:
             extra_fin = f" ➔ fin: {final_dur:5.2f}s"
 
-        dur_col = f"[orig: {dur_en:5.2f}s{short_part} | fish: {raw_dur_es:5.2f}s{extra_fin}]"
+        dur_col = f"[orig: {dur_en:5.2f}s{dur_tag_part} | fish: {raw_dur_es:5.2f}s{extra_fin}]"
         print(f"{seq_col}{mode_col}{dur_col}")
 
         indent = "      "

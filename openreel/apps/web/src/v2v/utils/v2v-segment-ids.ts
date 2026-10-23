@@ -20,6 +20,8 @@ export interface V2VSegmentInfo {
   speed: number | null;
   createdAt: number;
   updatedAt: number;
+  phonemes?: Record<string, string>;
+  healed?: string | null;
 }
 
 export interface V2VFolderData {

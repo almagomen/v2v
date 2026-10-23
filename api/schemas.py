@@ -176,6 +176,7 @@ class SegmentEditorRow(BaseModel):
     original_speaker: Optional[str] = None
     filename: Optional[str] = None
     phonemes: Optional[dict[str, str]] = None
+    healed: Optional[str] = None
 
 
 

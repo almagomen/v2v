@@ -92,6 +92,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
   const [selectedVoice, setSelectedVoice] = useState(defaultSpeaker || "mrbeast");
   const [temperature, setTemperature] = useState(0.7);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [phonemes, setPhonemes] = useState<Record<string, string>>({});
+  const [healed, setHealed] = useState<string | null>(null);
 
   // Estados para ajuste de velocidad sin regenerar TTS
   const [speedMode, setSpeedMode] = useState<"x" | "s">("x");
@@ -155,6 +157,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
 
     if (parsedSelectedSegment && selectedClip) {
       let rawText = "";
+      let foundPhonemes: Record<string, string> = {};
+      let foundHealed: string | null = null;
 
       // 1. Buscar en folderRefs
       const folderRef = getFolderRef(activeFolder);
@@ -164,6 +168,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           if (segInfo?.editedText || segInfo?.originalText) {
             rawText = segInfo.editedText || segInfo.originalText || "";
           }
+          if (segInfo?.phonemes) foundPhonemes = segInfo.phonemes;
+          if (segInfo?.healed) foundHealed = segInfo.healed;
         }
         if (!rawText && folderRef.segments) {
           const segByNumber = Object.values(folderRef.segments).find(
@@ -171,6 +177,12 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           );
           if (segByNumber?.editedText || segByNumber?.originalText) {
             rawText = segByNumber.editedText || segByNumber.originalText || "";
+          }
+          if (segByNumber?.phonemes && Object.keys(foundPhonemes).length === 0) {
+            foundPhonemes = segByNumber.phonemes;
+          }
+          if (segByNumber?.healed && !foundHealed) {
+            foundHealed = segByNumber.healed;
           }
         }
       }
@@ -181,6 +193,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           (s: any) => s.seg === parsedSelectedSegment.segIdx
         );
         if (vSeg?.text) rawText = vSeg.text;
+        if (vSeg?.phonemes && Object.keys(foundPhonemes).length === 0) foundPhonemes = vSeg.phonemes;
+        if (vSeg?.healed && !foundHealed) foundHealed = vSeg.healed;
       }
 
       // 3. Buscar en todos los videos del store
@@ -191,6 +205,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           );
           if (s?.text) {
             rawText = s.text;
+            if (s.phonemes && Object.keys(foundPhonemes).length === 0) foundPhonemes = s.phonemes;
+            if (s.healed && !foundHealed) foundHealed = s.healed;
             break;
           }
         }
@@ -200,21 +216,29 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       if (!rawText) {
         const globalSegs = (useV2VStore.getState() as any).segments || [];
         const s = globalSegs.find((seg: any) => seg.seg === parsedSelectedSegment.segIdx);
-        if (s?.text) rawText = s.text;
+        if (s?.text) {
+          rawText = s.text;
+          if (s.phonemes && Object.keys(foundPhonemes).length === 0) foundPhonemes = s.phonemes;
+          if (s.healed && !foundHealed) foundHealed = s.healed;
+        }
       }
 
       // 5. Fallback asíncrono desde el endpoint de segmentos si aún no está en memoria
-      if (!rawText && jobId) {
+      if (jobId) {
         v2vApi.getSegmentsEditor(jobId, activeVideoIndex).then((res) => {
           const row = res.segments?.find((r) => r.seg === parsedSelectedSegment.segIdx);
-          if (row) {
+          if (row && lastLoadedClipKeyRef.current === currentClipKey) {
             const t = row.tts_text || row.original_text || "";
-            if (t && lastLoadedClipKeyRef.current === currentClipKey) setText(t);
+            if (t && !rawText) setText(t);
+            if (row.phonemes && Object.keys(foundPhonemes).length === 0) setPhonemes(row.phonemes);
+            if (row.healed && !foundHealed) setHealed(row.healed);
           }
         }).catch(() => { });
       }
 
       setText(rawText);
+      setPhonemes(foundPhonemes);
+      setHealed(foundHealed);
 
       // Obtener voz del segmento existente
       if (parsedSelectedSegment.speakerToken) {
@@ -392,6 +416,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
           {
             start: effectivePreviewStart,
             temperature,
+            phonemes: Object.keys(phonemes).length > 0 ? phonemes : undefined,
           },
         );
         setCachedAudio({
@@ -578,7 +603,10 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             selectedVoice,
             effectiveSpeed,
             targetDuration,
-            { temperature },
+            {
+              temperature,
+              phonemes: Object.keys(phonemes).length > 0 ? phonemes : undefined,
+            },
           );
         }
 
@@ -740,9 +768,12 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         isEditingExistingSegment={isEditingExistingSegment}
         segIdx={parsedSelectedSegment?.segIdx}
         clipDuration={selectedClip?.duration}
+        healed={healed}
         onResetToNew={() => {
           clearSelection();
           setText("");
+          setPhonemes({});
+          setHealed(null);
           setCachedAudio(null);
           setIsManualPosition(false);
           setPositionInput(playheadPosition.toFixed(2));
@@ -782,6 +813,9 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         isPlayingPreview={isPlayingPreview}
         onPreview={handlePreview}
         onMainAction={handleMainAction}
+        phonemes={phonemes}
+        setPhonemes={setPhonemes}
+        healed={healed}
         mainActionLabel={
           isEditingExistingSegment
             ? `Regenerar #${parsedSelectedSegment?.segIdx}`

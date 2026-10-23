@@ -42,6 +42,9 @@ export interface TTSSegmentCardProps {
   onMainAction: () => void;
   mainActionLabel: string;
   mainActionIcon: React.ReactNode;
+  phonemes?: Record<string, string>;
+  setPhonemes?: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  healed?: string | null;
 }
 
 export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
@@ -75,7 +78,14 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
   onMainAction,
   mainActionLabel,
   mainActionIcon,
+  phonemes,
+  setPhonemes,
+  healed,
 }) => {
+  const [showPhonemes, setShowPhonemes] = React.useState(false);
+  const [newPhWord, setNewPhWord] = React.useState("");
+  const [newPhPron, setNewPhPron] = React.useState("");
+
   return (
     <div className="space-y-3">
       {/* Selectores de Voz y Emoción */}
@@ -113,7 +123,27 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
 
       {/* Área de texto */}
       <div className="space-y-1">
-        <label className="text-[10px] font-semibold text-fg-2 block">Texto del segmento</label>
+        <div className="flex items-center justify-between">
+          <label className="text-[10px] font-semibold text-fg-2 block">Texto del segmento</label>
+          {healed && (
+            <span
+              className={`text-[9px] font-medium px-1.5 py-0.2 rounded border font-mono ${
+                healed === "compressed"
+                  ? "bg-amber-500/10 text-amber-500 border-amber-500/30"
+                  : healed === "expanded"
+                    ? "bg-blue-500/10 text-blue-400 border-blue-500/30"
+                    : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+              }`}
+              title={`Segmento auto-adaptado (${healed})`}
+            >
+              {healed === "compressed"
+                ? "✂️ Auto-Heal (Contraído)"
+                : healed === "expanded"
+                  ? "🔉 Auto-Heal (Expandido)"
+                  : `✨ ${healed}`}
+            </span>
+          )}
+        </div>
         <textarea
           ref={textareaRef}
           value={text}
@@ -302,6 +332,128 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
               <span>Más variado / expresivo (1.0)</span>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Sección Fonemas / Pronunciación */}
+      {phonemes !== undefined && setPhonemes && (
+        <div className="border-t border-border/50 pt-2 space-y-2">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setShowPhonemes(!showPhonemes)}
+              className="flex items-center gap-1.5 text-[11px] text-fg-3 hover:text-fg py-1 transition-colors cursor-pointer"
+            >
+              <span className="font-medium">Fonemas / Pronunciación</span>
+              <span className="text-[9px] text-primary font-medium">S2.1</span>
+              {Object.keys(phonemes).length > 0 && (
+                <span className="text-[9px] px-1 rounded bg-primary/20 text-primary font-mono">
+                  {Object.keys(phonemes).length}
+                </span>
+              )}
+              {showPhonemes ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
+            {showPhonemes && Object.keys(phonemes).length > 0 && (
+              <button
+                type="button"
+                onClick={() => setPhonemes({})}
+                className="text-[9px] text-red-400 hover:text-red-300 transition-colors"
+                title="Borrar todos los fonemas"
+              >
+                Limpiar todo
+              </button>
+            )}
+          </div>
+
+          {showPhonemes && (
+            <div className="p-2 rounded-lg bg-bg-1 border border-border/70 space-y-2 animate-in fade-in duration-150">
+              {Object.entries(phonemes).length === 0 ? (
+                <p className="text-[10px] text-fg-4 italic">No hay fonemas personalizados para este segmento.</p>
+              ) : (
+                Object.entries(phonemes).map(([word, pron]) => (
+                  <div key={word} className="flex items-center gap-1">
+                    <input
+                      type="text"
+                      value={word}
+                      readOnly
+                      className="w-[38%] px-2 py-1 bg-bg-2 border border-border rounded text-[10px] text-fg-3 font-mono cursor-default"
+                      title="Palabra exacta en el texto"
+                    />
+                    <span className="text-fg-4 text-[10px]">→</span>
+                    <input
+                      type="text"
+                      value={pron}
+                      onChange={(e) => setPhonemes((prev) => ({ ...prev, [word]: e.target.value }))}
+                      className="flex-1 px-2 py-1 bg-bg-2 border border-border rounded text-[10px] text-fg font-mono focus:outline-none focus:border-primary"
+                      placeholder="pronunciación"
+                      title="Pronunciación fonética para el TTS"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPhonemes((prev) => {
+                          const n = { ...prev };
+                          delete n[word];
+                          return n;
+                        })
+                      }
+                      className="text-red-400 hover:text-red-300 text-[11px] px-1 transition-colors"
+                      title="Eliminar"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))
+              )}
+
+              <div className="flex items-center gap-1 pt-1 border-t border-border/50">
+                <input
+                  type="text"
+                  value={newPhWord}
+                  onChange={(e) => setNewPhWord(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newPhWord.trim() && newPhPron.trim()) {
+                      setPhonemes((prev) => ({ ...prev, [newPhWord.trim()]: newPhPron.trim() }));
+                      setNewPhWord("");
+                      setNewPhPron("");
+                    }
+                  }}
+                  className="w-[38%] px-2 py-1 bg-bg-2 border border-border rounded text-[10px] text-fg font-mono focus:outline-none focus:border-primary"
+                  placeholder="Palabra..."
+                />
+                <span className="text-fg-4 text-[10px]">→</span>
+                <input
+                  type="text"
+                  value={newPhPron}
+                  onChange={(e) => setNewPhPron(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newPhWord.trim() && newPhPron.trim()) {
+                      setPhonemes((prev) => ({ ...prev, [newPhWord.trim()]: newPhPron.trim() }));
+                      setNewPhWord("");
+                      setNewPhPron("");
+                    }
+                  }}
+                  className="flex-1 px-2 py-1 bg-bg-2 border border-border rounded text-[10px] text-fg font-mono focus:outline-none focus:border-primary"
+                  placeholder="pronunciación..."
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (newPhWord.trim() && newPhPron.trim()) {
+                      setPhonemes((prev) => ({ ...prev, [newPhWord.trim()]: newPhPron.trim() }));
+                      setNewPhWord("");
+                      setNewPhPron("");
+                    }
+                  }}
+                  disabled={!newPhWord.trim() || !newPhPron.trim()}
+                  className="px-2 py-1 bg-primary/20 border border-primary/40 rounded text-[10px] text-primary hover:bg-primary/30 transition-all disabled:opacity-30"
+                  title="Agregar fonema (o presiona Enter)"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

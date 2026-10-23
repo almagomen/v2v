@@ -186,6 +186,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         repetitionPenalty: 1.2,
         volume: 0.0,
         phonemes: apiRow.phonemes || {},
+        healed: apiRow.healed || null,
       };
       // Si el audio falta, forzamos dirty=true para que "Aplicar todos" lo incluya automáticamente
       const forceDirty = missingAudio && ttsText.trim().length > 0;

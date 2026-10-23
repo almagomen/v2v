@@ -153,6 +153,7 @@ export interface GenerateAudioSegmentOptions {
   repetition_penalty?: number;
   volume?: number;
   video_path?: string;
+  phonemes?: Record<string, string>;
 }
 
 export interface GeneratedAudioResult {
@@ -173,6 +174,7 @@ export interface SegmentEditorRow {
   original_speaker?: string | null;
   filename?: string | null;
   phonemes?: Record<string, string>;
+  healed?: string | null;
 }
 
 
@@ -575,6 +577,7 @@ export const v2vApi = {
         top_p: options?.top_p ?? 0.7,
         repetition_penalty: options?.repetition_penalty ?? 1.2,
         volume: options?.volume ?? 0.0,
+        phonemes: options?.phonemes,
       }),
     });
     if (!res.ok) {

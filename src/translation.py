@@ -634,6 +634,7 @@ def auto_heal_long_segments(
     target_lang: str = "es",
     source_lang: str = "es",
     model_name: Optional[str] = None,
+    attempt: int = 1,
 ) -> dict[int, str]:
     """
     Reescribe de forma más concisa y sintética los segmentos que desbordaron su ranura temporal,
@@ -656,7 +657,7 @@ def auto_heal_long_segments(
         idx = item["idx"]
         dur_target = item["dur_en"]
         dur_actual = item["dur_es"]
-        needed_chars = int(round(dur_target * 14.0))
+        needed_chars = int(round(dur_target * 16.0))
         cur_text = item["text_dict"].get("text", "")
         input_dict[str(idx + 1)] = {
             "texto_actual": cur_text,
@@ -665,15 +666,19 @@ def auto_heal_long_segments(
             "caracteres_objetivo": f"máximo ~{needed_chars} chars",
         }
 
-    prompt = f"""Eres un especialista en doblaje audiovisual y adaptación de guiones para síntesis de voz (TTS).
-Las siguientes frases dobladas al {target_lang_name} tardaron demasiado tiempo al sintetizarse por voz y se desbordaron respecto a la escena original del video, amenazando con solaparse sobre la siguiente frase.
+    attempt_note = ""
+    if attempt > 1:
+        attempt_note = f"\n⚠️ ATENCIÓN (Reintento {attempt}/3): La síntesis anterior aún sobrepasó el límite. Necesitas sintetizar con mayor precisión y concisión sin perder partes esenciales del mensaje."
 
-Tu misión es REESCRIBIR DE FORMA MÁS CONCISA, SINTÉTICA Y DIRECTA cada frase en {target_lang_name}, eliminando palabras de relleno, perífrasis o giros redundantes, conservando al 100% la MISMA idea central, significado e intención del {source_lang_name}. La frase debe ser más compacta para aproximarse a los caracteres objetivo indicados, entrando holgadamente en el tiempo disponible con velocidad de habla natural (sin acelerar).
+    prompt = f"""Eres un especialista en doblaje audiovisual y adaptación de guiones para síntesis de voz (TTS).
+Las siguientes frases dobladas al {target_lang_name} tardaron más tiempo del presupuestado al sintetizarse por voz y se desbordaron respecto al clip de video original, amenazando con solaparse sobre el siguiente segmento.{attempt_note}
+
+Tu misión es REESCRIBIR DE FORMA MÁS CONCISA Y DIRECTA cada frase en {target_lang_name}, eliminando rodeos, perífrasis o muletillas, pero conservando la idea completa, los saludos/despedidas y el significado esencial del {source_lang_name}. No cortes oraciones completas abruptamente; busca una síntesis equilibrada (~15-20% menos palabras) que mantenga el ritmo oral y la coherencia del diálogo para alcanzar aproximadamente los caracteres objetivo.
 
 Directrices:
 1. Mantén la numeración idéntica en el JSON de salida.
-2. Si la frase contiene marcadores de emoción entre corchetes, consérvalos o adáptalos.
-3. No uses [break] ni [long-break] en frases que necesitan ser acortadas.
+2. Si la frase contiene marcadores de emoción entre corchetes (ej: [happy], [confident]), consérvalos o adáptalos apropiadamente.
+3. Puedes usar [break] si la frase contiene oraciones compuestas y el tiempo lo permite.
 4. Devuelve ÚNICAMENTE un JSON con las claves numéricas y la versión concisa adaptada.
 
 Entrada:

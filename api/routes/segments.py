@@ -26,6 +26,9 @@ def _load_result_texts(video_folder: Path) -> tuple[list[dict], list[dict], str 
 
     tts_list = result_data.get("segments", [])
     original_list = result_data.get("original_segments", [])
+    if not original_list:
+        from src.result_store import get_result_original_segments
+        original_list = get_result_original_segments(video_folder)
     source_lang = result_data.get("source_lang")
 
     return tts_list, original_list, source_lang
@@ -87,9 +90,14 @@ def get_segments_editor(job_id: str, video_index: int):
             tts_text = str(tts_d["text"])
             speaker = tts_d.get("speaker") or orig_d.get("speaker")
 
-        original_text = str(orig_d["text"])
-        if not original_text.strip() and tts_text.strip():
-            original_text = tts_text
+        # Texto original (lenguaje fuente STT, ej. portugués) preservado fielmente
+        original_text = (
+            orig_d.get("original_text")
+            or orig_d.get("text")
+            or tts_d.get("original_text")
+            or (js.get("original_text") if i < len(job_segments) else "")
+            or ""
+        )
 
         orig_spk = (
             orig_d.get("original_speaker")
@@ -101,6 +109,7 @@ def get_segments_editor(job_id: str, video_index: int):
 
         slot = max(0.0, end - start)
         seg_ph = tts_d.get("phonemes") or orig_d.get("phonemes") or (js.get("phonemes") if i < len(job_segments) else None)
+        healed_status = tts_d.get("healed") or (js.get("healed") if i < len(job_segments) else None)
         rows.append(
             SegmentEditorRow(
                 seg=seg_num,
@@ -113,6 +122,7 @@ def get_segments_editor(job_id: str, video_index: int):
                 original_speaker=orig_spk,
                 filename=_find_tts_filename(folder, seg_num),
                 phonemes=seg_ph,
+                healed=healed_status,
             )
         )
 
