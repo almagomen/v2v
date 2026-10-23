@@ -1,6 +1,5 @@
 import type { PersistedJobState } from "./v2v-types";
 
-export const JOB_STATE_STORAGE_KEY = "openreel.v2v.jobState";
 export const PROJECT_JOB_STORAGE_PREFIX = "openreel.v2v.projectJob.";
 export const V2V_PREFERENCES_STORAGE_KEY = "openreel.v2v.preferences";
 
@@ -68,16 +67,6 @@ export function clearJobStateForProject(projectId: string | null): void {
   try {
     localStorage.removeItem(`${PROJECT_JOB_STORAGE_PREFIX}${projectId}`);
   } catch {}
-}
-
-export function loadJobStateFromStorage(): Partial<PersistedJobState> {
-  if (typeof window === "undefined") return {};
-  try {
-    localStorage.removeItem(JOB_STATE_STORAGE_KEY);
-    return {};
-  } catch {
-    return {};
-  }
 }
 
 import { useProjectStore } from "@/stores/project-store";

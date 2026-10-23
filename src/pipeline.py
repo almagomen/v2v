@@ -76,10 +76,8 @@ def process_video_queue(
                             c_segs = result_data.get("segments", [])
                             c_orig = result_data.get("original_segments", [])
                             for i, cs in enumerate(c_segs):
-                                if not (cs.get("orig_text") or cs.get("original_text")) and i < len(c_orig):
-                                    raw_o = c_orig[i].get("text", "")
-                                    cs["orig_text"] = raw_o
-                                    cs["original_text"] = raw_o
+                                if not cs.get("original_text") and i < len(c_orig):
+                                    cs["original_text"] = c_orig[i].get("text", "")
                             results.append(
                                 {
                                     "path": path,
@@ -113,10 +111,8 @@ def process_video_queue(
                     c_segs = cached_data.get("segments", [])
                     c_orig = cached_data.get("original_segments", [])
                     for i, cs in enumerate(c_segs):
-                        if not (cs.get("orig_text") or cs.get("original_text")) and i < len(c_orig):
-                            raw_o = c_orig[i].get("text", "")
-                            cs["orig_text"] = raw_o
-                            cs["original_text"] = raw_o
+                        if not cs.get("original_text") and i < len(c_orig):
+                            cs["original_text"] = c_orig[i].get("text", "")
                     results.append(
                         {
                             "path": path,

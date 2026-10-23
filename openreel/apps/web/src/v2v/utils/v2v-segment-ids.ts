@@ -21,7 +21,6 @@ export interface V2VSegmentInfo {
   createdAt: number;
   updatedAt: number;
   phonemes?: Record<string, string>;
-  healed?: string | null;
 }
 
 export interface V2VFolderData {

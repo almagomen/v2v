@@ -109,7 +109,6 @@ def get_segments_editor(job_id: str, video_index: int):
 
         slot = max(0.0, end - start)
         seg_ph = tts_d.get("phonemes") or orig_d.get("phonemes") or (js.get("phonemes") if i < len(job_segments) else None)
-        healed_status = tts_d.get("healed") or (js.get("healed") if i < len(job_segments) else None)
         rows.append(
             SegmentEditorRow(
                 seg=seg_num,
@@ -122,7 +121,6 @@ def get_segments_editor(job_id: str, video_index: int):
                 original_speaker=orig_spk,
                 filename=_find_tts_filename(folder, seg_num),
                 phonemes=seg_ph,
-                healed=healed_status,
             )
         )
 
@@ -215,7 +213,7 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
                     start=curr.get("start", meta.get("start", 0.0)),
                     end=curr.get("end", meta.get("end", 0.0)),
                     text=txt,
-                    orig_text=meta.get("orig_text") or meta.get("original_text") or curr.get("orig_text") or txt,
+                    original_text=meta.get("original_text") or curr.get("original_text") or txt,
                     speaker=curr.get("speaker") or meta.get("speaker") or "mrbeast",
                     original_speaker=meta.get("original_speaker") or curr.get("original_speaker") or "SPEAKER_00",
                     phonemes=ph or meta.get("phonemes") or curr.get("phonemes"),
@@ -223,7 +221,7 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
                         k: v for k, v in curr.items()
                         if k not in (
                             "seg", "start", "end", "duration", "text",
-                            "orig_text", "original_text", "speaker",
+                            "original_text", "speaker",
                             "original_speaker", "phonemes"
                         )
                     },

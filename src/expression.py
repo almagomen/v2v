@@ -29,8 +29,6 @@ CANONICAL_EMOTIONS = {
     # 5. Efectos Especiales y Pausas
     "break", "long-break", "audience laughing", "background laughter", "crowd laughing",
 }
-# Alias para retrocompatibilidad
-CANONICAL_FISH_EMOTIONS = CANONICAL_EMOTIONS
 
 def normalize_emotion_tag(tag: str) -> Optional[str]:
     """Valida y limpia el tag contra el catálogo canónico oficial."""

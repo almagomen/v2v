@@ -8,7 +8,6 @@ export interface TTSBatchControlsProps {
   clipDuration?: number;
   onResetToNew?: () => void;
   onOpenBulkEditor: () => void;
-  healed?: string | null;
 }
 
 export const TTSBatchControls: React.FC<TTSBatchControlsProps> = ({
@@ -17,7 +16,6 @@ export const TTSBatchControls: React.FC<TTSBatchControlsProps> = ({
   clipDuration,
   onResetToNew,
   onOpenBulkEditor,
-  healed,
 }) => {
   return (
     <div className="flex items-center justify-between border-b border-border/50 pb-2.5">
@@ -47,24 +45,6 @@ export const TTSBatchControls: React.FC<TTSBatchControlsProps> = ({
                   ? "Clip"
                   : "IA N+1"}
             </span>
-            {healed && (
-              <span
-                className={`text-[9px] font-medium px-1.5 py-0.2 rounded border font-mono ${
-                  healed === "compressed"
-                    ? "bg-amber-500/10 text-amber-500 border-amber-500/30"
-                    : healed === "expanded"
-                      ? "bg-blue-500/10 text-blue-400 border-blue-500/30"
-                      : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                }`}
-                title={`Segmento auto-adaptado por TTS (${healed})`}
-              >
-                {healed === "compressed"
-                  ? "✂️ Auto-Heal (Contraído)"
-                  : healed === "expanded"
-                    ? "🔉 Auto-Heal (Expandido)"
-                    : `✨ ${healed}`}
-              </span>
-            )}
           </div>
           <p className="text-[10px] text-fg-3">
             {isEditingExistingSegment

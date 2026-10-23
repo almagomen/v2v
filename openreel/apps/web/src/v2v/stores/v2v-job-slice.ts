@@ -34,7 +34,6 @@ import {
 import { getMediaBridge, initializeMediaBridge } from "@/bridges/media-bridge";
 import type { V2VState, JobSlice, SerializedFolderData } from "./v2v-types";
 import {
-  JOB_STATE_STORAGE_KEY,
   saveJobStateToStorage,
   loadJobStateForProject,
   saveJobStateForProject,
@@ -185,141 +184,25 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
         return;
       }
 
-      // 1. Intentar cargar el estado guardado para este projectId exacto
-      let saved = loadJobStateForProject(projectId);
-      let hasSavedData = !!(
+      // Cargar únicamente el estado guardado para este projectId exacto
+      const saved = loadJobStateForProject(projectId);
+      const hasSavedData = !!(
         saved.urls ||
         (saved.videos && saved.videos.length > 0) ||
         saved.jobId ||
         (saved.urlLogs && Object.keys(saved.urlLogs).length > 0)
       );
 
-      // 2. Resolver proyecto actual y folderRef coincidente
-      const currentProject = useProjectStore.getState().project;
-      const folderRefs = get().folderRefs;
-      const matchingRef = Object.values(folderRefs).find(
-        (ref) =>
-          ref.projectId === projectId ||
-          (currentProject && currentProject.name && folderNameFromTitle(ref.outputName || "") === currentProject.name),
-      );
-
-      if (!hasSavedData) {
-        if (matchingRef) {
-          if (matchingRef.projectId && matchingRef.projectId !== projectId) {
-            saved = loadJobStateForProject(matchingRef.projectId);
-            hasSavedData = !!(saved.urls || (saved.videos && saved.videos.length > 0) || saved.jobId);
-          }
-          if (!hasSavedData && get().jobId === matchingRef.jobId && get().videos.length > 0) {
-            saveJobStateForProject(projectId, {
-              urls: get().urls,
-              jobId: get().jobId,
-              progress: get().progress,
-              videos: get().videos,
-              selectedVideoIndex: matchingRef.videoIndex ?? get().selectedVideoIndex,
-              segments: get().segments,
-              urlItems: get().urlItems,
-              urlLogs: get().urlLogs,
-              log: get().log,
-              jobPhase: get().jobPhase,
-              importStatusByKey: get().importStatusByKey,
-              shareUrl: get().shareUrl,
-              lastUrlsSignature: get().lastUrlsSignature,
-            });
-            set({ currentProjectId: projectId, selectedVideoIndex: matchingRef.videoIndex ?? get().selectedVideoIndex });
-            return;
-          }
-        }
-      }
-
-      // 3. Si aún así no hay datos guardados pero el estado actual en memoria tiene videos y el proyecto activo coincide
-      if (!hasSavedData && get().videos.length > 0) {
-        const activeProject = useProjectStore.getState().project;
-        const match = get().videos.find(
-          (v: any) => folderNameFromTitle(v.output_name || `video_${v.index}`) === activeProject?.name,
-        );
-        if (match) {
-          saveJobStateForProject(projectId, {
-            urls: get().urls,
-            jobId: get().jobId,
-            progress: get().progress,
-            videos: get().videos,
-            selectedVideoIndex: match.index ?? 0,
-            segments: get().segments,
-            urlItems: get().urlItems,
-            urlLogs: get().urlLogs,
-            log: get().log,
-            jobPhase: get().jobPhase,
-            importStatusByKey: get().importStatusByKey,
-            shareUrl: get().shareUrl,
-            lastUrlsSignature: get().lastUrlsSignature,
-          });
-          set({ currentProjectId: projectId, selectedVideoIndex: match.index ?? 0 });
-          return;
-        }
-      }
-
       if (hasSavedData) {
-        // Preservar la lista de videos y URLs más completa entre memoria y storage si corresponden a la misma corrida o job
-        let effectiveVideos = saved.videos ?? [];
-        let effectiveUrlItems = saved.urlItems ?? [];
-        let effectiveUrls = saved.urls ?? "";
-
-        // Si la lista de URLs guardada tiene menos links que urlItems o que la memoria, usar la lista completa
-        const savedUrlCount = effectiveUrls.trim().split("\n").filter(Boolean).length;
-        const memoryUrlCount = get().urls.trim().split("\n").filter(Boolean).length;
-        if (memoryUrlCount > savedUrlCount && (!saved.jobId || saved.jobId === get().jobId)) {
-          effectiveUrls = get().urls;
-        } else if (effectiveUrlItems.length > savedUrlCount) {
-          effectiveUrls = effectiveUrlItems.map((it: any) => it.url).filter(Boolean).join("\n");
-        }
-
-        if (get().videos.length > effectiveVideos.length && (!saved.jobId || saved.jobId === get().jobId)) {
-          effectiveVideos = get().videos;
-          if (get().urlItems.length > effectiveUrlItems.length) {
-            effectiveUrlItems = get().urlItems;
-          }
-          saveJobStateForProject(projectId, { urls: effectiveUrls, videos: effectiveVideos, urlItems: effectiveUrlItems });
-        } else if (saved.jobId) {
-          // Buscar en otros folderRefs del mismo job si hay una lista de videos o URLs más completa
-          for (const ref of Object.values(get().folderRefs)) {
-            if (ref.projectId && ref.jobId === saved.jobId && ref.projectId !== projectId) {
-              const otherSaved = loadJobStateForProject(ref.projectId);
-              if (otherSaved.videos && otherSaved.videos.length > effectiveVideos.length) {
-                effectiveVideos = otherSaved.videos;
-                if (otherSaved.urlItems && otherSaved.urlItems.length > effectiveUrlItems.length) {
-                  effectiveUrlItems = otherSaved.urlItems;
-                }
-                const otherUrlCount = (otherSaved.urls || "").trim().split("\n").filter(Boolean).length;
-                if (otherUrlCount > effectiveUrls.trim().split("\n").filter(Boolean).length) {
-                  effectiveUrls = otherSaved.urls!;
-                }
-                saveJobStateForProject(projectId, { urls: effectiveUrls, videos: effectiveVideos, urlItems: effectiveUrlItems });
-                break;
-              }
-            }
-          }
-        }
-
-        // Determinar selectedVideoIndex óptimo para este proyecto
-        let targetVideoIndex = saved.selectedVideoIndex ?? 0;
-        if (matchingRef?.videoIndex !== undefined) {
-          targetVideoIndex = matchingRef.videoIndex;
-        } else if (currentProject?.name) {
-          const matchIdx = effectiveVideos.findIndex(
-            (v: any) => folderNameFromTitle(v.output_name || `video_${v.index}`) === currentProject.name,
-          );
-          if (matchIdx >= 0) targetVideoIndex = matchIdx;
-        }
-
         set({
           currentProjectId: projectId,
-          urls: effectiveUrls,
+          urls: saved.urls ?? "",
           jobId: saved.jobId ?? null,
           progress: saved.progress ?? 0,
-          videos: effectiveVideos,
-          selectedVideoIndex: targetVideoIndex,
+          videos: saved.videos ?? [],
+          selectedVideoIndex: saved.selectedVideoIndex ?? 0,
           segments: saved.segments ?? [],
-          urlItems: effectiveUrlItems,
+          urlItems: saved.urlItems ?? [],
           urlLogs: saved.urlLogs ?? {},
           log: saved.log ?? "",
           jobPhase: (saved.jobPhase as any) ?? "idle",
@@ -1386,7 +1269,8 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
     reset: () => {
       get().stopPolling();
       saveFolderRefsToStorage({});
-      localStorage.removeItem(JOB_STATE_STORAGE_KEY);
+      const pid = get().currentProjectId;
+      if (pid) clearJobStateForProject(pid);
       set({
         urls: "",
         translateLang: "None",

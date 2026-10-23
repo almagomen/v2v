@@ -44,7 +44,6 @@ export interface TTSSegmentCardProps {
   mainActionIcon: React.ReactNode;
   phonemes?: Record<string, string>;
   setPhonemes?: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  healed?: string | null;
 }
 
 export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
@@ -80,7 +79,6 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
   mainActionIcon,
   phonemes,
   setPhonemes,
-  healed,
 }) => {
   const [showPhonemes, setShowPhonemes] = React.useState(false);
   const [newPhWord, setNewPhWord] = React.useState("");
@@ -125,24 +123,6 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <label className="text-[10px] font-semibold text-fg-2 block">Texto del segmento</label>
-          {healed && (
-            <span
-              className={`text-[9px] font-medium px-1.5 py-0.2 rounded border font-mono ${
-                healed === "compressed"
-                  ? "bg-amber-500/10 text-amber-500 border-amber-500/30"
-                  : healed === "expanded"
-                    ? "bg-blue-500/10 text-blue-400 border-blue-500/30"
-                    : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-              }`}
-              title={`Segmento auto-adaptado (${healed})`}
-            >
-              {healed === "compressed"
-                ? "✂️ Auto-Heal (Contraído)"
-                : healed === "expanded"
-                  ? "🔉 Auto-Heal (Expandido)"
-                  : `✨ ${healed}`}
-            </span>
-          )}
         </div>
         <textarea
           ref={textareaRef}

@@ -104,12 +104,11 @@ def _do_regenerate_segment(
     # Recuperar fonemas previos si no se pasaron explícitamente en el request
     seg_phonemes = phonemes if phonemes is not None else texts_original[seg_idx - 1].get("phonemes", {})
 
-    orig_txt_val = texts_original[seg_idx - 1].get("orig_text") or texts_original[seg_idx - 1].get("original_text", "")
+    orig_txt_val = texts_original[seg_idx - 1].get("original_text", "")
     t_edit = {
         "start": start,
         "end": end,
         "text": text,
-        "orig_text": orig_txt_val,
         "original_text": orig_txt_val,
         "phonemes": seg_phonemes,
         # Resolvemos siempre a la clave legible del diccionario (ej: 'mrbeast')
@@ -283,7 +282,7 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
         start=round(float(req.start or 0.0), 3),
         end=round(float(req.start or 0.0) + duration, 3),
         text=req.text,
-        orig_text=req.text,
+        original_text=req.text,
         speaker=speaker_key,
         phonemes=req.phonemes,
     )

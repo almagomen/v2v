@@ -149,7 +149,6 @@ def create_segment_entry(
     start: float,
     end: float,
     text: str,
-    orig_text: Optional[str] = None,
     original_text: Optional[str] = None,
     speaker: Optional[str] = None,
     original_speaker: Optional[str] = None,
@@ -157,7 +156,6 @@ def create_segment_entry(
     orig_start: Optional[float] = None,
     orig_end: Optional[float] = None,
     orig_duration: Optional[float] = None,
-    healed: Optional[str] = None,
     syllable_count: Optional[int] = None,
     internal_pause_sec: Optional[float] = None,
     **extra,
@@ -175,7 +173,7 @@ def create_segment_entry(
     o_end = round(float(orig_end), 3) if orig_end is not None else e_val
     o_dur = round(float(orig_duration), 3) if orig_duration is not None else max(0.1, round(o_end - o_start, 3))
 
-    resolved_orig = original_text if original_text is not None else (orig_text or text)
+    resolved_orig = original_text if original_text is not None else text
     clean_text = re.sub(r"\[.*?\]", "", str(text)).strip()
 
     if syllable_count is None:
@@ -210,8 +208,6 @@ def create_segment_entry(
         entry["syllable_count"] = syl_cnt
     if clean_phonemes:
         entry["phonemes"] = clean_phonemes
-    if healed:
-        entry["healed"] = str(healed)
     if internal_pause_sec:
         entry["internal_pause_sec"] = float(internal_pause_sec)
 

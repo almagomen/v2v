@@ -1,18 +1,17 @@
 import type { StateCreator } from "zustand";
 import { v2vApi, type Segment } from "../api/v2v-api";
 import type { V2VState, SegmentsSlice } from "./v2v-types";
-import { loadJobStateFromStorage, saveJobStateToStorage } from "./v2v-storage";
+import { saveJobStateToStorage } from "./v2v-storage";
 
 let isFetchingSpeakers = false;
 
 export const createSegmentsSlice: StateCreator<V2VState, [], [], SegmentsSlice> = (set, get) => {
-  const saved = loadJobStateFromStorage();
   return {
-    segments: saved.segments ?? [],
+    segments: [],
     selectedRowIndex: null,
     regenStatus: "",
-    translateLang: saved.translateLang ?? "None",
-    speaker: saved.speaker ?? "mrbeast",
+    translateLang: "None",
+    speaker: "mrbeast",
     speakers: [],
     speakerMap: {},
     detectedSpeakers: [],

@@ -36,7 +36,8 @@ export {
   saveFolderRefsToStorage,
 } from "./v2v-folders-slice";
 export {
-  JOB_STATE_STORAGE_KEY,
-  loadJobStateFromStorage,
   saveJobStateToStorage,
+  loadJobStateForProject,
+  saveJobStateForProject,
+  clearJobStateForProject,
 } from "./v2v-storage";

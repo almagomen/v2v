@@ -158,7 +158,7 @@ def _run_pipeline(
                         start=t["start"],
                         end=t["end"],
                         text=t["text"],
-                        orig_text=t.get("orig_text") or t.get("original_text", ""),
+                        original_text=t.get("original_text", ""),
                         speaker=t.get("speaker", speaker_name),
                         original_speaker=t.get("original_speaker") or t.get("speaker") or "SPEAKER_00",
                         phonemes=t.get("phonemes"),

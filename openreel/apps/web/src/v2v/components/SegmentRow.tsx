@@ -44,7 +44,6 @@ export type BulkSegmentRow = {
   repetitionPenalty: number;
   volume: number;
   phonemes?: Record<string, string>;
-  healed?: string | null;
 };
 
 
@@ -173,24 +172,6 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
           <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-medium">
             <AlertTriangle size={10} />
             Sin audio – regenerar
-          </span>
-        )}
-        {row.healed && (
-          <span
-            className={`text-[9px] font-medium px-1.5 py-0.5 rounded border font-mono ${
-              row.healed === "compressed"
-                ? "bg-amber-500/10 text-amber-500 border-amber-500/30"
-                : row.healed === "expanded"
-                  ? "bg-blue-500/10 text-blue-400 border-blue-500/30"
-                  : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-            }`}
-            title={`Segmento auto-adaptado (${row.healed})`}
-          >
-            {row.healed === "compressed"
-              ? "✂️ Auto-Heal (Contraído)"
-              : row.healed === "expanded"
-                ? "🔉 Auto-Heal (Expandido)"
-                : `✨ ${row.healed}`}
           </span>
         )}
         {row.dirty && (

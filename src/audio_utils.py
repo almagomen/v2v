@@ -71,7 +71,6 @@ def _extract_emotion_prefix(text: str) -> tuple[str, str]:
 def _format_aligned_segment_texts(
     orig_text: str,
     final_text: str,
-    short_text: Optional[str] = None,
     source_lang: str = "pt",
     indent: str = "      ",
 ) -> list[str]:
@@ -80,26 +79,16 @@ def _format_aligned_segment_texts(
     y adaptación dinámica de la etiqueta de idioma original ([ pt ]).
     """
     tag_final, cont_final = _extract_emotion_prefix(final_text)
-    tag_short, cont_short = _extract_emotion_prefix(short_text) if short_text else ("", "")
-
-    has_emotion = bool(tag_final or tag_short)
+    has_emotion = bool(tag_final)
 
     lines = []
     clean_curr = re.sub(r"\[.*?\]", "", final_text).strip()
     clean_orig = re.sub(r"\[.*?\]", "", orig_text).strip()
     is_translation = bool(clean_orig and clean_orig.lower() != clean_curr.lower())
 
-    if not is_translation:
-        if short_text:
-            lines.append(f"{indent}{short_text}")
-        lines.append(f"{indent}{final_text}")
-        return lines
-
-    # Si la frase traducida no tiene expresión inicial, no colocar etiqueta [idioma]
-    if not has_emotion:
-        lines.append(f"{indent}{orig_text}")
-        if short_text:
-            lines.append(f"{indent}{short_text}")
+    if not is_translation or not has_emotion:
+        if is_translation:
+            lines.append(f"{indent}{orig_text}")
         lines.append(f"{indent}{final_text}")
         return lines
 
@@ -108,29 +97,15 @@ def _format_aligned_segment_texts(
     tag_orig = f"[ {sl} ]" if len(sl) == 2 else f"[{sl}]"
 
     len_orig = len(tag_orig)
-    len_short = len(tag_short) if (short_text and tag_short) else 0
     len_final = len(tag_final) if tag_final else 0
-
-    max_w = max(len_orig, len_final, len_short)
+    max_w = max(len_orig, len_final)
 
     # Alinear a la derecha las etiquetas para que el corchete ']' concuerde en la misma columna
     pad_orig = " " * (max_w - len_orig)
     lines.append(f"{indent}{pad_orig}{tag_orig} {orig_text}")
 
-    if short_text:
-        if tag_short:
-            pad_short = " " * (max_w - len_short)
-            lines.append(f"{indent}{pad_short}{tag_short} {cont_short}")
-        else:
-            pad_short = " " * (max_w + 1)
-            lines.append(f"{indent}{pad_short}{cont_short}")
-
-    if tag_final:
-        pad_final = " " * (max_w - len_final)
-        lines.append(f"{indent}{pad_final}{tag_final} {cont_final}")
-    else:
-        pad_final = " " * (max_w + 1)
-        lines.append(f"{indent}{pad_final}{cont_final}")
+    pad_final = " " * (max_w - len_final)
+    lines.append(f"{indent}{pad_final}{tag_final} {cont_final}")
 
     return lines
 
@@ -707,8 +682,6 @@ def clone_voice_segments(
             for i, res in executor.map(_fetch_tts, tts_tasks):
                 tts_results[i] = res
 
-        healed_records: dict[int, dict] = {}
-
     if only_indices is None or len(only_indices) > 1:
         header = f"{' #':<5}{'MODO':<20}{'DURACIONES [ORIG | FISH]'}"
         print("-" * 52)
@@ -792,28 +765,21 @@ def clone_voice_segments(
         seq_col = f"{seq_num:>3d}. "
         mode_col = _pad_visible_tag(mode_tag, 20)
 
-        # Si hubo auto-heal, incluir long o short según corresponda en la caja de duraciones
-        h = healed_records.get(idx)
-        tag_name = "long" if h and h.get("type") == "overflow" else "short"
-        dur_tag_part = f" | {tag_name}: {h['old_dur']:5.2f}s" if h else ""
-
         # Solo si la duración final difiere sustancialmente tanto de orig como de fish (ej. clamp final de video)
         extra_fin = ""
         if abs(final_dur - dur_en) > 0.08 and abs(final_dur - raw_dur_es) > 0.08:
             extra_fin = f" ➔ fin: {final_dur:5.2f}s"
 
-        dur_col = f"[orig: {dur_en:5.2f}s{dur_tag_part} | fish: {raw_dur_es:5.2f}s{extra_fin}]"
+        dur_col = f"[orig: {dur_en:5.2f}s | fish: {raw_dur_es:5.2f}s{extra_fin}]"
         print(f"{seq_col}{mode_col}{dur_col}")
 
         indent = "      "
 
-        orig_text = str(text_dict.get("orig_text") or text_dict.get("original_text") or "").strip()
-        short_text = h.get("old_text") if h else None
+        orig_text = str(text_dict.get("original_text", "")).strip()
 
         aligned_lines = _format_aligned_segment_texts(
             orig_text=orig_text,
             final_text=text,
-            short_text=short_text,
             source_lang=src_lang,
             indent=indent,
         )
@@ -828,9 +794,6 @@ def clone_voice_segments(
         path_es.append(audio_es_path)
         start_samples = int(start_time * rate)
         times.append(start_samples)
-
-    if healed_records:
-        print(f"\n✨ [Auto-Heal] {len(healed_records)} segmentos re-expandidos exitosamente en el flujo de doblaje.", flush=True)
 
     return path_es, times, rate
 

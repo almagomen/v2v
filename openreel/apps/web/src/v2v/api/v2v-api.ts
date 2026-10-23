@@ -92,10 +92,8 @@ export interface Segment {
   text: string;
   speaker?: string;
   original_speaker?: string;
-  orig_text?: string;
   original_text?: string;
   phonemes?: Record<string, string>;
-  healed?: string;
   internal_pause_sec?: number;
   syllable_count?: number;
 }
@@ -174,7 +172,6 @@ export interface SegmentEditorRow {
   original_speaker?: string | null;
   filename?: string | null;
   phonemes?: Record<string, string>;
-  healed?: string | null;
 }
 
 
