@@ -81,7 +81,7 @@ export async function addClipToDetachedProject(
  */
 export async function addMultipleClipsToDetachedProject(
   project: Project,
-  clipsToAdd: Array<{ trackId: string; mediaId: string; startTime: number }>,
+  clipsToAdd: Array<{ trackId: string; mediaId: string; startTime: number; duration?: number }>,
 ): Promise<{ project: Project; addedCount: number }> {
   if (clipsToAdd.length === 0) return { project, addedCount: 0 };
 
@@ -94,7 +94,12 @@ export async function addMultipleClipsToDetachedProject(
       type: "clip/add",
       id: uuidv4(),
       timestamp: Date.now(),
-      params: { trackId: item.trackId, mediaId: item.mediaId, startTime: item.startTime },
+      params: {
+        trackId: item.trackId,
+        mediaId: item.mediaId,
+        startTime: item.startTime,
+        ...(item.duration !== undefined && item.duration > 0 ? { duration: item.duration } : {}),
+      },
     };
     const res = await actionExecutor.execute(action, projectCopy);
     if (res.success) addedCount++;

@@ -391,8 +391,7 @@ def ensure_src_audio_segments_tar(folder: Path) -> Path | None:
             try:
                 from src.result_store import load_result
                 from src.pipeline import split_audio_sequences
-                res_data = load_result(folder)
-                segs = res_data.get("segments", []) if res_data else []
+                segs = (res_data.get("original_segments") or res_data.get("segments", [])) if res_data else []
                 if segs:
                     split_audio_sequences(vocals_wav, segs, output_dir=seqs_src)
             except Exception as e:

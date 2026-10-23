@@ -232,8 +232,10 @@ def split_audio_sequences(
     )
 
     for idx, text_dict in enumerate(texts_to_process):
-        start = int(text_dict["start"] * org_sr)
-        end = int(text_dict["end"] * org_sr)
+        s_sec = text_dict.get("orig_start") if text_dict.get("orig_start") is not None else text_dict.get("start", 0.0)
+        e_sec = text_dict.get("orig_end") if text_dict.get("orig_end") is not None else text_dict.get("end", 0.0)
+        start = max(0, int(round(float(s_sec) * org_sr)))
+        end = min(arr.shape[-1], int(round(float(e_sec) * org_sr)))
         arr_split = arr[:, start:end]
 
         seq_num = edit_indices[idx] if edit_indices else idx + 1
@@ -255,7 +257,7 @@ def split_all_sequences(video_paths: list[Path]) -> None:
         if not result_data:
             print(f"⚠️ Saltando {path.stem}: no hay archivo de resultados")
             continue
-        texts = result_data.get("segments", [])
+        texts = result_data.get("original_segments") or result_data.get("segments", [])
         split_audio_sequences(
             audio_path=path.with_name("vocals.wav"),
             texts=texts,

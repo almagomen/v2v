@@ -811,7 +811,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   const srcMediaItems: MediaItem[] = [];
                   for (const d of downloadedSrcSegs) {
-                    const fallbackDuration = d.seg.duration || d.seg.orig_duration || Math.max(d.seg.end - d.seg.start, 0.1);
+                    const fallbackDuration = d.seg.orig_duration || (d.seg.orig_end && d.seg.orig_start ? Math.max(d.seg.orig_end - d.seg.orig_start, 0.1) : d.seg.duration) || Math.max(d.seg.end - d.seg.start, 0.1);
                     const meta = {
                       duration: fallbackDuration,
                       width: 0,
@@ -872,7 +872,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     (bySpkAll[spk] ||= []).push(seg);
                   }
 
-                  const allClipsToBatchAdd: Array<{ trackId: string; mediaId: string; startTime: number }> = [];
+                  const allClipsToBatchAdd: Array<{ trackId: string; mediaId: string; startTime: number; duration?: number }> = [];
 
                   for (const sKey of Object.keys(bySpkAll)) {
                     const segs = bySpkAll[sKey].sort((a, b) => a.seg - b.seg);
@@ -897,10 +897,12 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                           );
                           continue;
                         }
+                        const ttsDuration = seg.duration || Math.max(seg.end - seg.start, 0.1);
                         allClipsToBatchAdd.push({
                           trackId,
                           mediaId: media.id,
                           startTime: seg.start,
+                          duration: ttsDuration,
                         });
                       } else {
                         const placeholderName = `tts_${toSafeToken(sKey)}_${String(seg.seg).padStart(3, "0")}.wav`;
@@ -961,10 +963,12 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                           if (downloadedSrc) {
                             const media = workingProject.mediaLibrary.items.find(m => m.name === downloadedSrc.logicalName);
                             if (media) {
+                              const origDuration = downloadedSrc.seg.orig_duration || (downloadedSrc.seg.orig_end && downloadedSrc.seg.orig_start ? Math.max(downloadedSrc.seg.orig_end - downloadedSrc.seg.orig_start, 0.1) : undefined);
                               allClipsToBatchAdd.push({
                                 trackId: origTrackId,
                                 mediaId: media.id,
                                 startTime: downloadedSrc.seg.orig_start ?? downloadedSrc.seg.start,
+                                ...(origDuration ? { duration: origDuration } : {}),
                               });
                             }
                           }
