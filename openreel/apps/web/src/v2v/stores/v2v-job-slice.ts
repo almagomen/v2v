@@ -811,7 +811,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   const srcMediaItems: MediaItem[] = [];
                   for (const d of downloadedSrcSegs) {
-                    const fallbackDuration = d.seg.orig_duration || (d.seg.orig_end && d.seg.orig_start ? Math.max(d.seg.orig_end - d.seg.orig_start, 0.1) : d.seg.duration) || Math.max(d.seg.end - d.seg.start, 0.1);
+                    const fallbackDuration = d.seg.orig_duration || (d.seg.orig_end !== undefined && d.seg.orig_start !== undefined ? Math.max(d.seg.orig_end - d.seg.orig_start, 0.1) : (d.seg.duration || 0.1));
                     const meta = {
                       duration: fallbackDuration,
                       width: 0,
@@ -963,12 +963,13 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                           if (downloadedSrc) {
                             const media = workingProject.mediaLibrary.items.find(m => m.name === downloadedSrc.logicalName);
                             if (media) {
-                              const origDuration = downloadedSrc.seg.orig_duration || (downloadedSrc.seg.orig_end && downloadedSrc.seg.orig_start ? Math.max(downloadedSrc.seg.orig_end - downloadedSrc.seg.orig_start, 0.1) : undefined);
+                              const origDuration = downloadedSrc.seg.orig_duration || (downloadedSrc.seg.orig_end !== undefined && downloadedSrc.seg.orig_start !== undefined ? Math.max(downloadedSrc.seg.orig_end - downloadedSrc.seg.orig_start, 0.1) : media.metadata.duration);
+                              const origStart = downloadedSrc.seg.orig_start !== undefined ? downloadedSrc.seg.orig_start : downloadedSrc.seg.start;
                               allClipsToBatchAdd.push({
                                 trackId: origTrackId,
                                 mediaId: media.id,
-                                startTime: downloadedSrc.seg.orig_start ?? downloadedSrc.seg.start,
-                                ...(origDuration ? { duration: origDuration } : {}),
+                                startTime: origStart,
+                                duration: origDuration,
                               });
                             }
                           }

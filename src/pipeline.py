@@ -234,6 +234,7 @@ def split_audio_sequences(
     for idx, text_dict in enumerate(texts_to_process):
         s_sec = text_dict.get("orig_start") if text_dict.get("orig_start") is not None else text_dict.get("start", 0.0)
         e_sec = text_dict.get("orig_end") if text_dict.get("orig_end") is not None else text_dict.get("end", 0.0)
+
         start = max(0, int(round(float(s_sec) * org_sr)))
         end = min(arr.shape[-1], int(round(float(e_sec) * org_sr)))
         arr_split = arr[:, start:end]
