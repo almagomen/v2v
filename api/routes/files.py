@@ -174,7 +174,9 @@ def list_audio_segments(job_id: str, video_index: int):
 
     folder = _get_video_folder(job_id, video_index)
     seqs_trg = folder / "Seqs_trg"
-    segments = videos[video_index].get("segments", []) or []
+    from src.result_store import load_result
+    result_data = load_result(folder)
+    segments = (result_data.get("segments") if result_data else None) or (videos[video_index].get("segments", []) or [])
 
     items = []
     for s in segments:
@@ -326,7 +328,9 @@ def list_src_audio_segments(job_id: str, video_index: int):
 
     folder = _get_video_folder(job_id, video_index)
     seqs_src = folder / "Seqs_src"
-    segments = videos[video_index].get("segments", []) or []
+    from src.result_store import load_result
+    result_data = load_result(folder)
+    segments = (result_data.get("segments") if result_data else None) or (videos[video_index].get("segments", []) or [])
 
     # Si Seqs_src no existe o está vacío, pero vocals.wav y segmentos existen, generar on-demand
     vocals_wav = folder / "vocals.wav"

@@ -163,6 +163,9 @@ def _run_pipeline(
                         original_speaker=t.get("original_speaker") or t.get("speaker") or "SPEAKER_00",
                         phonemes=t.get("phonemes"),
                         internal_pause_sec=t.get("internal_pause_sec"),
+                        orig_start=t.get("orig_start"),
+                        orig_end=t.get("orig_end"),
+                        orig_duration=t.get("orig_duration"),
                     )
                     for i, t in enumerate(texts_list)
                 ]

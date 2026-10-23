@@ -100,3 +100,30 @@ export function shortProjectToken(name: string): string {
 export function importKeyFor(url: string, index: number): string {
   return `${encodeURIComponent(url)}|${index}`;
 }
+
+/**
+ * Extrae la duración física real en segundos leyendo la cabecera RIFF/WAVE de un Blob WAV (sin decodificar todo el audio).
+ * Devuelve la duración en segundos con precisión de milisegundos, o null si no es un WAV válido.
+ */
+export async function getWavBlobDuration(blob: Blob): Promise<number | null> {
+  try {
+    const slice = blob.slice(0, 100);
+    const buffer = await slice.arrayBuffer();
+    if (!buffer || buffer.byteLength < 44) return null;
+    const view = new DataView(buffer);
+    const riff = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+    const wave = String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11));
+    if (riff !== "RIFF" || wave !== "WAVE") return null;
+    const byteRate = view.getUint32(28, true);
+    if (byteRate > 0) {
+      const dataSize = Math.max(0, blob.size - 44);
+      const dur = dataSize / byteRate;
+      if (dur > 0 && isFinite(dur)) {
+        return Math.round(dur * 1000) / 1000;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}

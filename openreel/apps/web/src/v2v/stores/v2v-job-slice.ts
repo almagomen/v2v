@@ -16,6 +16,7 @@ import {
   segmentLogicalName,
   findSegmentMediaInLibrary,
   toSafeToken,
+  getWavBlobDuration,
 } from "../utils/v2v-utils";
 import { toast } from "@/stores/notification-store";
 import {
@@ -512,6 +513,35 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   }
                   continue;
                 }
+
+                let srcAudioSegs: AudioSegmentItem[] = [];
+                if (get().importOriginalSegments) {
+                  try {
+                    srcAudioSegs = await v2vApi.getSrcAudioSegments(jobId, v.index);
+                    srcAudioSegs = srcAudioSegs.filter((as, i, a) => a.findIndex(t => t.seg === as.seg) === i);
+                  } catch (e) {
+                    console.warn(`[V2V] No se pudo obtener lista src-audio-segments para video ${v.index}:`, e);
+                  }
+                  // Si el backend no devolvió segmentos o falló, construir la lista fiel desde v.segments (result.json)
+                  if (srcAudioSegs.length === 0 && v.segments && v.segments.length > 0) {
+                    srcAudioSegs = v.segments.map((s) => {
+                      const oStart = s.orig_start !== undefined ? s.orig_start : s.start;
+                      const oEnd = s.orig_end !== undefined ? s.orig_end : s.end;
+                      const oDur = s.orig_duration !== undefined ? s.orig_duration : Math.max(oEnd - oStart, 0.05);
+                      return {
+                        seg: s.seg,
+                        start: oStart,
+                        end: oEnd,
+                        duration: oDur,
+                        orig_start: oStart,
+                        orig_end: oEnd,
+                        orig_duration: oDur,
+                        speaker: s.original_speaker || s.speaker || "SPEAKER_00",
+                        filename: `vocals_${String(s.seg).padStart(3, "0")}.wav`,
+                      };
+                    });
+                  }
+                }
                   let workingProject = createEmptyProject(folder, {
                     width: baseProjectSettings.width,
                     height: baseProjectSettings.height,
@@ -613,7 +643,17 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   if (urlForLog) {
                     get().appendUrlLog(urlForLog, `\n${"=".repeat(60)}`);
                     get().appendUrlLog(urlForLog, `🚀 [Importación Timeline] Iniciando: "${folder}"`);
-                    get().appendUrlLog(urlForLog, `• 📥 Descargando medios (${audioSegs.length} audios TTS + video e instrumental)...`);
+
+                    const activeOpts: string[] = [];
+                    activeOpts.push(`🗣️ TTS: ${audioSegs.length} audios`);
+                    if (currentPrefs.importOriginalSegments) activeOpts.push(`🎙️ Voces cortadas originales: ${srcAudioSegs.length || audioSegs.length} audios`);
+                    if (currentPrefs.importInstrumental) activeOpts.push(`🎸 Instrumental (no_vocals)`);
+                    if (currentPrefs.importOriginalVocals) activeOpts.push(`🎤 Voces originales completas (vocals.wav)`);
+                    if (currentPrefs.importOriginalAudio) activeOpts.push(`🎵 Audio original completo`);
+                    if (currentPrefs.importMergedVideo) activeOpts.push(`🎬 Video final mezclado`);
+
+                    get().appendUrlLog(urlForLog, `• 📋 Configuración activa:\n   ${activeOpts.join("\n   ")}`);
+                    get().appendUrlLog(urlForLog, `• 📥 Descargando medios (${activeOpts.join(" + ")})...`);
                   }
 
                   const tStartDownload = performance.now();
@@ -680,11 +720,13 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       return res;
                     })(),
                     (async () => {
-                      if (!currentPrefs.importOriginalSegments || audioSegs.length === 0) return [];
+                      if (!currentPrefs.importOriginalSegments) return [];
+                      const targetSrcList = srcAudioSegs.length > 0 ? srcAudioSegs : audioSegs;
+                      if (targetSrcList.length === 0) return [];
                       try {
                         const tarMap = await v2vApi.fetchSrcAudioSegmentsTar(jobId, v.index);
                         const srcSegsFromTar: Array<{ isSrcSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob }> = [];
-                        for (const seg of audioSegs) {
+                        for (const seg of targetSrcList) {
                           const segSuffix = `_${String(seg.seg).padStart(3, "0")}.wav`;
                           const logicalName = `vocals_${String(seg.seg).padStart(3, "0")}.wav`;
                           let blob: Blob | undefined;
@@ -711,8 +753,8 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                       const CONCURRENCY_LIMIT = 5;
                       const individualSrcResults: Array<{ isSrcSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } | null> = [];
-                      for (let i = 0; i < audioSegs.length; i += CONCURRENCY_LIMIT) {
-                        const chunk = audioSegs.slice(i, i + CONCURRENCY_LIMIT);
+                      for (let i = 0; i < targetSrcList.length; i += CONCURRENCY_LIMIT) {
+                        const chunk = targetSrcList.slice(i, i + CONCURRENCY_LIMIT);
                         const chunkResults = await Promise.all(
                           chunk.map(async (seg) => {
                             const logicalName = `vocals_${String(seg.seg).padStart(3, "0")}.wav`;
@@ -811,9 +853,19 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   const srcMediaItems: MediaItem[] = [];
                   for (const d of downloadedSrcSegs) {
-                    const fallbackDuration = d.seg.orig_duration || (d.seg.orig_end !== undefined && d.seg.orig_start !== undefined ? Math.max(d.seg.orig_end - d.seg.orig_start, 0.1) : (d.seg.duration || 0.1));
+                    const wavDur = await getWavBlobDuration(d.blob);
+                    const segMeta = v.segments?.find((s) => s.seg === d.seg.seg);
+                    const realDuration =
+                      wavDur ||
+                      d.seg.orig_duration ||
+                      segMeta?.orig_duration ||
+                      (d.seg.orig_end !== undefined && d.seg.orig_start !== undefined
+                        ? Math.max(d.seg.orig_end - d.seg.orig_start, 0.05)
+                        : (segMeta?.orig_end !== undefined && segMeta?.orig_start !== undefined
+                          ? Math.max(segMeta.orig_end - segMeta.orig_start, 0.05)
+                          : 0.1));
                     const meta = {
-                      duration: fallbackDuration,
+                      duration: realDuration,
                       width: 0,
                       height: 0,
                       frameRate: 0,
@@ -963,8 +1015,11 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                           if (downloadedSrc) {
                             const media = workingProject.mediaLibrary.items.find(m => m.name === downloadedSrc.logicalName);
                             if (media) {
-                              const origDuration = downloadedSrc.seg.orig_duration || (downloadedSrc.seg.orig_end !== undefined && downloadedSrc.seg.orig_start !== undefined ? Math.max(downloadedSrc.seg.orig_end - downloadedSrc.seg.orig_start, 0.1) : media.metadata.duration);
-                              const origStart = downloadedSrc.seg.orig_start !== undefined ? downloadedSrc.seg.orig_start : downloadedSrc.seg.start;
+                              const segOrigMeta = v.segments?.find(s => s.seg === seg.seg);
+                              const origStart = downloadedSrc.seg.orig_start !== undefined
+                                ? downloadedSrc.seg.orig_start
+                                : (segOrigMeta?.orig_start !== undefined ? segOrigMeta.orig_start : seg.start);
+                              const origDuration = media.metadata.duration;
                               allClipsToBatchAdd.push({
                                 trackId: origTrackId,
                                 mediaId: media.id,
@@ -987,7 +1042,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   const tTimelineMs = Math.round(performance.now() - tStartTimeline);
                   if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `• 🎬 Montaje: ${allClipsToBatchAdd.length} clips sincronizados en ${tTimelineMs}ms`);
+                    const ttsCount = downloadedSegs.length;
+                    const srcCount = currentPrefs.importOriginalSegments ? downloadedSrcSegs.length : 0;
+                    get().appendUrlLog(urlForLog, `• 🎬 Montaje: ${allClipsToBatchAdd.length} clips sincronizados (${ttsCount} TTS${srcCount > 0 ? ` + ${srcCount} originales con duración real` : ""}) en ${tTimelineMs}ms`);
                   }
 
                   const audioSegmentsImported = workingProject.mediaLibrary.items.filter(
