@@ -44,6 +44,8 @@ export interface TTSSegmentCardProps {
   mainActionIcon: React.ReactNode;
   phonemes?: Record<string, string>;
   setPhonemes?: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  preventOverlap?: boolean;
+  setPreventOverlap?: (val: boolean) => void;
 }
 
 export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
@@ -79,8 +81,9 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
   mainActionIcon,
   phonemes,
   setPhonemes,
+  preventOverlap,
+  setPreventOverlap,
 }) => {
-  const [showPhonemes, setShowPhonemes] = React.useState(false);
   const [newPhWord, setNewPhWord] = React.useState("");
   const [newPhPron, setNewPhPron] = React.useState("");
 
@@ -206,94 +209,121 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
         </div>
       </div>
 
-      {/* Ajustes avanzados */}
+      {/* Ajustes unificados */}
       <div className="border-t border-border/50 pt-2 flex items-center justify-between gap-2">
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-1.5 text-[11px] text-fg-3 hover:text-fg py-1 transition-colors cursor-pointer"
+          className={`flex items-center gap-1.5 text-[11px] py-1 transition-colors cursor-pointer ${
+            showAdvanced || (phonemes && Object.keys(phonemes).length > 0) || preventOverlap
+              ? "text-primary font-medium"
+              : "text-fg-3 hover:text-fg"
+          }`}
+          title="Ajustes de velocidad, voz, anticolisión y fonemas"
         >
           <SlidersHorizontal size={12} />
-          <span className="font-medium">Ajustes avanzados</span>
+          <span className="font-medium">Ajustes</span>
+          {((phonemes && Object.keys(phonemes).length > 0) || preventOverlap || Math.abs(temperature - 0.7) > 0.01) && (
+            <span className="w-1.5 h-1.5 rounded-full bg-primary" title="Ajustes activos" />
+          )}
           {showAdvanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
       </div>
 
       {showAdvanced && (
-        <div className="pb-1 space-y-2.5 animate-in fade-in duration-150">
+        <div className="p-3 rounded-lg bg-bg-1 border border-border/70 space-y-3 animate-in fade-in duration-150">
+          {/* Anticolisión y Velocidad */}
           {isEditingExistingSegment && (
-            <div className="p-2 rounded-lg bg-bg-1 border border-border/70 space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-fg-3 font-medium">Velocidad:</span>
+            <div className="space-y-2 pb-2 border-b border-border/50">
+              <div className="flex items-center justify-between p-2 rounded bg-bg-2/50 border border-border/60">
+                <label className="flex items-center gap-2 text-[10px] text-fg font-medium cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={!!preventOverlap}
+                    onChange={(e) => setPreventOverlap?.(e.target.checked)}
+                    className="rounded border-border cursor-pointer accent-primary"
+                  />
+                  <span>Evitar solapamiento (Ajustar al espacio libre)</span>
+                </label>
                 <span className="text-[9px] text-fg-4 font-mono">
-                  {clipDuration !== undefined ? `actual: ${clipDuration.toFixed(2)}s` : ""}
+                  {preventOverlap ? "Modo seguro" : "1.00x"}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <select
-                  value={speedMode}
-                  onChange={(e) => {
-                    const isS = e.target.value === "s";
-                    setSpeedMode(isS ? "s" : "x");
-                    if (clipDuration !== undefined) {
-                      setSpeedInput(isS ? clipDuration.toFixed(3) : "1.000");
-                    }
-                  }}
-                  className="h-7 w-12 text-[10px] px-1 bg-bg-2 border border-border rounded text-fg focus:outline-none focus:ring-1 focus:ring-primary font-mono cursor-pointer shrink-0"
-                >
-                  <option value="x">×</option>
-                  <option value="s">s</option>
-                </select>
-                {speedMode === "x" ? (
-                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                    <input
-                      type="range"
-                      min="0.5"
-                      max="2.0"
-                      step="0.05"
-                      value={parseFloat(speedInput) || 1.0}
-                      onChange={(e) => setSpeedInput(parseFloat(e.target.value).toFixed(2))}
-                      className="w-20 accent-primary h-1 bg-border rounded cursor-pointer"
-                      title="Ajustar velocidad (0.5x – 2.0x)"
-                    />
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-fg-3 font-medium">Velocidad:</span>
+                  <span className="text-[9px] text-fg-4 font-mono">
+                    {clipDuration !== undefined ? `actual: ${clipDuration.toFixed(2)}s` : ""}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={speedMode}
+                    onChange={(e) => {
+                      const isS = e.target.value === "s";
+                      setSpeedMode(isS ? "s" : "x");
+                      if (clipDuration !== undefined) {
+                        setSpeedInput(isS ? clipDuration.toFixed(3) : "1.000");
+                      }
+                    }}
+                    className="h-7 w-12 text-[10px] px-1 bg-bg-2 border border-border rounded text-fg focus:outline-none focus:ring-1 focus:ring-primary font-mono cursor-pointer shrink-0"
+                  >
+                    <option value="x">×</option>
+                    <option value="s">s</option>
+                  </select>
+                  {speedMode === "x" ? (
+                    <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="2.0"
+                        step="0.05"
+                        value={parseFloat(speedInput) || 1.0}
+                        onChange={(e) => setSpeedInput(parseFloat(e.target.value).toFixed(2))}
+                        className="w-20 accent-primary h-1 bg-border rounded cursor-pointer"
+                        title="Ajustar velocidad (0.5x – 2.0x)"
+                      />
+                      <input
+                        type="text"
+                        className="w-14 h-7 text-[10px] px-1 text-center rounded border border-border bg-bg-2 font-mono text-fg focus:outline-none focus:ring-1 focus:ring-primary"
+                        placeholder="1.00"
+                        value={speedInput}
+                        onChange={(e) => setSpeedInput(e.target.value)}
+                        title="Multiplicador de velocidad"
+                      />
+                    </div>
+                  ) : (
                     <input
                       type="text"
-                      className="w-14 h-7 text-[10px] px-1 text-center rounded border border-border bg-bg-2 font-mono text-fg focus:outline-none focus:ring-1 focus:ring-primary"
-                      placeholder="1.00"
+                      className="w-20 h-7 text-[10px] px-2 rounded border border-border bg-bg-2 font-mono text-fg focus:outline-none focus:ring-1 focus:ring-primary"
+                      placeholder={clipDuration?.toFixed(2) || "1.0"}
                       value={speedInput}
                       onChange={(e) => setSpeedInput(e.target.value)}
-                      title="Multiplicador de velocidad"
+                      title="Duración exacta en segundos"
                     />
-                  </div>
-                ) : (
-                  <input
-                    type="text"
-                    className="w-20 h-7 text-[10px] px-2 rounded border border-border bg-bg-2 font-mono text-fg focus:outline-none focus:ring-1 focus:ring-primary"
-                    placeholder={clipDuration?.toFixed(2) || "1.0"}
-                    value={speedInput}
-                    onChange={(e) => setSpeedInput(e.target.value)}
-                    title="Duración exacta en segundos"
-                  />
-                )}
-                {onApplySpeedOnly && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    className="text-[9px] h-7 px-2.5 ml-auto shrink-0 bg-bg-3 hover:bg-bg-2 text-fg border border-border"
-                    disabled={isProcessing || isApplyingSpeed}
-                    onClick={onApplySpeedOnly}
-                    title="Aplica la velocidad sin volver a generar audio"
-                  >
-                    {isApplyingSpeed ? <Loader2 size={11} className="animate-spin mr-1" /> : null}
-                    Ajustar
-                  </Button>
-                )}
+                  )}
+                  {onApplySpeedOnly && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      className="text-[9px] h-7 px-2.5 ml-auto shrink-0 bg-bg-3 hover:bg-bg-2 text-fg border border-border"
+                      disabled={isProcessing || isApplyingSpeed}
+                      onClick={onApplySpeedOnly}
+                      title="Aplica la velocidad sin volver a generar audio"
+                    >
+                      {isApplyingSpeed ? <Loader2 size={11} className="animate-spin mr-1" /> : null}
+                      Ajustar
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           )}
 
-          <div className="space-y-1.5">
+          {/* Expresividad / Temperatura */}
+          <div className="space-y-1.5 pb-2 border-b border-border/50">
             <div className="flex justify-between text-[10px] text-fg-3">
               <span>Expresividad / Temperatura</span>
               <span className="font-mono text-fg font-semibold">{temperature.toFixed(2)}</span>
@@ -312,41 +342,24 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
               <span>Más variado / expresivo (1.0)</span>
             </div>
           </div>
-        </div>
-      )}
 
-      {/* Sección Fonemas / Pronunciación */}
-      {phonemes !== undefined && setPhonemes && (
-        <div className="border-t border-border/50 pt-2 space-y-2">
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setShowPhonemes(!showPhonemes)}
-              className="flex items-center gap-1.5 text-[11px] text-fg-3 hover:text-fg py-1 transition-colors cursor-pointer"
-            >
-              <span className="font-medium">Fonemas / Pronunciación</span>
-              <span className="text-[9px] text-primary font-medium">S2.1</span>
-              {Object.keys(phonemes).length > 0 && (
-                <span className="text-[9px] px-1 rounded bg-primary/20 text-primary font-mono">
-                  {Object.keys(phonemes).length}
-                </span>
-              )}
-              {showPhonemes ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-            </button>
-            {showPhonemes && Object.keys(phonemes).length > 0 && (
-              <button
-                type="button"
-                onClick={() => setPhonemes({})}
-                className="text-[9px] text-red-400 hover:text-red-300 transition-colors"
-                title="Borrar todos los fonemas"
-              >
-                Limpiar todo
-              </button>
-            )}
-          </div>
+          {/* Fonemas / Pronunciación (S2.1) integrado */}
+          {phonemes !== undefined && setPhonemes && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-semibold text-fg-2">Fonemas / Pronunciación (S2.1)</span>
+                {Object.keys(phonemes).length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setPhonemes({})}
+                    className="text-[9px] text-red-400 hover:text-red-300 transition-colors cursor-pointer"
+                    title="Borrar todos los fonemas"
+                  >
+                    Limpiar todo
+                  </button>
+                )}
+              </div>
 
-          {showPhonemes && (
-            <div className="p-2 rounded-lg bg-bg-1 border border-border/70 space-y-2 animate-in fade-in duration-150">
               {Object.entries(phonemes).length === 0 ? (
                 <p className="text-[10px] text-fg-4 italic">No hay fonemas personalizados para este segmento.</p>
               ) : (
@@ -377,7 +390,7 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
                           return n;
                         })
                       }
-                      className="text-red-400 hover:text-red-300 text-[11px] px-1 transition-colors"
+                      className="text-red-400 hover:text-red-300 text-[11px] px-1 transition-colors cursor-pointer"
                       title="Eliminar"
                     >
                       ×
@@ -426,7 +439,7 @@ export const TTSSegmentCard: React.FC<TTSSegmentCardProps> = ({
                     }
                   }}
                   disabled={!newPhWord.trim() || !newPhPron.trim()}
-                  className="px-2 py-1 bg-primary/20 border border-primary/40 rounded text-[10px] text-primary hover:bg-primary/30 transition-all disabled:opacity-30"
+                  className="px-2 py-1 bg-primary/20 border border-primary/40 rounded text-[10px] text-primary hover:bg-primary/30 transition-all disabled:opacity-30 cursor-pointer"
                   title="Agregar fonema (o presiona Enter)"
                 >
                   +

@@ -166,6 +166,9 @@ export interface SegmentEditorRow {
   start: number;
   end: number;
   slot_duration: number;
+  orig_start?: number;
+  orig_end?: number;
+  orig_duration?: number;
   original_text: string;
   tts_text: string;
   speaker?: string | null;
@@ -517,6 +520,7 @@ export const v2vApi = {
       repetition_penalty?: number;
       volume?: number;
       phonemes?: Record<string, string>;
+      prevent_overlap?: boolean;
       signal?: AbortSignal;
     },
     signal?: AbortSignal,
@@ -542,6 +546,7 @@ export const v2vApi = {
         repetition_penalty: options?.repetition_penalty ?? 1.2,
         volume: options?.volume ?? 0.0,
         phonemes: options?.phonemes,
+        prevent_overlap: options?.prevent_overlap,
       }),
     });
 

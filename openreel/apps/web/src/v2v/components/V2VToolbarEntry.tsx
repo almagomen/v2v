@@ -89,14 +89,9 @@ export const V2VToolbarEntry: React.FC = () => {
         )}
       </button>
 
-      {/* Drawer lateral de Video2Video */}
+      {/* Drawer lateral de Video2Video (no bloqueante, permite interactuar con el timeline) */}
       {isV2VOpen && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/20 z-40"
-            onClick={() => setIsV2VOpen(false)}
-          />
-          <div className="fixed top-topbar right-0 bottom-0 w-full max-w-md bg-bg-1 border-l border-border z-50 shadow-2xl animate-in slide-in-from-right duration-200 flex flex-col">
+        <div className="fixed top-topbar right-0 bottom-0 w-full max-w-md bg-bg-1 border-l border-border z-50 shadow-2xl animate-in slide-in-from-right duration-200 flex flex-col pointer-events-auto">
             <div className="flex items-center justify-between p-3 border-b border-border shrink-0">
               <span className="text-sm font-bold text-fg">
                 Video2Video
@@ -114,7 +109,6 @@ export const V2VToolbarEntry: React.FC = () => {
               <V2VPanel embedInDrawer />
             </div>
           </div>
-        </>
       )}
 
       {/* Diálogo flotante no-bloqueante para edición en lote de segmentos */}

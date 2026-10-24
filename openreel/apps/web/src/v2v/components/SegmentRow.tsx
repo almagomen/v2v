@@ -44,6 +44,8 @@ export type BulkSegmentRow = {
   repetitionPenalty: number;
   volume: number;
   phonemes?: Record<string, string>;
+  origDuration?: number;
+  preventOverlap?: boolean;
 };
 
 
@@ -73,12 +75,12 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
   targetLang,
 }) => {
   const [showSettings, setShowSettings] = useState(false);
-  const [showPhonemes, setShowPhonemes] = useState(false);
   const [newPhWord, setNewPhWord] = useState("");
   const [newPhPron, setNewPhPron] = useState("");
   const [playing, setPlaying] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const hasCustomFishAudio = Math.abs(row.temperature - 0.7) > 0.01;
+  const hasCustomPhonemes = Boolean(row.phonemes && Object.keys(row.phonemes).length > 0);
 
   const currentClip = useProjectStore((state) => {
     for (const track of state.project.timeline.tracks) {
@@ -187,6 +189,7 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
                 topP: 0.7,
                 repetitionPenalty: 1.2,
                 volume: 0.0,
+                preventOverlap: false,
               })
             }
             className="text-[9px] text-primary hover:underline cursor-pointer"
@@ -210,37 +213,18 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
 
         <button
           type="button"
-          onClick={() => setShowPhonemes(!showPhonemes)}
-          className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
-            showPhonemes || (row.phonemes && Object.keys(row.phonemes).length > 0)
-              ? "border-primary/40 bg-primary/10 text-primary font-medium"
-              : "border-border/60 bg-background-tertiary text-text-muted hover:text-text-primary"
-          }`}
-          title="Configurar pronunciación y fonemas para palabras difíciles (S2.1)"
-        >
-          <span>🔤 Fonemas</span>
-          {row.phonemes && Object.keys(row.phonemes).length > 0 && (
-            <span className="font-mono text-[8px] bg-primary/20 px-1 rounded">
-              {Object.keys(row.phonemes).length}
-            </span>
-          )}
-          {showPhonemes ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-        </button>
-
-        <button
-          type="button"
           onClick={() => setShowSettings(!showSettings)}
-          className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
-            showSettings || hasCustomFishAudio
+          className={`flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+            showSettings || hasCustomFishAudio || hasCustomPhonemes || row.preventOverlap
               ? "border-primary/40 bg-primary/10 text-primary font-medium"
               : "border-border/60 bg-background-tertiary text-text-muted hover:text-text-primary"
           }`}
-          title="Ajustes de expresividad y voz Fish Audio"
+          title="Ajustes de voz, anticolisión y fonemas"
         >
           <SlidersHorizontal size={11} />
-          <span>Voz Fish</span>
-          {hasCustomFishAudio && (
-            <span className="w-1.5 h-1.5 rounded-full bg-primary" title="Parámetros personalizados" />
+          <span>Ajustes</span>
+          {(hasCustomFishAudio || hasCustomPhonemes || row.preventOverlap) && (
+            <span className="w-1.5 h-1.5 rounded-full bg-primary" title="Ajustes personalizados activos" />
           )}
           {showSettings ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
         </button>
@@ -255,7 +239,7 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
               className="font-mono bg-background-tertiary px-1.5 py-0.2 rounded border border-border/40 text-[9px]"
               title="Duración original del segmento"
             >
-              duración orig: {row.slotDuration.toFixed(2)}s
+              duración orig: {(row.origDuration ?? row.slotDuration).toFixed(2)}s
             </span>
           </div>
           <p className="text-[10px] text-text-muted leading-snug break-words">{row.originalText || "—"}</p>
@@ -299,114 +283,135 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
       </div>
 
       {showSettings && (
-        <SegmentAudioSliders
-          temperature={row.temperature}
-          onTemperatureChange={(t) => updateRow(row.seg, { temperature: t })}
-          onReset={() => updateRow(row.seg, { temperature: 0.7 })}
-        />
-      )}
-
-      {showPhonemes && (
-        <div className="p-2 rounded border border-border/70 bg-background-secondary/60 space-y-2 animate-in fade-in duration-150">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-semibold text-text-secondary">Fonemas / Pronunciación (S2.1)</span>
-            {row.phonemes && Object.keys(row.phonemes).length > 0 && (
-              <button
-                type="button"
-                onClick={() => updateRow(row.seg, { phonemes: {}, dirty: true })}
-                className="text-[9px] text-red-400 hover:text-red-300 transition-colors"
-                title="Borrar todos los fonemas del segmento"
-              >
-                Limpiar todo
-              </button>
-            )}
+        <div className="p-3 rounded-lg border border-border/70 bg-background-secondary/60 space-y-3 animate-in fade-in duration-150">
+          {/* Anticolisión */}
+          <div className="flex items-center justify-between pb-2 border-b border-border/40">
+            <label className="flex items-center gap-2 text-[10px] font-medium text-text-primary cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={!!row.preventOverlap}
+                onChange={(e) => updateRow(row.seg, { preventOverlap: e.target.checked, dirty: true })}
+                className="rounded border-border cursor-pointer accent-primary"
+              />
+              <span>Evitar solapamiento (Ajustar automáticamente al espacio disponible)</span>
+            </label>
+            <span className="text-[9px] text-text-muted font-mono">
+              {row.preventOverlap ? "Modo seguro activado" : "1.00x natural por defecto"}
+            </span>
           </div>
-          {!row.phonemes || Object.keys(row.phonemes).length === 0 ? (
-            <p className="text-[9px] text-text-muted italic">No hay fonemas configurados para este segmento.</p>
-          ) : (
-            Object.entries(row.phonemes).map(([word, pron]) => (
-              <div key={word} className="flex items-center gap-1">
-                <input
-                  type="text"
-                  value={word}
-                  readOnly
-                  className="w-[35%] px-2 py-0.5 bg-background-tertiary border border-border rounded text-[9px] text-text-muted font-mono cursor-default"
-                  title="Palabra exacta"
-                />
-                <span className="text-text-muted text-[9px]">→</span>
-                <input
-                  type="text"
-                  value={pron}
-                  onChange={(e) => {
-                    const newPh = { ...(row.phonemes || {}), [word]: e.target.value };
-                    updateRow(row.seg, { phonemes: newPh, dirty: true });
-                  }}
-                  className="flex-1 px-2 py-0.5 bg-background-tertiary border border-border rounded text-[9px] text-text-primary font-mono focus:outline-none focus:border-primary"
-                  placeholder="pronunciación"
-                />
+
+          {/* Sliders Fish Audio */}
+          <div className="space-y-1">
+            <span className="text-[10px] font-semibold text-text-secondary">Expresividad y parámetros de voz</span>
+            <SegmentAudioSliders
+              temperature={row.temperature}
+              onTemperatureChange={(t) => updateRow(row.seg, { temperature: t, dirty: true })}
+              onReset={() => updateRow(row.seg, { temperature: 0.7, dirty: true })}
+            />
+          </div>
+
+          {/* Fonemas / Pronunciación */}
+          <div className="space-y-2 pt-2 border-t border-border/40">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-semibold text-text-secondary">Fonemas / Pronunciación (S2.1)</span>
+              {row.phonemes && Object.keys(row.phonemes).length > 0 && (
                 <button
                   type="button"
-                  onClick={() => {
-                    const newPh = { ...(row.phonemes || {}) };
-                    delete newPh[word];
-                    updateRow(row.seg, { phonemes: newPh, dirty: true });
-                  }}
-                  className="text-red-400 hover:text-red-300 text-[10px] px-1 transition-colors"
-                  title="Eliminar"
+                  onClick={() => updateRow(row.seg, { phonemes: {}, dirty: true })}
+                  className="text-[9px] text-red-400 hover:text-red-300 transition-colors cursor-pointer"
+                  title="Borrar todos los fonemas del segmento"
                 >
-                  ×
+                  Limpiar todo
                 </button>
-              </div>
-            ))
-          )}
-          <div className="flex items-center gap-1 pt-1 border-t border-border/40">
-            <input
-              type="text"
-              value={newPhWord}
-              onChange={(e) => setNewPhWord(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && newPhWord.trim() && newPhPron.trim()) {
-                  const newPh = { ...(row.phonemes || {}), [newPhWord.trim()]: newPhPron.trim() };
-                  updateRow(row.seg, { phonemes: newPh, dirty: true });
-                  setNewPhWord("");
-                  setNewPhPron("");
-                }
-              }}
-              className="w-[35%] px-2 py-0.5 bg-background-tertiary border border-border rounded text-[9px] text-text-primary font-mono focus:outline-none focus:border-primary"
-              placeholder="Palabra..."
-            />
-            <span className="text-text-muted text-[9px]">→</span>
-            <input
-              type="text"
-              value={newPhPron}
-              onChange={(e) => setNewPhPron(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && newPhWord.trim() && newPhPron.trim()) {
-                  const newPh = { ...(row.phonemes || {}), [newPhWord.trim()]: newPhPron.trim() };
-                  updateRow(row.seg, { phonemes: newPh, dirty: true });
-                  setNewPhWord("");
-                  setNewPhPron("");
-                }
-              }}
-              className="flex-1 px-2 py-0.5 bg-background-tertiary border border-border rounded text-[9px] text-text-primary font-mono focus:outline-none focus:border-primary"
-              placeholder="pronunciación..."
-            />
-            <button
-              type="button"
-              onClick={() => {
-                if (newPhWord.trim() && newPhPron.trim()) {
-                  const newPh = { ...(row.phonemes || {}), [newPhWord.trim()]: newPhPron.trim() };
-                  updateRow(row.seg, { phonemes: newPh, dirty: true });
-                  setNewPhWord("");
-                  setNewPhPron("");
-                }
-              }}
-              disabled={!newPhWord.trim() || !newPhPron.trim()}
-              className="px-2 py-0.5 bg-primary/20 border border-primary/40 rounded text-[9px] text-primary hover:bg-primary/30 transition-all disabled:opacity-30"
-              title="Agregar fonema (o presiona Enter)"
-            >
-              +
-            </button>
+              )}
+            </div>
+            {!row.phonemes || Object.keys(row.phonemes).length === 0 ? (
+              <p className="text-[9px] text-text-muted italic">No hay fonemas configurados para este segmento.</p>
+            ) : (
+              Object.entries(row.phonemes).map(([word, pron]) => (
+                <div key={word} className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={word}
+                    readOnly
+                    className="w-[35%] px-2 py-0.5 bg-background-tertiary border border-border rounded text-[9px] text-text-muted font-mono cursor-default"
+                    title="Palabra exacta"
+                  />
+                  <span className="text-text-muted text-[9px]">→</span>
+                  <input
+                    type="text"
+                    value={pron}
+                    onChange={(e) => {
+                      const newPh = { ...(row.phonemes || {}), [word]: e.target.value };
+                      updateRow(row.seg, { phonemes: newPh, dirty: true });
+                    }}
+                    className="flex-1 px-2 py-0.5 bg-background-tertiary border border-border rounded text-[9px] text-text-primary font-mono focus:outline-none focus:border-primary"
+                    placeholder="pronunciación"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newPh = { ...(row.phonemes || {}) };
+                      delete newPh[word];
+                      updateRow(row.seg, { phonemes: newPh, dirty: true });
+                    }}
+                    className="text-red-400 hover:text-red-300 text-[10px] px-1 transition-colors cursor-pointer"
+                    title="Eliminar"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))
+            )}
+            <div className="flex items-center gap-1 pt-1 border-t border-border/40">
+              <input
+                type="text"
+                value={newPhWord}
+                onChange={(e) => setNewPhWord(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newPhWord.trim() && newPhPron.trim()) {
+                    const newPh = { ...(row.phonemes || {}), [newPhWord.trim()]: newPhPron.trim() };
+                    updateRow(row.seg, { phonemes: newPh, dirty: true });
+                    setNewPhWord("");
+                    setNewPhPron("");
+                  }
+                }}
+                className="w-[35%] px-2 py-0.5 bg-background-tertiary border border-border rounded text-[9px] text-text-primary font-mono focus:outline-none focus:border-primary"
+                placeholder="Palabra..."
+              />
+              <span className="text-text-muted text-[9px]">→</span>
+              <input
+                type="text"
+                value={newPhPron}
+                onChange={(e) => setNewPhPron(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newPhWord.trim() && newPhPron.trim()) {
+                    const newPh = { ...(row.phonemes || {}), [newPhWord.trim()]: newPhPron.trim() };
+                    updateRow(row.seg, { phonemes: newPh, dirty: true });
+                    setNewPhWord("");
+                    setNewPhPron("");
+                  }
+                }}
+                className="flex-1 px-2 py-0.5 bg-background-tertiary border border-border rounded text-[9px] text-text-primary font-mono focus:outline-none focus:border-primary"
+                placeholder="pronunciación..."
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (newPhWord.trim() && newPhPron.trim()) {
+                    const newPh = { ...(row.phonemes || {}), [newPhWord.trim()]: newPhPron.trim() };
+                    updateRow(row.seg, { phonemes: newPh, dirty: true });
+                    setNewPhWord("");
+                    setNewPhPron("");
+                  }
+                }}
+                disabled={!newPhWord.trim() || !newPhPron.trim()}
+                className="px-2 py-0.5 bg-primary/20 border border-primary/40 rounded text-[9px] text-primary hover:bg-primary/30 transition-all disabled:opacity-30 cursor-pointer"
+                title="Agregar fonema (o presiona Enter)"
+              >
+                +
+              </button>
+            </div>
           </div>
         </div>
       )}

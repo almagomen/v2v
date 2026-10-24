@@ -413,9 +413,6 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     rotate_google_api_key()
                     continue
 
-        if m_idx + 1 < len(models_to_try):
-            print(f"🔄 [Traducción] Saltando a modelo de respaldo: '{models_to_try[m_idx + 1]}'...", flush=True)
-
     print(f"❌ [Traducción] Fallaron todos los modelos disponibles. Último error: {last_error}", flush=True)
     if return_details:
         return None, None
@@ -528,9 +525,6 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
                 if len(available_keys) > 1 and any(c in err_str for c in ("429", "RESOURCE_EXHAUSTED", "quota")):
                     rotate_google_api_key()
                     continue
-
-        if m_idx + 1 < len(models_to_try):
-            print(f"🔄 [Título Viral] Saltando a modelo de respaldo: '{models_to_try[m_idx + 1]}'...", flush=True)
 
     print(f"❌ [Título Viral] No se pudo generar el título. Último error: {last_error}", flush=True)
     return None

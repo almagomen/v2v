@@ -292,7 +292,7 @@ export const JobProgressIndicator: React.FC<JobProgressIndicatorProps> = ({
           </div>
 
           {isLogsOpen && (
-            <pre className="mt-1.5 p-2.5 rounded-lg bg-background-tertiary font-mono text-[10px] min-h-[90px] max-h-[360px] overflow-auto resize-y whitespace-pre border border-border/50 select-text leading-relaxed">
+            <pre className="mt-1.5 p-2.5 rounded-lg bg-background-tertiary font-mono text-[10px] min-h-[90px] max-h-[360px] overflow-y-auto overflow-x-hidden resize-y whitespace-pre-wrap break-words border border-border/50 select-text leading-relaxed">
               {(() => {
                 if (logsTab === "export") {
                   return exportLogs && exportLogs.length > 0

@@ -163,6 +163,8 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         start: apiRow.start,
         end: apiRow.end,
         slotDuration: apiRow.slot_duration,
+        origDuration: apiRow.orig_duration ?? apiRow.slot_duration,
+        preventOverlap: false,
         originalText: apiRow.original_text || "",
         draftText: ttsText,
         loadedText: ttsText,
@@ -370,6 +372,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           repetition_penalty: row.repetitionPenalty,
           volume: row.volume,
           phonemes: row.phonemes,
+          prevent_overlap: row.preventOverlap,
         },
       );
 
@@ -545,6 +548,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
             repetition_penalty: row.repetitionPenalty,
             volume: row.volume,
             phonemes: row.phonemes,
+            prevent_overlap: row.preventOverlap,
           },
         );
 

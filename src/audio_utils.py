@@ -37,13 +37,13 @@ import re
 import unicodedata
 
 
-def _pad_visible_tag(tag: str, target_w: int = 20) -> str:
+def _pad_visible_tag(tag: str, target_w: int = 24) -> str:
     """Calcula el ancho visible en terminal monoespaciada para alinear columnas tabulares."""
     w = 0
     for ch in tag:
         if ch == '\ufe0f':
             continue
-        if ch in ('🔉', '✨', '⚡', '🎯', '🎛', '🔄', '🌐', '✂'):
+        if ch in ('🔉', '✨', '⚡', '🎯', '🎛', '🔄', '🌐', '✂', '🔥'):
             w += 2
         elif unicodedata.east_asian_width(ch) in ('F', 'W'):
             w += 2
@@ -53,7 +53,7 @@ def _pad_visible_tag(tag: str, target_w: int = 20) -> str:
             w += 1
     if w < target_w:
         return tag + " " * (target_w - w)
-    return tag
+    return tag + " "
 
 
 def _extract_emotion_prefix(text: str) -> tuple[str, str]:
@@ -76,7 +76,8 @@ def _format_aligned_segment_texts(
 ) -> list[str]:
     """
     Formatea las líneas de texto del segmento con alineación de corchetes de emoción
-    y adaptación dinámica de la etiqueta de idioma original ([ pt ]).
+    y adaptación de la etiqueta de idioma original ([ pt ]).
+    Deja el wrap fluido al CSS del visor de logs en el frontend.
     """
     tag_final, cont_final = _extract_emotion_prefix(final_text)
     has_emotion = bool(tag_final)
@@ -102,10 +103,12 @@ def _format_aligned_segment_texts(
 
     # Alinear a la derecha las etiquetas para que el corchete ']' concuerde en la misma columna
     pad_orig = " " * (max_w - len_orig)
-    lines.append(f"{indent}{pad_orig}{tag_orig} {orig_text}")
+    pfx_orig = f"{indent}{pad_orig}{tag_orig} "
+    lines.append(f"{pfx_orig}{orig_text}")
 
     pad_final = " " * (max_w - len_final)
-    lines.append(f"{indent}{pad_final}{tag_final} {cont_final}")
+    pfx_final = f"{indent}{pad_final}{tag_final} "
+    lines.append(f"{pfx_final}{cont_final}")
 
     return lines
 
@@ -168,7 +171,7 @@ def adjust_audio_duration(
     if abs(safe_tempo - 1.0) <= 0.04:
         if audio.shape[-1] > target_duration_samples:
             trimmed = audio[:, :target_duration_samples].clone()
-            fade_len = min(128, target_duration_samples)
+            fade_len = max(16, min(int(0.005 * sample_rate), target_duration_samples))
             if torch is not None and fade_len > 0:
                 fade = torch.linspace(1.0, 0.0, fade_len, device=trimmed.device)
                 trimmed[:, -fade_len:] *= fade
@@ -282,15 +285,28 @@ def distribute_silence_padding(arr: Any, target_samples: int, rate: int) -> Any:
     allocated_to_valleys = valley_share * len(valleys)
     end_share = needed_pad - allocated_to_valleys
 
+    fade_len = max(64, min(int(0.005 * rate), valley_share // 2 if valley_share > 0 else 64))
+    fade_out = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
+    fade_in = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+
     parts = []
     prev_idx = 0
     silence_chunk = np.zeros((arr_np.shape[0], valley_share), dtype=arr_np.dtype)
     for v_idx in valleys:
-        parts.append(arr_np[:, prev_idx:v_idx])
+        chunk = arr_np[:, prev_idx:v_idx].copy()
+        if prev_idx > 0 and chunk.shape[-1] >= fade_len:
+            chunk[:, :fade_len] *= fade_in
+        if chunk.shape[-1] >= fade_len:
+            chunk[:, -fade_len:] *= fade_out
+        parts.append(chunk)
         parts.append(silence_chunk)
         prev_idx = v_idx
 
-    parts.append(arr_np[:, prev_idx:])
+    chunk_last = arr_np[:, prev_idx:].copy()
+    if prev_idx > 0 and chunk_last.shape[-1] >= fade_len:
+        chunk_last[:, :fade_len] *= fade_in
+    parts.append(chunk_last)
+
     if end_share > 0:
         parts.append(np.zeros((arr_np.shape[0], end_share), dtype=arr_np.dtype))
 
@@ -314,6 +330,7 @@ def compact_silence_valleys(
     """
     Comprime quirúrgicamente los valles de silencio internos (pausas entre oraciones / respiraciones)
     reduciendo el tiempo muerto sin alterar la velocidad ni el timbre de las partes habladas (1.00x natural).
+    Aplica micro-fades de 5ms en cada unión para erradicar cualquier artefacto o 'tip' acústico.
     """
     if arr is None or arr.shape[-1] <= target_samples:
         return arr
@@ -386,17 +403,33 @@ def compact_silence_valleys(
 
     cut_ratio = min(1.0, needed_reduction / total_reducible)
 
+    fade_len = max(64, int(0.005 * rate))  # 5ms de rampa suave
+    fade_out = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
+    fade_in = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+
     parts = []
     prev_idx = 0
     for (vs, ve), can_cut in zip(valleys, reducible_samples_list):
         cut_amount = int(round(can_cut * cut_ratio))
         keep_silence = (ve - vs) - cut_amount
-        parts.append(arr_np[:, prev_idx:vs])
+
+        chunk_before = arr_np[:, prev_idx:vs].copy()
+        if prev_idx > 0 and chunk_before.shape[-1] >= fade_len:
+            chunk_before[:, :fade_len] *= fade_in
+        if chunk_before.shape[-1] >= fade_len:
+            chunk_before[:, -fade_len:] *= fade_out
+        parts.append(chunk_before)
+
         if keep_silence > 0:
             parts.append(np.zeros((arr_np.shape[0], keep_silence), dtype=arr_np.dtype))
+
         prev_idx = ve
 
-    parts.append(arr_np[:, prev_idx:])
+    chunk_last = arr_np[:, prev_idx:].copy()
+    if prev_idx > 0 and chunk_last.shape[-1] >= fade_len:
+        chunk_last[:, :fade_len] *= fade_in
+    parts.append(chunk_last)
+
     res_np = np.concatenate(parts, axis=-1)
 
     return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
@@ -471,7 +504,7 @@ def synthesize_segment_audio(
     1. Invoca tts_fn (o usa cached_arr_rate si fue precalculado en paralelo).
     2. Guarda copia intacta en raw_audio_path.
     3. Aplica ajuste de tempo, sincronía de duración o padding orgánico de respiros.
-    4. Aplica micro-fade out de 256 muestras al final para evitar artefactos o clicks.
+    4. Aplica micro-fade out de 5ms al final para evitar artefactos o clicks.
     5. Guarda el audio final en out_audio_path.
 
     Retorna: (arr, rate, raw_duration, final_duration, mode_tag)
@@ -521,10 +554,12 @@ def synthesize_segment_audio(
                 arr = arr_compact
                 target_samples = int(max_allowed_dur * rate)
                 ratio_needed = float(arr.shape[-1]) / float(target_samples)
-                if ratio_needed <= 1.25:
-                    mode_tag = f"⚡ {ratio_needed:.2f}x"
+                speed_str = f"⚡ {ratio_needed:.2f}x" if ratio_needed <= 1.25 else f"🔥 {ratio_needed:.2f}x"
+                if (raw_dur - compact_dur) >= 0.05:
+                    gained_pct = max(1, int(round((1.0 - compact_dur / raw_dur) * 100)))
+                    mode_tag = f"{speed_str} + ✂️ (-{gained_pct}%)"
                 else:
-                    mode_tag = f"🔥 {ratio_needed:.2f}x"
+                    mode_tag = speed_str
                 arr = adjust_audio_duration(arr, target_samples, rate)
 
         # 2. CASO EN QUE NO CHOCA CON EL SIGUIENTE SEGMENTO:
@@ -555,12 +590,12 @@ def synthesize_segment_audio(
                     target_samples = int(orig_duration * rate)
                     arr = adjust_audio_duration(arr, target_samples, rate)
 
-    # Micro-fade out suave (256 muestras) al final para eliminar ruidos de corte abrupto
-    if arr.shape[-1] > 256 and torch is not None:
-        fade_len = min(256, arr.shape[-1])
-        fade = torch.linspace(1.0, 0.0, fade_len, device=arr.device)
+    # Micro-fade out suave (5ms estándar) al final para eliminar ruidos de corte abrupto
+    fade_len_5ms = max(16, min(int(0.005 * rate), arr.shape[-1]))
+    if arr.shape[-1] >= fade_len_5ms and torch is not None:
+        fade = torch.linspace(1.0, 0.0, fade_len_5ms, device=arr.device)
         arr = arr.clone()
-        arr[:, -fade_len:] *= fade
+        arr[:, -fade_len_5ms:] *= fade
 
     # Modo target_duration (fijar duración objetivo explícita)
     dur_after_sync = float(arr.shape[-1]) / float(rate)
@@ -682,11 +717,6 @@ def clone_voice_segments(
             for i, res in executor.map(_fetch_tts, tts_tasks):
                 tts_results[i] = res
 
-    if only_indices is None or len(only_indices) > 1:
-        header = f"{' #':<5}{'MODO':<20}{'DURACIONES [ORIG | FISH]'}"
-        print("-" * 52)
-        print(header)
-        print("-" * 52)
 
     for idx, text_dict in enumerate(texts_to_process):
         text = text_dict["text"]
@@ -763,14 +793,12 @@ def clone_voice_segments(
 
         # Formateo estricto de columnas alineadas (Línea métrica)
         seq_col = f"{seq_num:>3d}. "
-        mode_col = _pad_visible_tag(mode_tag, 20)
+        mode_col = _pad_visible_tag(mode_tag, 24)
 
-        # Solo si la duración final difiere sustancialmente tanto de orig como de fish (ej. clamp final de video)
-        extra_fin = ""
-        if abs(final_dur - dur_en) > 0.08 and abs(final_dur - raw_dur_es) > 0.08:
-            extra_fin = f" ➔ fin: {final_dur:5.2f}s"
-
-        dur_col = f"[orig: {dur_en:5.2f}s | fish: {raw_dur_es:5.2f}s{extra_fin}]"
+        if abs(final_dur - raw_dur_es) >= 0.05:
+            dur_col = f"[orig: {dur_en:5.2f}s | fish: {raw_dur_es:5.2f}s ➔ {final_dur:5.2f}s]"
+        else:
+            dur_col = f"[orig: {dur_en:5.2f}s | fish: {raw_dur_es:5.2f}s]"
         print(f"{seq_col}{mode_col}{dur_col}")
 
         indent = "      "

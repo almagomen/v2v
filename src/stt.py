@@ -107,7 +107,6 @@ def transcribe_and_process(
         )
         t_group = time.perf_counter() - t0_group
         total_stt_wall = time.perf_counter() - t0_stt_wall
-        print(f"⏱️ [Whisper + Diarización] {len(result)} segmentos generados en {total_stt_wall:.1f}s")
         return result, detected_language, {"whisper": t_whisper, "diarization": t_diarize}
 
     raise ValueError("Pasando segments sin media_path no soportado aquí.")

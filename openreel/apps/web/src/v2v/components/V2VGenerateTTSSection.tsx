@@ -93,6 +93,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
   const [temperature, setTemperature] = useState(0.7);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [phonemes, setPhonemes] = useState<Record<string, string>>({});
+  const [preventOverlap, setPreventOverlap] = useState<boolean>(false);
 
   // Estados para ajuste de velocidad sin regenerar TTS
   const [speedMode, setSpeedMode] = useState<"x" | "s">("x");
@@ -595,6 +596,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             {
               temperature,
               phonemes: Object.keys(phonemes).length > 0 ? phonemes : undefined,
+              prevent_overlap: preventOverlap,
             },
           );
         }
@@ -802,6 +804,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         onMainAction={handleMainAction}
         phonemes={phonemes}
         setPhonemes={setPhonemes}
+        preventOverlap={preventOverlap}
+        setPreventOverlap={setPreventOverlap}
         mainActionLabel={
           isEditingExistingSegment
             ? `Regenerar #${parsedSelectedSegment?.segIdx}`

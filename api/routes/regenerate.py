@@ -68,6 +68,7 @@ async def regenerate_segment(req: RegenerateSegmentRequest):
         repetition_penalty=req.repetition_penalty,
         volume=req.volume,
         phonemes=req.phonemes,
+        prevent_overlap=bool(req.prevent_overlap),
     )
 
 
@@ -86,6 +87,7 @@ def _do_regenerate_segment(
     repetition_penalty: float = 1.2,
     volume: float = 0.0,
     phonemes: dict[str, str] | None = None,
+    prevent_overlap: bool = False,
 ):
     from src.pipeline import split_audio_sequences
     from src.audio_utils import clone_voice_segments
@@ -147,6 +149,7 @@ def _do_regenerate_segment(
         repetition_penalty=repetition_penalty,
         volume=volume,
         source_lang=source_lang,
+        slowdown_range=(0.75, 1.25) if prevent_overlap else None,
     )
 
     if not paths_es:

@@ -108,6 +108,9 @@ def get_segments_editor(job_id: str, video_index: int):
         )
 
         slot = max(0.0, end - start)
+        orig_s = float(orig_d.get("orig_start", orig_d.get("start", tts_d.get("orig_start", tts_d.get("start", start)))))
+        orig_e = float(orig_d.get("orig_end", orig_d.get("end", tts_d.get("orig_end", tts_d.get("end", end)))))
+        orig_dur = float(orig_d.get("orig_duration", tts_d.get("orig_duration", max(0.0, orig_e - orig_s))))
         seg_ph = tts_d.get("phonemes") or orig_d.get("phonemes") or (js.get("phonemes") if i < len(job_segments) else None)
         rows.append(
             SegmentEditorRow(
@@ -115,6 +118,9 @@ def get_segments_editor(job_id: str, video_index: int):
                 start=start,
                 end=end,
                 slot_duration=round(slot, 3),
+                orig_start=round(orig_s, 3),
+                orig_end=round(orig_e, 3),
+                orig_duration=round(orig_dur, 3),
                 original_text=original_text,
                 tts_text=tts_text,
                 speaker=speaker,

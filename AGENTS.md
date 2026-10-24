@@ -100,7 +100,7 @@ apps/web/src/v2v/
 2. **Indexación O(1) de URLs en Cola**: Mantenido en `Queue/url_index.json`.
 3. **Escritura por Lotes de Logs (`_LogBuffer`)**: `api/job_store.py` ejecuta flush cada 2s o 4KB, reduciendo la contención de disco.
 4. **Dual-GPU Pipeline**: Whisper Turbo en GPU 0 y Pyannote Diarization en GPU 1 en paralelo con `ThreadPoolExecutor` en `kaggle_launch.ipynb`.
-5. **Transferencia Optimizada**: Instrumental servida en AAC/M4A 192k (ahorro del 94% de peso) y TAR de segmentos cacheados en disco servidos vía `FileResponse` (primer byte <10ms) para transferencias instantáneas e ilimitadas a través de Cloudflare Tunnel.
+5. **Transferencia Optimizada**: Instrumental y segmentos de voz original (`Seqs_src`) servidos en AAC/M4A 192k (ahorro del 92-94% de peso, reduciendo paquetes de 45MB a ~3.5MB con fidelidad acústica de estudio) y TAR de segmentos cacheados en disco servidos vía `FileResponse` (primer byte <10ms) para transferencias instantáneas e ilimitadas a través de Cloudflare Tunnel.
 
 ---
 

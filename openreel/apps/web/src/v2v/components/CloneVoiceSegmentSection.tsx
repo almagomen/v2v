@@ -99,6 +99,7 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
   const [regenLoading, setRegenLoading] = useState(false);
   const [regenError, setRegenError] = useState<string | null>(null);
   const [regenStatus, setRegenStatus] = useState<string | null>(null);
+  const [preventOverlap, setPreventOverlap] = useState<boolean>(false);
 
   const [backendSpeaker, setBackendSpeaker] = useState<string | null>(null);
   const [speed, setSpeed] = useState<number>(1.0);
@@ -300,7 +301,10 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
         selectedVoice,
         effectiveSpeed,
         targetDuration,
-        { phonemes: Object.keys(phonemes).length > 0 ? phonemes : undefined },
+        {
+          phonemes: Object.keys(phonemes).length > 0 ? phonemes : undefined,
+          prevent_overlap: preventOverlap,
+        },
       );
 
       const applyResult = await applyRegeneratedSegmentToTimeline({
@@ -708,6 +712,21 @@ export const CloneVoiceSegmentSection: React.FC<{ clipId: string }> = ({ clipId 
             <span className="text-[10px] text-green-400">{regenStatus}</span>
           </div>
         )}
+
+        <div className="flex items-center justify-between p-2 rounded bg-background-secondary/60 border border-border">
+          <label className="flex items-center gap-2 text-[10px] text-text-primary font-medium cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={preventOverlap}
+              onChange={(e) => setPreventOverlap(e.target.checked)}
+              className="rounded border-border cursor-pointer accent-primary"
+            />
+            <span>Evitar solapamiento (Ajustar al espacio libre)</span>
+          </label>
+          <span className="text-[9px] text-text-muted font-mono">
+            {preventOverlap ? "Modo seguro" : "1.00x"}
+          </span>
+        </div>
 
         <button
           onClick={handleRegenerate}

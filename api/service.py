@@ -249,17 +249,21 @@ def _run_pipeline(
 
             # Pre-empaquetado anticipado en background del TAR de segmentos para entrega instantánea vía Cloudflare
             try:
-                t0_tar = time.perf_counter()
                 from api.routes.files import ensure_audio_segments_tar, ensure_src_audio_segments_tar
+                t0_tar = time.perf_counter()
                 tar_file = ensure_audio_segments_tar(path.parent)
-                tar_src_file = ensure_src_audio_segments_tar(path.parent)
                 t_tar = time.perf_counter() - t0_tar
+
+                t0_tar_src = time.perf_counter()
+                tar_src_file = ensure_src_audio_segments_tar(path.parent)
+                t_tar_src = time.perf_counter() - t0_tar_src
+
                 if tar_file:
                     sz_mb = tar_file.stat().st_size / (1024 * 1024)
                     print(f"📦 [Pre-caching TAR] {len(paths_es)} segmentos empaquetados en {t_tar:.2f}s ({sz_mb:.1f}MB)")
                 if tar_src_file:
                     sz_src_mb = tar_src_file.stat().st_size / (1024 * 1024)
-                    print(f"📦 [Pre-caching TAR Orig] Segmentos originales empaquetados ({sz_src_mb:.1f}MB)")
+                    print(f"📦 [Pre-caching TAR Orig] Segmentos originales empaquetados en {t_tar_src:.2f}s ({sz_src_mb:.1f}MB)")
             except Exception as e:
                 print(f"⚠️ Error en pre-caching TAR: {e}")
 
@@ -272,9 +276,14 @@ def _run_pipeline(
             set_url_state(r.get("url", ""), "done", f"Listo: {output_name}", index=idx, output_name=output_name, original_title=orig_title)
 
             t_link_total = time.perf_counter() - t_link_start
-            mins = int(t_link_total // 60)
-            secs = int(t_link_total % 60)
-            fmt_total = f"{t_link_total:.1f}s ({mins}m {secs:02d}s)" if mins > 0 else f"{t_link_total:.1f}s"
+            def _fmt_sec(val: float) -> str:
+                if val >= 60:
+                    m = int(val // 60)
+                    s = int(val % 60)
+                    return f"{val:.1f}s ({m}m {s:02d}s)"
+                return f"{val:.1f}s"
+
+            fmt_total = _fmt_sec(t_link_total)
 
             link_timings = r.get("timings", {})
             t_dl = link_timings.get("download", 0.0)
@@ -287,19 +296,19 @@ def _run_pipeline(
             print("=" * 60)
             print(f"⏱️ RESUMEN DE TIEMPOS [Link {idx + 1}/{len(urls)}]: {output_name}")
             if t_dl > 0:
-                print(f"• 📥 Descarga: {t_dl:.1f}s")
+                print(f"• 📥 Descarga: {_fmt_sec(t_dl)}")
             if t_stems > 0:
-                print(f"• 🎵 Separación: {t_stems:.1f}s")
+                print(f"• 🎵 Separación: {_fmt_sec(t_stems)}")
             if t_whisper > 0:
-                print(f"• 📝 Transcripción: {t_whisper:.1f}s")
+                print(f"• 📝 Transcripción: {_fmt_sec(t_whisper)}")
             if t_diar > 0:
-                print(f"• 👥 Diarización: {t_diar:.1f}s")
+                print(f"• 👥 Diarización: {_fmt_sec(t_diar)}")
             if t_trans > 0:
-                print(f"• 🌐 Traducción: {t_trans:.1f}s ({len(texts)} segmentos)")
+                print(f"• 🌐 Traducción: {_fmt_sec(t_trans)}")
             if t_title > 0:
-                print(f"• ✨ Título Viral: {t_title:.1f}s")
-            print(f"• ✂️ Corte secuencias: {t_split:.1f}s")
-            print(f"• 🗣️ TTS: {t_tts:.1f}s ({len(paths_es)} segmentos)")
+                print(f"• ✨ Título Viral: {_fmt_sec(t_title)}")
+            print(f"• ✂️ Corte secuencias: {_fmt_sec(t_split)}")
+            print(f"• 🗣️ TTS: {_fmt_sec(t_tts)} ({len(paths_es)} segmentos)")
             print(f"🏁 TIEMPO TOTAL: {fmt_total}")
             print("=" * 60 + "\n")
 

@@ -107,6 +107,7 @@ class RegenerateSegmentRequest(BaseModel):
     repetition_penalty: float = Field(1.2, ge=1.0, le=2.0, description="Fish Audio control de repetición")
     volume: float = Field(0.0, ge=-10.0, le=10.0, description="Fish Audio ajuste volumen en dB")
     phonemes: Optional[dict[str, str]] = Field(None, description="Diccionario de pronunciación fonética para términos especiales")
+    prevent_overlap: Optional[bool] = Field(False, description="Si es True, aplica técnicas de ajuste anticolisión al espacio antes del siguiente segmento")
 
 
 
@@ -170,6 +171,9 @@ class SegmentEditorRow(BaseModel):
     start: float
     end: float
     slot_duration: float
+    orig_start: Optional[float] = None
+    orig_end: Optional[float] = None
+    orig_duration: Optional[float] = None
     original_text: str
     tts_text: str
     speaker: Optional[str] = None

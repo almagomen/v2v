@@ -652,7 +652,6 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     if (currentPrefs.importOriginalAudio) activeOpts.push(`🎵 Audio original completo`);
                     if (currentPrefs.importMergedVideo) activeOpts.push(`🎬 Video final mezclado`);
 
-                    get().appendUrlLog(urlForLog, `• 📋 Configuración activa:\n   ${activeOpts.join("\n   ")}`);
                     get().appendUrlLog(urlForLog, `• 📥 Descargando medios (${activeOpts.join(" + ")})...`);
                   }
 
@@ -727,21 +726,36 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                         const tarMap = await v2vApi.fetchSrcAudioSegmentsTar(jobId, v.index);
                         const srcSegsFromTar: Array<{ isSrcSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob }> = [];
                         for (const seg of targetSrcList) {
-                          const segSuffix = `_${String(seg.seg).padStart(3, "0")}.wav`;
-                          const logicalName = `vocals_${String(seg.seg).padStart(3, "0")}.wav`;
+                          const segPad = String(seg.seg).padStart(3, "0");
+                          const segWavSuffix = `_${segPad}.wav`;
+                          const segM4aSuffix = `_${segPad}.m4a`;
+                          const logicalWav = `vocals_${segPad}.wav`;
+                          const logicalM4a = `vocals_${segPad}.m4a`;
                           let blob: Blob | undefined;
-                          if (tarMap.has(logicalName)) {
-                            blob = tarMap.get(logicalName);
+                          let matchedName = logicalM4a;
+
+                          if (tarMap.has(logicalM4a)) {
+                            blob = tarMap.get(logicalM4a);
+                            matchedName = logicalM4a;
+                          } else if (tarMap.has(logicalWav)) {
+                            blob = tarMap.get(logicalWav);
+                            matchedName = logicalWav;
                           } else {
                             for (const [name, b] of tarMap.entries()) {
-                              if (name.endsWith(segSuffix)) {
+                              if (name.endsWith(segM4aSuffix)) {
                                 blob = b;
+                                matchedName = logicalM4a;
+                                break;
+                              }
+                              if (name.endsWith(segWavSuffix)) {
+                                blob = b;
+                                matchedName = logicalWav;
                                 break;
                               }
                             }
                           }
                           if (blob) {
-                            srcSegsFromTar.push({ isSrcSegment: true, seg, logicalName, blob });
+                            srcSegsFromTar.push({ isSrcSegment: true, seg, logicalName: matchedName, blob });
                           }
                         }
                         if (srcSegsFromTar.length > 0) {
@@ -757,10 +771,12 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                         const chunk = targetSrcList.slice(i, i + CONCURRENCY_LIMIT);
                         const chunkResults = await Promise.all(
                           chunk.map(async (seg) => {
-                            const logicalName = `vocals_${String(seg.seg).padStart(3, "0")}.wav`;
+                            const segPad = String(seg.seg).padStart(3, "0");
                             for (let attempt = 0; attempt < 2; attempt++) {
                               try {
                                 const blob = await v2vApi.fetchSrcAudioSegmentBlob(jobId, v.index, seg.seg);
+                                const isM4a = blob.type.includes("mp4") || blob.type.includes("aac") || blob.type.includes("m4a");
+                                const logicalName = isM4a ? `vocals_${segPad}.m4a` : `vocals_${segPad}.wav`;
                                 return { isSrcSegment: true as const, seg, logicalName, blob };
                               } catch {
                                 if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
@@ -900,8 +916,6 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     modifiedAt: Date.now(),
                   };
 
-                  const tStartTimeline = performance.now();
-
                   for (const { asset } of downloadedAssets) {
                     if (!asset.toTimeline) continue;
                     const media = workingProject.mediaLibrary.items.find(
@@ -1013,7 +1027,11 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                         for (const seg of segs) {
                           const downloadedSrc = downloadedSrcSegs.find(d => d.seg.seg === seg.seg);
                           if (downloadedSrc) {
-                            const media = workingProject.mediaLibrary.items.find(m => m.name === downloadedSrc.logicalName);
+                            const media = workingProject.mediaLibrary.items.find(
+                              m => m.name === downloadedSrc.logicalName ||
+                                   m.name === downloadedSrc.logicalName.replace(/\.m4a$/i, ".wav") ||
+                                   m.name === downloadedSrc.logicalName.replace(/\.wav$/i, ".m4a")
+                            );
                             if (media) {
                               const segOrigMeta = v.segments?.find(s => s.seg === seg.seg);
                               const origStart = downloadedSrc.seg.orig_start !== undefined
@@ -1039,13 +1057,6 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   }
 
                   await autoSaveManager.forceSave(workingProject);
-
-                  const tTimelineMs = Math.round(performance.now() - tStartTimeline);
-                  if (urlForLog) {
-                    const ttsCount = downloadedSegs.length;
-                    const srcCount = currentPrefs.importOriginalSegments ? downloadedSrcSegs.length : 0;
-                    get().appendUrlLog(urlForLog, `• 🎬 Montaje: ${allClipsToBatchAdd.length} clips sincronizados (${ttsCount} TTS${srcCount > 0 ? ` + ${srcCount} originales con duración real` : ""}) en ${tTimelineMs}ms`);
-                  }
 
                   const audioSegmentsImported = workingProject.mediaLibrary.items.filter(
                     m => m.type === "audio" && (m.name.startsWith("tts_") || m.name.startsWith("vocals_")) && !m.waveformData && !m.isPlaceholder
@@ -1091,10 +1102,17 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   }
                   
                   get().setImportStatus(key, "done");
-                  const importElapsedSec = ((performance.now() - importStartTime) / 1000).toFixed(1);
+                  const importElapsedSec = (performance.now() - importStartTime) / 1000;
+                  const formatSecs = (sec: number) => {
+                    if (sec >= 60) {
+                      const m = Math.floor(sec / 60);
+                      const s = Math.floor(sec % 60);
+                      return `${sec.toFixed(1)}s (${m}m ${String(s).padStart(2, "0")}s)`;
+                    }
+                    return `${sec.toFixed(1)}s`;
+                  };
                   if (urlForLog) {
-                    get().appendUrlLog(urlForLog, `⏱️ [Importación Timeline] Completada en ${importElapsedSec}s (${totalFilesCount} archivos)`);
-                    get().appendUrlLog(urlForLog, `✅ Proyecto "${folder}" listo para editar en OpenReel`);
+                    get().appendUrlLog(urlForLog, `✅ [Importación Timeline] Completada en ${formatSecs(importElapsedSec)} (${totalFilesCount} archivos)`);
                     get().appendUrlLog(urlForLog, `${"=".repeat(60)}\n`);
                   }
 
