@@ -455,22 +455,22 @@ def download_video(
     dur_text = ""
     if dur:
         m, s = divmod(int(dur), 60)
-        dur_text = f" | {m}m {s:02d}s" if m > 0 else f" | {s}s"
+        dur_text = f"| {m}m {s:02d}s" if m > 0 else f" | {s}s"
     elif info.get("duration_string"):
-        dur_text = f" | {info.get('duration_string')}"
+        dur_text = f"| {info.get('duration_string')}"
 
     if requested:
         v_ext = v_info.get("ext", "mp4")
         v_cod = v_info.get("vcodec", "avc1")
         v_h = v_info.get("height", "1080")
         v_fps = v_info.get("fps", 30)
-        print(f"📹 Video: {v_ext} | {v_cod} | {v_h}p | {v_fps}fps{dur_text} | {v_size_str}")
+        print(f"📹 {v_ext} {v_cod} | {v_h}p {v_fps}fps {dur_text} {v_size_str}")
 
         a_ext = a_info.get("ext", "webm")
         a_cod = a_info.get("acodec", "opus")
         a_asr = a_info.get("asr", 48000)
         a_abr = a_info.get("abr", 128)
-        print(f"🎵 Audio: {a_ext} | {a_cod} | {a_asr}Hz | {a_abr}kbps | {a_size_str}")
+        print(f"🎵 {a_ext} {a_cod} | {a_asr}Hz {a_abr}kbps | {a_size_str}")
 
     tot_bytes = 0
     if v_cand and v_cand.exists(): tot_bytes += v_cand.stat().st_size

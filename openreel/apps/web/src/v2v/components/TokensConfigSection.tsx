@@ -84,7 +84,7 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
       v2vApi.setBackendUrl(backendUrl);
       const res = await v2vApi.checkHealth();
       if (res.ok) {
-        let syncedMsg = "Conexión exitosa con el backend (GPU activa)";
+        let syncedMsg = "Conexión exitosa";
         try {
           const remoteTokens = await v2vApi.getTokens();
           let syncedCount = 0;
@@ -115,7 +115,7 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
             }
           }
           if (syncedCount > 0) {
-            syncedMsg += " — Tokens de Fish Audio y Google sincronizados automáticamente desde Kaggle Secrets.";
+            syncedMsg += " — Tokens sincronizados.";
           }
         } catch {
           // Mantener mensaje principal si la lectura de tokens no responde
@@ -172,16 +172,13 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
           <input
             type="text"
             className="w-full px-2.5 py-1.5 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
-            placeholder="https://xxxx.trycloudflare.com (o vacío para localhost/web)"
+            placeholder="Desktop: cloudflare - Web: automático"
             value={backendUrl}
             onChange={(e) => {
               setBackendUrl(e.target.value);
               setTestResult(null);
             }}
           />
-          <p className="text-[9px] text-text-muted leading-tight">
-            OpenReel Desktop: URL Cloudflare | Versión Web: automático.
-          </p>
           {testResult && (
             <div
               className={`flex items-center gap-1.5 text-[10px] p-1.5 rounded-md ${
@@ -342,11 +339,9 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 <Music size={13} className="text-emerald-400" />
                 <div>
                   <span className="text-[10px] font-medium text-text-primary block">
-                    Pista Instrumental aislada (no_vocals.wav)
+                    Pista Instrumental (no_vocals.wav)
                   </span>
-                  <span className="text-[9px] text-text-muted block">
-                    Música y efectos de fondo extraídos con Demucs (Recomendado)
-                  </span>
+
                 </div>
               </div>
               <input
@@ -363,11 +358,9 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 <Mic size={13} className="text-amber-400" />
                 <div>
                   <span className="text-[10px] font-medium text-text-primary block">
-                    Voces originales aisladas (vocals.wav)
+                    Voz original  (vocals.wav)
                   </span>
-                  <span className="text-[9px] text-text-muted block">
-                    Pista de voz original (silenciada por defecto para referencia)
-                  </span>
+
                 </div>
               </div>
               <input
@@ -384,11 +377,9 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 <Layers size={13} className="text-blue-400" />
                 <div>
                   <span className="text-[10px] font-medium text-text-primary block">
-                    Segmentos originales en pistas paralelas (Seqs_src/*.wav)
+                    Segmentos originales (Seqs_src/*.wav)
                   </span>
-                  <span className="text-[9px] text-text-muted block">
-                    Clips originales alineados en el timeline (silenciados) para comparar con la traducción en paralelo
-                  </span>
+
                 </div>
               </div>
               <input
@@ -405,11 +396,9 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 <Radio size={13} className="text-cyan-400" />
                 <div>
                   <span className="text-[10px] font-medium text-text-primary block">
-                    Audio original completo (original_audio.webm)
+                    Pista de Audio
                   </span>
-                  <span className="text-[9px] text-text-muted block">
-                    Audio completo sin separar del video original (silenciado)
-                  </span>
+
                 </div>
               </div>
               <input
@@ -426,11 +415,9 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 <Film size={13} className="text-purple-400" />
                 <div>
                   <span className="text-[10px] font-medium text-text-primary block">
-                    Video renderizado con audio (merged.mp4)
+                    Pista de Video
                   </span>
-                  <span className="text-[9px] text-text-muted block">
-                    Pista adicional de video con audio combinado
-                  </span>
+
                 </div>
               </div>
               <input

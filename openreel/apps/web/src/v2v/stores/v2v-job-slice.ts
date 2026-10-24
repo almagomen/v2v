@@ -642,7 +642,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   if (urlForLog) {
                     get().appendUrlLog(urlForLog, `\n${"=".repeat(60)}`);
-                    get().appendUrlLog(urlForLog, `🚀 ${folder}`);
+                    get().appendUrlLog(urlForLog, `${folder}`);
 
                     const activeOpts: string[] = [];
                     activeOpts.push(`🗣️ TTS: ${audioSegs.length} audios`);
@@ -652,7 +652,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     if (currentPrefs.importOriginalAudio) activeOpts.push(`🎵 Audio original`);
                     if (currentPrefs.importMergedVideo) activeOpts.push(`🎬 Video`);
 
-                    get().appendUrlLog(urlForLog, `• 📥 Descargando medios: ${activeOpts.join(" + ")}...`);
+                    get().appendUrlLog(urlForLog, `• 📥 Descargando medios:\n${activeOpts.join(" + ")}...`);
                   }
 
                   const tStartDownload = performance.now();

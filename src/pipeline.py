@@ -49,7 +49,7 @@ def process_video_queue(
                 on_stage(
                     u,
                     "downloading",
-                    f"🚀 [Link {display_idx}/{display_total}] Descargando: {u}",
+                    f"🚀 [Link {display_idx}/{display_total}] {u}",
                 )
             except Exception:
                 pass

@@ -27,7 +27,7 @@ wheels/
 .installed.cfg
 *.egg
 
-# Colab / content
+# Content
 /content/
 /content/drive/
 Queue/
@@ -35,6 +35,7 @@ temp/
 *.mp4
 *.wav
 !**/roformer/
+
 
 # IDE
 .idea/

@@ -270,7 +270,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         for k_idx, key in enumerate(keys_to_attempt):
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
 
-            print(f"🌐 [{source_lang} → {target_lang}] {model} | Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag} ({total_count} segs)", flush=True)
+            print(f"🌐 [{source_lang} → {target_lang}] {model} {key_tag} ({total_count} segs)", flush=True)
             t_start = time.perf_counter()
 
             try:
@@ -511,7 +511,7 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
 
                 if raw_title:
                     title = raw_title.replace("\n", " ").strip("\"'")
-                    print(f"⏱️ [Título Viral '{model}'] Generado en {duration:.1f}s: {title}", flush=True)
+                    print(f"⏱️ [Título '{model}'] viral en {duration:.1f}s:\n{title}", flush=True)
                     return title
 
             except Exception as e:

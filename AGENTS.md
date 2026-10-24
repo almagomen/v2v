@@ -30,14 +30,19 @@ Este documento es la **fuente de verdad única** de arquitectura, reglas de aisl
    - Si se abre un **proyecto existente** que ya tenía un trabajo V2V, restaura automáticamente sus URLs, videos y logs.
    - Las claves de API (Fish Audio, Google Gemini) y la URL del backend son globales y se conservan entre proyectos.
 
-4. **Estrategia Anti-Límites de Cloudflare Tunnel y Optimización de Rendimiento (Regla Mandatoria)**:
+4. **Estrategia Anti-Límites de Cloudflare Tunnel y Optimización de Audio M4A (Regla Mandatoria)**:
    - Cloudflare Tunnel impone un límite estricto de **100 segundos** para el *primer byte* (Time To First Byte - TTFB) arrojando error `HTTP 524`.
    - **Prohibido empaquetar o comprimir en memoria (`io.BytesIO`)** durante peticiones HTTP.
-   - **Pre-caching en Background**: El paquete `audio_segments.tar.gz` se genera automáticamente al terminar la síntesis TTS en el backend con compresión gzip ligera (`compresslevel=1`, >150MB/s) reduciendo el ancho de banda un 70% sin demoras en la petición del cliente.
+   - **Arquitectura Dual de Audio en `Seqs_trg` (Sin duplicación WAV)**:
+     - `tts_{speaker}_{idx}_raw.wav`: Máster puro e intacto generado por Fish Audio conservado exclusivamente para regeneraciones y sliders de velocidad/duración sin pérdida generativa acumulativa.
+     - `tts_{speaker}_{idx}.m4a`: Audio final sincronizado y comprimido directamente a AAC 192k para el Timeline de OpenReel, empaquetado TAR y renderizado FFmpeg con GPU en Colab.
+     - **Prohibido generar `.wav` sincronizados redundantes**: solo existen el máster `_raw.wav` y el sincronizado `.m4a`.
+   - **Pre-caching en Background Instantáneo**: El paquete `audio_segments.tar.gz` se genera al terminar la síntesis TTS empaquetando directamente los `.m4a` existentes en disco (tiempo <150ms, tamaño ~2.5MB, 90% de ahorro de ancho de banda).
    - Todo endpoint de transferencia masiva (TAR de segmentos, videos largos, películas) debe **servirse directamente desde disco con `FileResponse`** (`sendfile()`) para emitir el primer byte en <10ms.
    - En el cliente (`v2v-api.ts`), transferencias masivas usan `timeoutMs = 0` (sin límite arbitrario) y descompresión nativa `DecompressionStream("gzip")`.
    - **TTS Concurrente**: La síntesis con Fish Audio se paraleliza con `ThreadPoolExecutor(max_workers=5)` con reintento exponencial ante HTTP 429 para acelerar 4x la generación.
-   - En fallbacks individuales de red, **prohibido `Promise.all` masivo** sin control de concurrencia; usar lotes concurrentes (máximo 5) con reintentos para evitar que Cloudflare o Chromium cierren sockets (error 429/502).
+   - En fallbacks individuales de red, **prohibido `Promise.all` masivo** sin control de concurrencia; usar lotes concurrentes (máximo 5) con reintentos para evitar saturación de sockets en Chromium (error 429/502).
+   - **Fidelidad Temporal en Timeline (Sin Duración Forzada de Fallback)**: La duración en timeline de los clips TTS y originales refleja siempre su duración física real; prohibido aplicar fallbacks que fuercen la duración del audio original sobre el TTS o viceversa.
 
 ---
 
@@ -100,7 +105,7 @@ apps/web/src/v2v/
 2. **Indexación O(1) de URLs en Cola**: Mantenido en `Queue/url_index.json`.
 3. **Escritura por Lotes de Logs (`_LogBuffer`)**: `api/job_store.py` ejecuta flush cada 2s o 4KB, reduciendo la contención de disco.
 4. **Dual-GPU Pipeline**: Whisper Turbo en GPU 0 y Pyannote Diarization en GPU 1 en paralelo con `ThreadPoolExecutor` en `kaggle_launch.ipynb`.
-5. **Transferencia Optimizada**: Instrumental y segmentos de voz original (`Seqs_src`) servidos en AAC/M4A 192k (ahorro del 92-94% de peso, reduciendo paquetes de 45MB a ~3.5MB con fidelidad acústica de estudio) y TAR de segmentos cacheados en disco servidos vía `FileResponse` (primer byte <10ms) para transferencias instantáneas e ilimitadas a través de Cloudflare Tunnel.
+5. **Transferencia Optimizada**: Instrumental (`no_vocals.m4a`), voz aislada (`vocals.m4a`), segmentos originales (`Seqs_src/*.m4a`) y segmentos sintetizados (`Seqs_trg/tts_*.m4a`) servidos en AAC/M4A 192k (ahorro del 90-94% de peso, reduciendo paquetes de segmentos de 27MB a ~2.5MB con fidelidad acústica de estudio) y TAR de segmentos cacheados en disco servidos vía `FileResponse` (primer byte <10ms) para transferencias instantáneas e ilimitadas a través de Cloudflare Tunnel.
 
 ---
 
@@ -112,10 +117,14 @@ apps/web/src/v2v/
 
 ---
 
-## 5. Streaming Real-Time WebSocket y HTTP Polling
+## 5. Streaming Real-Time WebSocket, HTTP Polling y Formato de Logs
 
-- Endpoint `/ws/job/{job_id}` despacha `job_snapshot`, `log_chunk` y `job_update`.
-- Fallback automático e ininterrumpido a HTTP polling cada 2s si la red o proxy bloquea WebSockets.
+1. **Streaming y Polling**:
+   - Endpoint `/ws/job/{job_id}` despacha `job_snapshot`, `log_chunk` y `job_update`.
+   - Fallback automático e ininterrumpido a HTTP polling cada 2s si la red o proxy bloquea WebSockets.
+2. **Formato Fluido de Logs en Backend**:
+   - Prohibido forzar anchos fijos tabulares con emojis o sangrías arbitrarias (`_pad_visible_tag`, sangrías de 10+ espacios) en terminal o visor de logs.
+   - Las etiquetas de idioma (`[pt]`) y emoción (`[confident]`) se alinean a la derecha para que los corchetes de cierre coincidan visualmente sin sangría base, dejando el wrapping de texto libre para que el CSS del contenedor del frontend lo ajuste responsivamente.
 
 ---
 
@@ -136,7 +145,7 @@ Al comunicar el cliente OpenReel con el backend a través de Cloudflare Tunnel (
 1. **Evasión del Timeout de 100s de Cloudflare (Error 524) y Pre-caching en Background**:
    - Cloudflare Tunnel cancela cualquier petición si no recibe el primer byte (TTFB) en 100 segundos.
    - **Solución implementada**:
-     - `ensure_audio_segments_tar`: Empaqueta anticipadamente a disco (`folder / "audio_segments.tar.gz"`) con compresión ultra-rápida (`compresslevel=1`, >150MB/s), ignorando archivos temporales `*_raw.wav` para reducir el tamaño al 70%.
+     - `ensure_audio_segments_tar`: Empaqueta anticipadamente a disco (`folder / "audio_segments.tar.gz"`) directamente los archivos `.m4a` ya generados en disco con compresión gzip ligera (`compresslevel=1`, >150MB/s), ignorando los másters `*_raw.wav` para reducir el tamaño al 10% (de ~27MB a ~2.5MB en <0.15s).
      - Se ejecuta automáticamente en background al finalizar la etapa de TTS (o en caché hit), de modo que cuando el cliente solicita el paquete, ya está 100% generado en disco.
      - Se sirve mediante `FileResponse` utilizando `sendfile()` del kernel: el primer byte se transmite en <10ms hacia Cloudflare, lo cual **desactiva el timeout de 100s** y permite transferir películas de 2 horas sin interrupciones.
      - Caché en disco con validación por `mtime` de los segmentos para entrega instantánea en reimportaciones.
