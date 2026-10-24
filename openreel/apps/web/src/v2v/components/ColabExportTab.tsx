@@ -569,7 +569,7 @@ export const ColabExportTab: React.FC = () => {
   // ── Single export ────────────────────────────────────────────
   const handleSingleExport = useCallback(async () => {
     if (!jobContext) {
-      setErrorMsg("No se pudo determinar el job de Colab. Asegúrate de que el proyecto tiene medios V2V.");
+      setErrorMsg("No se pudo determinar el trabajo del backend. Asegúrate de que el proyecto tiene medios V2V.");
       setStatus("error");
       return;
     }
@@ -580,7 +580,7 @@ export const ColabExportTab: React.FC = () => {
     const rawName = jobContext.longName || project.name || "export";
     const outName = rawName.replace(/^\d+[._\s]*/, "");
 
-    appendExportLog(`🎬 [Export Single] Iniciando exportación de "${outName}"...`);
+    appendExportLog(`🎬 [Export Single] Iniciando exportación:\n"${outName}"...`);
     setStatus("uploading");
     setErrorMsg("");
     setCatboxUrl(null);
@@ -604,7 +604,7 @@ export const ColabExportTab: React.FC = () => {
         (msg) => {
           setProgressData({
             progress: 30,
-            currentStep: "Paso 2/3: Subiendo medios a Colab...",
+            currentStep: "Paso 2/3: Subiendo medios al backend...",
             statusMsg: msg,
           });
         },
@@ -613,7 +613,7 @@ export const ColabExportTab: React.FC = () => {
       if (needUpload.length > 0) {
         appendExportLog(`⏱️ [Etapa: Subida de Medios] ${needUpload.length} archivo(s) subidos en ${tUploadSec}s`);
       } else {
-        appendExportLog(`⚡ [Medios] Activos listos en Colab (sin subida requerida)`);
+        appendExportLog(`⚡ [Medios] Activos listos en el backend (sin subida requerida)`);
       }
 
       setStatus("rendering");
@@ -622,21 +622,21 @@ export const ColabExportTab: React.FC = () => {
         currentStep: uploadToCatbox
           ? "Paso 3/3: Renderizando y subiendo a Catbox…"
           : effectiveMode === "stream_copy"
-            ? "Paso 3/3: Empaquetando MP4 en Colab (Stream Copy)…"
-            : "Paso 3/3: Renderizando MP4 en Colab (GPU T4 NVENC)…",
+            ? "Paso 3/3: Empaquetando MP4 (Stream Copy)…"
+            : "Paso 3/3: Renderizando MP4 (GPU NVENC)…",
         currentVideoName: outName,
         statusMsg: uploadToCatbox
           ? "Renderizando y subiendo a Catbox…"
           : effectiveMode === "stream_copy"
-            ? "Empaquetando en Colab (Stream Copy)…"
-            : "Renderizando en Colab (GPU NVENC)…",
+            ? "Empaquetando (Stream Copy)…"
+            : "Renderizando (GPU NVENC)…",
       });
 
       const clips = buildPayloadClips(analyzed, uploadedMap);
       const tPrepSec = ((performance.now() - tPrepStart) / 1000).toFixed(1);
       appendExportLog(`⏱️ [Etapa: Preparación] ${clips.length} clip(s) analizados en ${tPrepSec}s`);
 
-      appendExportLog(`🚀 [Etapa: Render Colab] Procesando timeline en Colab...`);
+      appendExportLog(`🚀 [Etapa: Render] Procesando timeline en el backend...`);
       const tRenderColabStart = performance.now();
       const result = await v2vApi.renderTimeline({
         job_id: jobContext.jobId,
@@ -660,7 +660,7 @@ export const ColabExportTab: React.FC = () => {
         });
         if (catboxResult.timings) {
           const mode = catboxResult.mode || catboxResult.timings?.mode || "FFmpeg";
-          appendExportLog(`⏱️ [Colab Backend] Modo: ${mode} | FFmpeg: ${catboxResult.timings.ffmpeg}s | Catbox: ${catboxResult.timings.catbox}s`);
+          appendExportLog(`⏱️ [Backend] Modo: ${mode} | FFmpeg: ${catboxResult.timings.ffmpeg}s | Catbox: ${catboxResult.timings.catbox}s`);
         }
         appendExportLog(`⏱️ [Etapa: Render + Catbox] Completado en ${tRenderColabSec}s`);
         appendExportLog(`🔗 Enlace Catbox: ${catboxResult.url}`);
@@ -675,14 +675,14 @@ export const ColabExportTab: React.FC = () => {
         const bTimings = (result as any)?.timings;
         if (bTimings?.ffmpeg !== undefined) {
           const modeLabel = bTimings.mode ? ` [${bTimings.mode}]` : "";
-          appendExportLog(`⏱️ [Colab Backend] Modo:${modeLabel} | FFmpeg: ${bTimings.ffmpeg}s ${bTimings.cached ? '(Caché)' : ''}`);
+          appendExportLog(`⏱️ [Backend] Modo:${modeLabel} | FFmpeg: ${bTimings.ffmpeg}s ${bTimings.cached ? '(Caché)' : ''}`);
         }
-        appendExportLog(`⏱️ [Etapa: Render Colab] Descarga MP4 completada en ${tRenderColabSec}s`);
+        appendExportLog(`⏱️ [Etapa: Render] Descarga MP4 completada en ${tRenderColabSec}s`);
       }
 
       const tTotalSec = ((performance.now() - tExportStart) / 1000).toFixed(1);
       appendExportLog("=".repeat(50));
-      appendExportLog(`🏁 RESUMEN EXPORTACIÓN VIDEO: ${outName}`);
+      appendExportLog(`🏁 RESUMEN EXPORTACIÓN:\n${outName}`);
       appendExportLog(`• Tiempo total: ${tTotalSec}s`);
       appendExportLog("=".repeat(50));
     } catch (e) {
@@ -788,7 +788,7 @@ export const ColabExportTab: React.FC = () => {
       }
 
       if (renders.length === 0) {
-        throw new Error("Ningún proyecto tiene medios de Colab disponibles.");
+        throw new Error("Ningún proyecto tiene medios del backend disponibles.");
       }
 
       const batchId = `batch_${Date.now()}`;
@@ -796,16 +796,16 @@ export const ColabExportTab: React.FC = () => {
       setStatus("rendering");
       setProgressData({
         progress: 20,
-        currentStep: `Paso 2/2: Renderizando videos en Colab (1/${renders.length})`,
+        currentStep: `Paso 2/2: Renderizando videos en el backend (1/${renders.length})`,
         currentVideoName: renders[0]?.output_name || "",
         currentIdx: 1,
         totalVideos: renders.length,
         statusMsg: uploadToCatbox
           ? `Renderizando y subiendo ${renders.length} videos a Catbox…`
-          : `Renderizando ${renders.length} proyectos en Colab…`,
+          : `Renderizando ${renders.length} proyectos en el backend…`,
       });
 
-      appendExportLog(`🚀 [Batch Colab] Iniciando render paralelo de ${renders.length} videos en Colab...`);
+      appendExportLog(`🚀 [Batch Export] Iniciando render de ${renders.length} videos en el backend...`);
 
       // Polling activo de progreso y logs al backend
       const seenBackendLogs = new Set<string>();
@@ -1060,9 +1060,6 @@ export const ColabExportTab: React.FC = () => {
 
           <div className="p-3 bg-background-tertiary rounded-lg text-xs space-y-1">
             <div className="flex justify-between text-text-secondary">
-              <span>{project.name}</span>
-            </div>
-            <div className="flex justify-between text-text-secondary">
               <span>Clips renderizables</span>
               <span className="font-medium text-green-400">{totalClips}</span>
             </div>
@@ -1094,7 +1091,7 @@ export const ColabExportTab: React.FC = () => {
             <div className="flex items-center gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded-lg">
               <AlertTriangle size={14} className="text-red-400" />
               <span className="text-[10px] text-red-300">
-                No se encontró ningún job de Colab asociado a este proyecto. Importa un video V2V primero.
+                No se encontró ningún trabajo del backend asociado a este proyecto. Importa un video V2V primero.
               </span>
             </div>
           )}
@@ -1164,8 +1161,8 @@ export const ColabExportTab: React.FC = () => {
                 : status === "uploading"
                   ? "Subiendo medios…"
                   : effectiveMode === "stream_copy"
-                    ? "Empaquetando en Colab (Stream Copy)…"
-                    : "Renderizando en Colab (GPU NVENC)…"}
+                    ? "Empaquetando (Stream Copy)…"
+                    : "Renderizando (GPU NVENC)…"}
             </>
           ) : isBatch ? (
             <>
