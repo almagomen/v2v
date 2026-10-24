@@ -270,7 +270,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         for k_idx, key in enumerate(keys_to_attempt):
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
 
-            print(f"🌐 [Traducción {source_lang_name} -> {target_lang_name}] Probando '{model}' (Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag})...", flush=True)
+            print(f"🌐 [{source_lang} → {target_lang}] {model} | Key {k_idx + 1}/{len(keys_to_attempt)}: {key_tag} ({total_count} segs)", flush=True)
             t_start = time.perf_counter()
 
             try:
@@ -391,7 +391,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
 
 
                     if aligned_list and len(aligned_list) == total_count:
-                        print(f"⏱️ [Etapa: Traducción | Gemini] Completada con '{model}' en {duration:.1f}s ({len(aligned_list)} frases)", flush=True)
+                        print(f"⏱️ [Traducción] Completada con '{model}' en {duration:.1f}s", flush=True)
                         if return_details:
                             phonemes_list = [phonemes_map.get(i, {}) for i in range(total_count)]
                             return aligned_list, phonemes_list

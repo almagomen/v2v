@@ -48,8 +48,8 @@ export const TTSBatchControls: React.FC<TTSBatchControlsProps> = ({
           </div>
           <p className="text-[10px] text-fg-3">
             {isEditingExistingSegment
-              ? "Modifica el texto o voz del segmento seleccionado en Timeline"
-              : "Crea una locución a partir de texto y colócala en el Timeline"}
+              ? "Modifica el segmento seleccionado"
+              : "Crea una locución a partir de texto"}
           </p>
         </div>
       </div>

@@ -144,7 +144,7 @@ def _validate_manifest_integrity(folder: Path) -> list[str]:
 
     # Verificar presencia de segmentos TTS en Seqs_trg
     seqs_dir = folder / "Seqs_trg"
-    if not seqs_dir.is_dir() or not any(seqs_dir.glob("*.wav")):
+    if not seqs_dir.is_dir() or not (any(seqs_dir.glob("*.m4a")) or any(seqs_dir.glob("*.wav"))):
         warnings.append("No se encontraron segmentos TTS sintetizados en 'Seqs_trg/'")
 
     return warnings
@@ -237,7 +237,7 @@ def _resolve_media_path(
     # 2.5 Segmentos TTS/gen por índice directo desde Seqs_trg
     import re
 
-    tts_match = re.search(r"tts_.*?_(\d+)\.wav$", file_name, re.I)
+    tts_match = re.search(r"tts_.*?_(\d+)\.(?:wav|m4a)$", file_name, re.I)
     seg_idx = (
         int(tts_match.group(1))
         if tts_match
@@ -365,7 +365,7 @@ async def upload_media(
 
     # Si es un segmento de audio (tts_*), sincronizarlo también en Seqs_trg
     import re
-    tts_match = re.search(r"tts_.*?_(\d+)\.wav$", safe_filename, re.I)
+    tts_match = re.search(r"tts_.*?_(\d+)\.(?:wav|m4a)$", safe_filename, re.I)
     if tts_match:
         seg_idx = int(tts_match.group(1))
         seqs_dir = folder / "Seqs_trg"

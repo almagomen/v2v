@@ -113,9 +113,11 @@ export async function applyRegeneratedSegmentToTimeline(
   const segmentId = generateSegmentId(jobId, videoIndex, segIdx);
 
   const filenameToken = speakerFilenameToken(previousSpeakerToken, speaker, speakerLabel);
-  const newFileName = `tts_${filenameToken}_${String(segIdx).padStart(3, "0")}.wav`;
+  const isM4a = regenBlob.type.includes("mp4") || regenBlob.type.includes("m4a") || regenBlob.type.includes("aac");
+  const ext = isM4a ? ".m4a" : ".wav";
+  const newFileName = `tts_${filenameToken}_${String(segIdx).padStart(3, "0")}${ext}`;
   const newMediaName = newFileName;
-  const file = new File([regenBlob], newMediaName, { type: "audio/wav" });
+  const file = new File([regenBlob], newMediaName, { type: isM4a ? "audio/mp4" : "audio/wav" });
 
   if (!mediaId) {
     mediaId = resolveMediaIdForSegment(segIdx, {

@@ -124,8 +124,12 @@ def _do_regenerate_segment(
     texts_edited[seg_idx - 1] = t_edit
 
 
+    vocals_src = path.with_name("vocals.wav")
+    if not vocals_src.exists() and path.with_name("vocals.m4a").exists():
+        vocals_src = path.with_name("vocals.m4a")
+
     split_audio_sequences(
-        path.with_name("vocals.wav"), texts_edited, edit_indices=[seg_idx]
+        vocals_src, texts_edited, edit_indices=[seg_idx]
     )
 
     speaker_audio = SPEAKER_OPTIONS.get(speaker, speaker)
@@ -158,7 +162,11 @@ def _do_regenerate_segment(
     # Guardar segmentos actualizados en result.json
     update_result_segments(path.parent, texts_edited)
 
-    return FileResponse(paths_es[0], filename=paths_es[0].name, media_type="audio/wav")
+    from api.routes.files import _convert_seq_wav_to_m4a
+    m4a_path = _convert_seq_wav_to_m4a(paths_es[0])
+    res_path = m4a_path if m4a_path.exists() and m4a_path.suffix == ".m4a" else paths_es[0]
+    media_type = "audio/mp4" if res_path.suffix == ".m4a" else "audio/wav"
+    return FileResponse(res_path, filename=res_path.name, media_type=media_type)
 
 
 @router.post("/apply-speed")
@@ -193,7 +201,10 @@ async def apply_speed(req: ApplySpeedRequest):
         )
     
     # Intentamos leer siempre del RAW puro si existe, para no destruir fase ni acumular distorsiones.
-    raw_path = audio_path.with_name(f"{audio_path.stem}_raw{audio_path.suffix}")
+    raw_path = audio_path.with_name(f"{audio_path.stem.replace('_raw', '')}_raw.wav")
+    if not raw_path.exists():
+        raw_path = audio_path.with_name(f"{audio_path.stem}_raw{audio_path.suffix}")
+
     if raw_path.exists():
         arr, rate = torchaudio.load(str(raw_path))
     else:
@@ -212,7 +223,36 @@ async def apply_speed(req: ApplySpeedRequest):
     # Aplicar la velocidad usando ajuste seguro de duración
     arr_new = adjust_audio_duration(arr, target_samples, rate)
 
-    torchaudio.save(str(audio_path), arr_new, sample_rate=rate)
+    # Guardar en M4A y limpiar el WAV viejo si existiera
+    out_m4a_path = audio_path.with_suffix(".m4a")
+    tmp_wav = audio_path.with_suffix(".tmp.wav")
+    torchaudio.save(str(tmp_wav), arr_new, sample_rate=rate)
+    import subprocess
+    cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-i", str(tmp_wav),
+        "-c:a", "aac", "-b:a", "192k",
+        str(out_m4a_path),
+    ]
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        res_path = out_m4a_path
+    except Exception:
+        res_path = audio_path.with_suffix(".wav")
+        torchaudio.save(str(res_path), arr_new, sample_rate=rate)
+    finally:
+        if tmp_wav.exists():
+            try:
+                tmp_wav.unlink()
+            except OSError:
+                pass
+
+    old_wav = audio_path.with_suffix(".wav")
+    if old_wav.exists() and old_wav != raw_path:
+        try:
+            old_wav.unlink()
+        except OSError:
+            pass
 
     # Actualizar end del segmento en result.json
     result_data = load_result(path.parent)
@@ -227,7 +267,8 @@ async def apply_speed(req: ApplySpeedRequest):
         except Exception as e:
             print(f"⚠️ Error actualizando result.json tras apply-speed: {e}")
 
-    return FileResponse(audio_path, filename=audio_path.name, media_type="audio/wav")
+    media_type = "audio/mp4" if res_path.suffix == ".m4a" else "audio/wav"
+    return FileResponse(res_path, filename=res_path.name, media_type=media_type)
 
 
 @router.post("/generate-audio-segment")
@@ -260,7 +301,7 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     # El nuevo segmento es N + 1 con respecto a texts_original
     new_seg_idx = len(texts_original) + 1
 
-    audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}.wav"
+    audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}.m4a"
     raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}_raw.wav"
 
     arr, rate, raw_dur, duration, _ = synthesize_segment_audio(
@@ -292,7 +333,6 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     texts_original.append(new_segment)
     update_result_segments(path.parent, texts_original)
 
-
     # Sincronizar en memoria con el job si existe
     if req.job_id:
         job = get_job(req.job_id)
@@ -306,17 +346,20 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
                 "speaker": new_segment["speaker"],
             })
 
+    res_path = audio_es_path if audio_es_path.exists() else audio_es_path.with_suffix(".wav")
+    media_type = "audio/mp4" if res_path.suffix == ".m4a" else "audio/wav"
+
     headers = {
         "X-Seg-Idx": str(new_seg_idx),
         "X-Audio-Duration": str(round(duration, 3)),
-        "X-Audio-Filename": audio_es_path.name,
+        "X-Audio-Filename": res_path.name,
         "Access-Control-Expose-Headers": "X-Seg-Idx, X-Audio-Duration, X-Audio-Filename",
     }
 
     return FileResponse(
-        audio_es_path,
-        filename=audio_es_path.name,
-        media_type="audio/wav",
+        res_path,
+        filename=res_path.name,
+        media_type=media_type,
         headers=headers,
     )
 
@@ -339,15 +382,16 @@ async def get_segment_speed(job_id: str, video_index: int, seg_idx: int):
         if not audio_path.exists():
             return {"speed": 1.0}
 
-        raw_path = audio_path.with_name(audio_path.stem + "_raw" + audio_path.suffix)
+        raw_path = audio_path.with_name(f"{audio_path.stem.replace('_raw', '')}_raw.wav")
+        if not raw_path.exists():
+            raw_path = audio_path.with_name(audio_path.stem + "_raw" + audio_path.suffix)
         if not raw_path.exists():
             return {"speed": 1.0}
 
         def _get_samples(p):
             try:
-                import wave
-                with wave.open(str(p), "rb") as wf:
-                    return wf.getnframes()
+                if torchaudio is not None and hasattr(torchaudio, "info"):
+                    return torchaudio.info(str(p)).num_frames
             except Exception:
                 pass
             try:
@@ -356,8 +400,9 @@ async def get_segment_speed(job_id: str, video_index: int, seg_idx: int):
             except Exception:
                 pass
             try:
-                if torchaudio is not None and hasattr(torchaudio, "info"):
-                    return torchaudio.info(str(p)).num_frames
+                import wave
+                with wave.open(str(p), "rb") as wf:
+                    return wf.getnframes()
             except Exception:
                 pass
             try:

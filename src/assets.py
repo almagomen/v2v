@@ -68,9 +68,14 @@ def get_segment(folder: Path, seg_index: int) -> Path | None:
     if not seqs_dir.is_dir():
         return None
 
-    # Formato estándar: tts_{speaker}_{seg_index:03d}.wav
-    for cand in seqs_dir.glob(f"tts_*_{seg_index:03d}.wav"):
+    # 1. Formato optimizado: tts_{speaker}_{seg_index:03d}.m4a
+    for cand in seqs_dir.glob(f"tts_*_{seg_index:03d}.m4a"):
         if cand.is_file():
+            return cand
+
+    # 2. Fallback a .wav (excluyendo _raw.wav)
+    for cand in seqs_dir.glob(f"tts_*_{seg_index:03d}.wav"):
+        if cand.is_file() and not cand.name.endswith("_raw.wav"):
             return cand
 
     return None

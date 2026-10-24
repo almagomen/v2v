@@ -916,7 +916,7 @@ export const ColabExportTab: React.FC = () => {
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Server size={16} className="text-primary" />
-          <span className="text-sm font-semibold text-text-primary">Colab FFmpeg Export</span>
+          <span className="text-sm font-semibold text-text-primary">Backend Export</span>
         </div>
 
         {/* Selector de modo: Stream Copy vs Forzar Re-encode (o GPU T4 fijo si hay cortes) */}
@@ -1060,8 +1060,7 @@ export const ColabExportTab: React.FC = () => {
 
           <div className="p-3 bg-background-tertiary rounded-lg text-xs space-y-1">
             <div className="flex justify-between text-text-secondary">
-              <span>Proyecto actual</span>
-              <span className="font-medium text-text-primary truncate max-w-[200px]">{project.name}</span>
+              <span>{project.name}</span>
             </div>
             <div className="flex justify-between text-text-secondary">
               <span>Clips renderizables</span>
@@ -1179,11 +1178,11 @@ export const ColabExportTab: React.FC = () => {
               {uploadToCatbox
                 ? "Subir a Catbox"
                 : effectiveMode === "stream_copy"
-                  ? "Exportar MP4 (Stream Copy)"
-                  : "Renderizar MP4 (GPU NVENC)"}
+                  ? "Exportar"
+                  : "Renderizar"}
             </>
           )}
-        </Button>
+        </Button> 
 
         {isRunning && (
           <button

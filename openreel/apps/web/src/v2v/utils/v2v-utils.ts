@@ -57,25 +57,28 @@ export function segmentLogicalName(seg: SegmentNameInput): string {
   return base.split("/").pop() || base;
 }
 
-/** Busca un ítem de media por nombre lógico o por sufijo tts_*_{seg}.wav */
+/** Busca un ítem de media por nombre lógico o por sufijo tts_*_{seg}.(wav|m4a) */
 export function findSegmentMediaInLibrary<
   T extends { name: string },
 >(items: T[], seg: SegmentNameInput): T | undefined {
   const logical = segmentLogicalName(seg);
-  const exact = items.find((m) => m.name === logical || m.name.endsWith(`/${logical}`));
+  const logicalM4a = logical.replace(/\.wav$/i, ".m4a");
+  const exact = items.find((m) => m.name === logical || m.name === logicalM4a || m.name.endsWith(`/${logical}`) || m.name.endsWith(`/${logicalM4a}`));
   if (exact) return exact;
 
-  const suffix = `_${String(seg.seg).padStart(3, "0")}.wav`;
+  const segPad = String(seg.seg).padStart(3, "0");
+  const suffixWav = `_${segPad}.wav`;
+  const suffixM4a = `_${segPad}.m4a`;
   return items.find((m) => {
     const norm = m.name.replace(/\\/g, "/");
-    return /(?:tts_|gen_).*/.test(norm) && norm.endsWith(suffix);
+    return /(?:tts_|gen_).*/.test(norm) && (norm.endsWith(suffixWav) || norm.endsWith(suffixM4a));
   });
 }
 
 export function parseV2VSegmentFromName(name: string): V2VParsedSegment | null {
   const normalized = name.replace(/\\/g, "/");
   const basename = normalized.split("/").pop() || normalized;
-  const match = basename.match(/^(?:tts_|gen_)(.+)_(\d{3})\.wav$/);
+  const match = basename.match(/^(?:tts_|gen_)(.+)_(\d{3})\.(?:wav|m4a)$/);
   if (!match) return null;
   const speakerToken = match[1];
   const segIdx = parseInt(match[2], 10);

@@ -138,10 +138,10 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
       <div className="relative">
         <h3 className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-          Configurar Backend y Tokens IA (Fish Audio / Google)
+          Configurar Backend y Tokens IA
         </h3>
         <p className="text-[10px] text-text-muted mt-0.5 leading-normal">
-          Configura la URL de tu servidor en la nube (Kaggle/Colab) y las credenciales de API para síntesis y traducción.
+          Configura la URL de tu servidor y las credenciales API.
         </p>
       </div>
 
@@ -151,7 +151,7 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
           <div className="flex items-center justify-between">
             <label className="text-[10px] font-semibold text-text-primary flex items-center gap-1.5">
               <Server size={12} className="text-primary" />
-              URL del Backend Remoto (Kaggle / Colab)
+              URL del Backend Remoto
             </label>
             <button
               type="button"
@@ -180,7 +180,7 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
             }}
           />
           <p className="text-[9px] text-text-muted leading-tight">
-            En OpenReel Desktop, pega aquí la URL pública generada por Cloudflare en Kaggle. En la versión Web, déjalo vacío para usar el proxy automático.
+            OpenReel Desktop: URL Cloudflare | Versión Web: automático.
           </p>
           {testResult && (
             <div
@@ -197,13 +197,13 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
         </div>
         <div>
           <label className="text-[9px] text-text-muted block mb-1 font-medium">
-            FISH_API_KEY (Fish Audio)
+            TTS_API_KEY
           </label>
           <div className="relative flex items-center">
             <input
               type={showFishApiKey ? "text" : "password"}
               className="w-full px-2.5 py-1.5 pr-8 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
-              placeholder="Pega tu API Key de Fish Audio aquí..."
+              placeholder="Pega tu API Model TTS audio aquí..."
               value={fishApiKey}
               onChange={(e) => setFishApiKey(e.target.value)}
             />
@@ -219,13 +219,13 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
 
         <div>
           <label className="text-[9px] text-text-muted block mb-1 font-medium">
-            GOOGLE_API_KEY (Gemini / Gemma)
+            LLM_API_KEY
           </label>
           <div className="relative flex items-center">
             <input
               type={showGoogleApiKey ? "text" : "password"}
               className="w-full px-2.5 py-1.5 pr-8 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
-              placeholder="Pega tu GOOGLE_API_KEY (admite varias separadas por coma)..."
+              placeholder="Pega tus API LLM separadas por comas..."
               value={googleApiKey}
               onChange={(e) => setGoogleApiKey(e.target.value)}
             />
@@ -277,7 +277,7 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
             <div>
               <label className="text-[9px] text-text-muted block mb-1 font-medium flex items-center justify-between">
                 <span>Modelo de Título Viral</span>
-                <span className="text-[8px] text-primary font-mono">TikTok</span>
+                <span className="text-[8px] text-primary font-mono">RRSS</span>
               </label>
               <select
                 className="w-full px-2.5 py-1.5 text-[11px] bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary truncate"
@@ -323,9 +323,6 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
             <div className="flex-1 text-[10px] leading-tight">
               <span className="font-medium text-text-primary block">
                 Inferencia Contextual de Emociones y Prosodia
-              </span>
-              <span className="text-text-muted text-[9px] mt-0.5 block leading-normal">
-                Detecta entonación, pausas <code className="text-[8px] bg-background-tertiary px-1 py-0.5 rounded">[break]</code>, énfasis y emociones canónicas en cualquier punto del diálogo. Si la frase es neutra, se mantiene limpia sin forzar modulaciones.
               </span>
             </div>
           </label>

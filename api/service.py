@@ -176,7 +176,8 @@ def _run_pipeline(
             # Detectamos si los segmentos TTS ya existen como señal de caché completo.
             seqs_trg = path.parent / "Seqs_trg"
             already_done = seqs_trg.exists() and (
-                any(seqs_trg.glob("tts_*.wav")) or any(seqs_trg.glob("vocals_*.wav"))
+                any(seqs_trg.glob("tts_*.m4a")) or any(seqs_trg.glob("tts_*.wav")) or
+                any(seqs_trg.glob("vocals_*.m4a")) or any(seqs_trg.glob("vocals_*.wav"))
             )
 
             if already_done:
@@ -195,7 +196,7 @@ def _run_pipeline(
 
                 t_link_total = time.perf_counter() - t_link_start
                 print("=" * 60)
-                print(f"⏱️ RESUMEN DE TIEMPOS [Link {idx + 1}/{len(urls)}]: {output_name}")
+                print(f"⏱️ RESUMEN DE TIEMPOS: {output_name}")
                 print(f"• Estado: ♻️ Cargado completamente de caché")
                 print(f"🏁 TIEMPO TOTAL LINK: {t_link_total:.2f}s")
                 print("=" * 60)
@@ -238,7 +239,7 @@ def _run_pipeline(
                 source_lang=r.get("src_lang", "pt"),
             )
             t_tts = time.perf_counter() - t0_tts
-            print(f"⏱️ [Síntesis TTS (Fish Audio)] Completada en {t_tts:.1f}s ({len(paths_es)} audios generados)\n")
+            print(f"⏱️ [Síntesis TTS] Completada en {t_tts:.1f}s")
 
             if not paths_es:
                 set_url_state(r.get("url", ""), "error", "Error en TTS")
@@ -260,12 +261,12 @@ def _run_pipeline(
 
                 if tar_file:
                     sz_mb = tar_file.stat().st_size / (1024 * 1024)
-                    print(f"📦 [Pre-caching TAR] {len(paths_es)} segmentos empaquetados en {t_tar:.2f}s ({sz_mb:.1f}MB)")
+                    print(f"📦 [TAR] {len(paths_es)} seg. empaquetados en {t_tar:.2f}s ({sz_mb:.1f}MB)\n")
                 if tar_src_file:
                     sz_src_mb = tar_src_file.stat().st_size / (1024 * 1024)
-                    print(f"📦 [Pre-caching TAR Orig] Segmentos originales empaquetados en {t_tar_src:.2f}s ({sz_src_mb:.1f}MB)")
+                    print(f"📦 [TAR Orig] Seg. originales empaquetados en {t_tar_src:.2f}s ({sz_src_mb:.1f}MB)\n")
             except Exception as e:
-                print(f"⚠️ Error en pre-caching TAR: {e}")
+                print(f"⚠️ Error en pre-caching TAR: {e}\n")
 
             # El pipeline termina aquí. El render se hace desde Colab Export.
             # Cargar los activos base del video (rutas relativas limpias).
@@ -294,7 +295,7 @@ def _run_pipeline(
             t_title = link_timings.get("title", 0.0)
 
             print("=" * 60)
-            print(f"⏱️ RESUMEN DE TIEMPOS [Link {idx + 1}/{len(urls)}]: {output_name}")
+            print(f"⏱️ RESUMEN DE TIEMPOS: {output_name}")
             if t_dl > 0:
                 print(f"• 📥 Descarga: {_fmt_sec(t_dl)}")
             if t_stems > 0:

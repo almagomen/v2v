@@ -34,26 +34,6 @@ import subprocess
 import tempfile
 import os
 import re
-import unicodedata
-
-
-def _pad_visible_tag(tag: str, target_w: int = 24) -> str:
-    """Calcula el ancho visible en terminal monoespaciada para alinear columnas tabulares."""
-    w = 0
-    for ch in tag:
-        if ch == '\ufe0f':
-            continue
-        if ch in ('🔉', '✨', '⚡', '🎯', '🎛', '🔄', '🌐', '✂', '🔥'):
-            w += 2
-        elif unicodedata.east_asian_width(ch) in ('F', 'W'):
-            w += 2
-        elif unicodedata.category(ch) == 'Mn':
-            pass
-        else:
-            w += 1
-    if w < target_w:
-        return tag + " " * (target_w - w)
-    return tag + " "
 
 
 def _extract_emotion_prefix(text: str) -> tuple[str, str]:
@@ -71,46 +51,53 @@ def _extract_emotion_prefix(text: str) -> tuple[str, str]:
 def _format_aligned_segment_texts(
     orig_text: str,
     final_text: str,
-    source_lang: str = "pt",
-    indent: str = "      ",
+    source_lang: Optional[str] = None,
+    indent: str = "",
 ) -> list[str]:
     """
-    Formatea las líneas de texto del segmento con alineación de corchetes de emoción
-    y adaptación de la etiqueta de idioma original ([ pt ]).
-    Deja el wrap fluido al CSS del visor de logs en el frontend.
+    Formatea las líneas de texto del segmento (original y traducido/sintetizado).
+    Alinea a la derecha las etiquetas iniciales ([idioma] y [emoción]) para que los
+    corchetes de cierre concuerden en la misma columna vertical y los textos arranquen alineados.
     """
-    tag_final, cont_final = _extract_emotion_prefix(final_text)
-    has_emotion = bool(tag_final)
-
-    lines = []
     clean_curr = re.sub(r"\[.*?\]", "", final_text).strip()
     clean_orig = re.sub(r"\[.*?\]", "", orig_text).strip()
     is_translation = bool(clean_orig and clean_orig.lower() != clean_curr.lower())
 
-    if not is_translation or not has_emotion:
-        if is_translation:
-            lines.append(f"{indent}{orig_text}")
-        lines.append(f"{indent}{final_text}")
-        return lines
+    tag_final, cont_final = _extract_emotion_prefix(final_text)
 
-    # Adaptar etiqueta de idioma original con espacios interiores (ej. [ pt ])
-    sl = source_lang.strip().lower() if source_lang else "pt"
-    tag_orig = f"[ {sl} ]" if len(sl) == 2 else f"[{sl}]"
+    # Si no es traducción, solo emitir final_text tal cual
+    if not is_translation:
+        return [f"{indent}{final_text}"]
 
-    len_orig = len(tag_orig)
-    len_final = len(tag_final) if tag_final else 0
-    max_w = max(len_orig, len_final)
+    sl = (source_lang or "").strip().lower()
+    tag_orig = f"[{sl}]" if sl else ""
 
-    # Alinear a la derecha las etiquetas para que el corchete ']' concuerde en la misma columna
-    pad_orig = " " * (max_w - len_orig)
-    pfx_orig = f"{indent}{pad_orig}{tag_orig} "
-    lines.append(f"{pfx_orig}{orig_text}")
+    if tag_final and tag_orig:
+        len_orig = len(tag_orig)
+        len_final = len(tag_final)
+        max_w = max(len_orig, len_final)
 
-    pad_final = " " * (max_w - len_final)
-    pfx_final = f"{indent}{pad_final}{tag_final} "
-    lines.append(f"{pfx_final}{cont_final}")
+        pad_orig = " " * (max_w - len_orig)
+        pad_final = " " * (max_w - len_final)
 
-    return lines
+        pfx_orig = f"{indent}{pad_orig}{tag_orig} "
+        pfx_final = f"{indent}{pad_final}{tag_final} "
+
+        return [
+            f"{pfx_orig}{orig_text}",
+            f"{pfx_final}{cont_final}",
+        ]
+
+    if tag_orig:
+        return [
+            f"{indent}{tag_orig} {orig_text}",
+            f"{indent}{final_text}",
+        ]
+
+    return [
+        f"{indent}{orig_text}",
+        f"{indent}{final_text}",
+    ]
 
 
 def _adjust_audio_duration_ffmpeg(
@@ -615,7 +602,33 @@ def synthesize_segment_audio(
     if out_audio_path and torchaudio is not None:
         out_p = Path(out_audio_path)
         out_p.parent.mkdir(parents=True, exist_ok=True)
-        torchaudio.save(str(out_p), arr, sample_rate=rate)
+        if out_p.suffix.lower() == ".m4a":
+            tmp_wav = out_p.with_suffix(".tmp.wav")
+            torchaudio.save(str(tmp_wav), arr, sample_rate=rate)
+            cmd = [
+                "ffmpeg", "-y", "-v", "error",
+                "-i", str(tmp_wav),
+                "-c:a", "aac", "-b:a", "192k",
+                str(out_p),
+            ]
+            try:
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            except Exception:
+                torchaudio.save(str(out_p.with_suffix(".wav")), arr, sample_rate=rate)
+            finally:
+                if tmp_wav.exists():
+                    try:
+                        tmp_wav.unlink()
+                    except OSError:
+                        pass
+            old_wav = out_p.with_suffix(".wav")
+            if old_wav.exists():
+                try:
+                    old_wav.unlink()
+                except OSError:
+                    pass
+        else:
+            torchaudio.save(str(out_p), arr, sample_rate=rate)
 
     return arr, rate, raw_dur, final_dur, mode_tag
 
@@ -759,7 +772,7 @@ def clone_voice_segments(
         else:
             max_allowed_dur = None
 
-        audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.wav"
+        audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.m4a"
         raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"
 
         cached_tts = tts_results.get(idx)
@@ -791,17 +804,14 @@ def clone_voice_segments(
         text_dict["end"] = round(start_time + final_dur, 3)
         text_dict["duration"] = round(final_dur, 3)
 
-        # Formateo estricto de columnas alineadas (Línea métrica)
+        # Línea métrica
         seq_col = f"{seq_num:>3d}. "
-        mode_col = _pad_visible_tag(mode_tag, 24)
 
         if abs(final_dur - raw_dur_es) >= 0.05:
             dur_col = f"[orig: {dur_en:5.2f}s | fish: {raw_dur_es:5.2f}s ➔ {final_dur:5.2f}s]"
         else:
             dur_col = f"[orig: {dur_en:5.2f}s | fish: {raw_dur_es:5.2f}s]"
-        print(f"{seq_col}{mode_col}{dur_col}")
-
-        indent = "      "
+        print(f"{seq_col}{mode_tag}  {dur_col}")
 
         orig_text = str(text_dict.get("original_text", "")).strip()
 
@@ -809,16 +819,11 @@ def clone_voice_segments(
             orig_text=orig_text,
             final_text=text,
             source_lang=src_lang,
-            indent=indent,
         )
         for line in aligned_lines:
             print(line)
         print()
 
-        # Generar nombre con formato consistente: tts_{speaker}_{NNNN}.wav
-        # Esto permite al frontend identificar el segmento y su speaker
-        audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.wav"
-        torchaudio.save(str(audio_es_path), arr, sample_rate=rate)
         path_es.append(audio_es_path)
         start_samples = int(start_time * rate)
         times.append(start_samples)
