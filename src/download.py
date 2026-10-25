@@ -472,6 +472,21 @@ def download_video(
         a_abr = a_info.get("abr", 128)
         print(f"🎵 {a_ext} {a_cod} | {a_asr}Hz {a_abr}kbps | {a_size_str}")
 
+        info["video_stream"] = {
+            "ext": v_ext,
+            "codec": v_cod,
+            "height": v_h,
+            "fps": v_fps,
+            "size": v_size_str,
+        }
+        info["audio_stream"] = {
+            "ext": a_ext,
+            "codec": a_cod,
+            "sample_rate": a_asr,
+            "bitrate_kbps": a_abr,
+            "size": a_size_str,
+        }
+
     tot_bytes = 0
     if v_cand and v_cand.exists(): tot_bytes += v_cand.stat().st_size
     if a_cand and a_cand.exists(): tot_bytes += a_cand.stat().st_size

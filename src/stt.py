@@ -97,6 +97,20 @@ def transcribe_and_process(
         # Extraer idioma detectado antes de procesar
         detected_language = getattr(segments, "language", "es") if segments else "es"
 
+        # Guardar volcado crudo de Whisper para debug y auditoría (palabras, timestamps y probabilidades)
+        try:
+            raw_path = Path(media_path).parent / "whisper_raw.json"
+            import json
+            if hasattr(segments, "to_dict"):
+                raw_payload = segments.to_dict()
+            elif hasattr(segments, "__dict__"):
+                raw_payload = segments.__dict__
+            else:
+                raw_payload = {"text": getattr(segments, "text", str(segments)), "language": detected_language}
+            raw_path.write_text(json.dumps(raw_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            print(f"⚠️ No se pudo guardar whisper_raw.json: {e}")
+
         t0_group = time.perf_counter()
         result = process_audio(
             segments,
@@ -171,6 +185,8 @@ def run_main(
     translate: Union[bool, str] = False,
     title: Optional[str] = None,
     enable_emotions: bool = True,
+    initial_emotion_per_sentence: bool = False,
+    initial_emotion_tag: str = "[excited]",
 ) -> Tuple[list[dict], str, list[dict], str, dict]:
     """
     Pipeline principal: transcribe, opcionalmente traduce, genera título.
@@ -215,6 +231,8 @@ def run_main(
             times=times,
             segments_meta=result,
             enable_emotions=enable_emotions,
+            initial_emotion_per_sentence=initial_emotion_per_sentence,
+            initial_emotion_tag=initial_emotion_tag,
             return_details=True,
         )
         t_trans = time.perf_counter() - t0_trans
@@ -267,12 +285,19 @@ def run_main(
                 for i, r in enumerate(result)
             ]
     else:
+        def _apply_initial_tag(t: str) -> str:
+            if not initial_emotion_per_sentence:
+                return t
+            tag = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
+            clean_t = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", t).strip()
+            return f"{tag} {clean_t}".strip()
+
         translated_result = [
             create_segment_entry(
                 seg=r.get("seg", i + 1),
                 start=r["start"],
                 end=r["end"],
-                text=r["text"],
+                text=_apply_initial_tag(r["text"]),
                 original_text=r.get("original_text", r.get("text", "")),
                 speaker=r.get("speaker"),
                 original_speaker=r.get("original_speaker") or r.get("speaker"),

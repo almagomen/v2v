@@ -23,6 +23,7 @@ from src.result_store import (
     register_url,
     lookup_folder_by_url,
     is_complete_result,
+    get_result_original_segments,
 )
 
 
@@ -34,6 +35,8 @@ def process_video_queue(
     total_count: Optional[int] = None,
     force_reprocess: bool = False,
     enable_emotions: bool = True,
+    initial_emotion_per_sentence: bool = False,
+    initial_emotion_tag: str = "[excited]",
 ) -> list[dict]:
     """
     Procesa una cola de videos: descarga, transcribe y traduce.
@@ -74,7 +77,7 @@ def process_video_queue(
                             t_cache = time.perf_counter() - t_url_pipeline_start
                             out_title = result_data.get("output_name") or path.stem
                             c_segs = result_data.get("segments", [])
-                            c_orig = result_data.get("original_segments", [])
+                            c_orig = result_data.get("original_segments") or get_result_original_segments(folder)
                             for i, cs in enumerate(c_segs):
                                 if not cs.get("original_text") and i < len(c_orig):
                                     cs["original_text"] = c_orig[i].get("text", "")
@@ -109,7 +112,7 @@ def process_video_queue(
                     out_title = cached_data.get("output_name") or info.get("title") or path.stem
                     print(f"♻️ Cargando caché: {path.name}")
                     c_segs = cached_data.get("segments", [])
-                    c_orig = cached_data.get("original_segments", [])
+                    c_orig = cached_data.get("original_segments") or get_result_original_segments(path.parent)
                     for i, cs in enumerate(c_segs):
                         if not cs.get("original_text") and i < len(c_orig):
                             cs["original_text"] = c_orig[i].get("text", "")
@@ -147,6 +150,8 @@ def process_video_queue(
                 translate=translate_lang,
                 title=safe_title,
                 enable_emotions=enable_emotions,
+                initial_emotion_per_sentence=initial_emotion_per_sentence,
+                initial_emotion_tag=initial_emotion_tag,
             )
             translated_result = run_res[0]
             output_name = run_res[1]

@@ -13,10 +13,13 @@ import {
   Radio,
   Film,
   Layers,
+  FolderInput,
+  Smile,
 } from "lucide-react";
 import { Button } from "@openreel/ui";
 import { v2vApi } from "../api/v2v-api";
 import { useV2VStore } from "../stores/v2v-store";
+import { V2V_EMOTIONS } from "../utils/v2v-emotions";
 
 export interface TokensConfigSectionProps {
   backendUrl: string;
@@ -62,9 +65,19 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
   const [isTestingBackend, setIsTestingBackend] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
+  const [importingTrackKey, setImportingTrackKey] = useState<string | null>(null);
+
   const {
     enableEmotions,
     setEnableEmotions,
+    initialEmotionPerSentence,
+    setInitialEmotionPerSentence,
+    initialEmotionTag,
+    setInitialEmotionTag,
+    importTTSSegments,
+    setImportTTSSegments,
+    importMergedVideo,
+    setImportMergedVideo,
     importInstrumental,
     setImportInstrumental,
     importOriginalAudio,
@@ -73,9 +86,19 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
     setImportOriginalVocals,
     importOriginalSegments,
     setImportOriginalSegments,
-    importMergedVideo,
-    setImportMergedVideo,
+    importSingleTrackToTimeline,
+    jobId,
+    videos,
   } = useV2VStore();
+
+  const handleImportSingleTrack = async (trackKey: string) => {
+    setImportingTrackKey(trackKey);
+    try {
+      await importSingleTrackToTimeline(trackKey);
+    } finally {
+      setImportingTrackKey(null);
+    }
+  };
 
   const handleTestConnection = async () => {
     setIsTestingBackend(true);
@@ -240,7 +263,7 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
         <div className="pt-2 border-t border-border/60 space-y-2">
           <div className="text-[10px] font-semibold text-text-primary flex items-center gap-1.5">
             <span className="w-1 h-1 rounded-full bg-primary" />
-            Modelos de Lenguaje por Defecto (Google)
+            Modelos de Lenguaje por Defecto
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -255,9 +278,9 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 value={translationModel}
                 onChange={(e) => setTranslationModel(e.target.value)}
               >
-                <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Recomendado)</option>
-                <option value="gemma-4-26b-a4b-it">gemma-4-26b-a4b-it (Fallback)</option>
-                <option value="custom">Otro modelo personalizado...</option>
+                <option value="gemini-flash-lite-latest">gemini-flash-lite-latest</option>
+                <option value="gemma-4-26b-a4b-it">gemma-4-26b-a4b-it</option>
+                <option value="custom">personalizado...</option>
               </select>
               {translationModel === "custom" && (
                 <input
@@ -281,9 +304,9 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 value={titleModel}
                 onChange={(e) => setTitleModel(e.target.value)}
               >
-                <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Recomendado)</option>
-                <option value="gemma-4-26b-a4b-it">gemma-4-26b-a4b-it (Fallback)</option>
-                <option value="custom">Otro modelo personalizado...</option>
+                <option value="gemini-flash-lite-latest">gemini-flash-lite-latest</option>
+                <option value="gemma-4-26b-a4b-it">gemma-4-26b-a4b-it</option>
+                <option value="custom">personalizado...</option>
               </select>
               {titleModel === "custom" && (
                 <input
@@ -310,19 +333,74 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
             </span>
           </div>
 
-          <label className="flex items-start gap-2.5 p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
-            <input
-              type="checkbox"
-              checked={enableEmotions}
-              onChange={(e) => setEnableEmotions(e.target.checked)}
-              className="mt-0.5 rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
-            />
-            <div className="flex-1 text-[10px] leading-tight">
-              <span className="font-medium text-text-primary block">
-                Inferencia Contextual de Emociones y Prosodia
-              </span>
+          <div className="space-y-1.5">
+            {/* Inferencia contextual de emociones */}
+            <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
+              <div className="flex items-center gap-2">
+                <Sparkles size={13} className="text-emerald-400" />
+                <span className="text-[10px] font-medium text-text-primary block">
+                  Inferencia Contextual de Emociones y Prosodia
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={enableEmotions}
+                onChange={(e) => setEnableEmotions(e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+              />
             </div>
-          </label>
+
+            {/* Incluir emoción al inicio de cada frase */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
+                <div className="flex items-center gap-2">
+                  <Smile size={13} className="text-amber-400" />
+                  <span className="text-[10px] font-medium text-text-primary block">
+                    Incluir una emoción al inicio de cada frase
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={initialEmotionPerSentence}
+                  onChange={(e) => setInitialEmotionPerSentence(e.target.checked)}
+                  className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+                />
+              </div>
+
+              {initialEmotionPerSentence && (
+                <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-background/50 border border-border/70 text-[10px]">
+                  <span className="text-text-muted">Emoción seteada:</span>
+                  <select
+                    value={initialEmotionTag || "[excited]"}
+                    onChange={(e) => setInitialEmotionTag(e.target.value)}
+                    className="px-2 py-0.5 text-[10px] bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary text-text-primary max-w-[210px] truncate"
+                  >
+                    <optgroup label="Emociones Básicas">
+                      {V2V_EMOTIONS.filter((e) => e.category === "Básicas").map((em) => (
+                        <option key={em.tag} value={em.tag}>
+                          {em.emoji} {em.tag} {em.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Emociones Avanzadas">
+                      {V2V_EMOTIONS.filter((e) => e.category === "Avanzadas").map((em) => (
+                        <option key={em.tag} value={em.tag}>
+                          {em.emoji} {em.tag} {em.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Tonos y Modulaciones">
+                      {V2V_EMOTIONS.filter((e) => e.category === "Tonos").map((em) => (
+                        <option key={em.tag} value={em.tag}>
+                          {em.emoji} {em.tag} {em.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Pistas a Importar al Timeline de OpenReel */}
@@ -333,100 +411,197 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
           </div>
 
           <div className="space-y-1.5">
-            {/* Instrumental */}
-            <label className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
+            {/* Segmentos de voz sintetizada TTS */}
+            <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
               <div className="flex items-center gap-2">
-                <Music size={13} className="text-emerald-400" />
-                <div>
-                  <span className="text-[10px] font-medium text-text-primary block">
-                    Pista Instrumental (no_vocals.wav)
-                  </span>
-
-                </div>
+                <Sparkles size={13} className="text-amber-300" />
+                <span className="text-[10px] font-medium text-text-primary block">
+                  Segmentos TTS (Seqs_trg/*)
+                </span>
               </div>
-              <input
-                type="checkbox"
-                checked={importInstrumental}
-                onChange={(e) => setImportInstrumental(e.target.checked)}
-                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
-              />
-            </label>
-
-            {/* Voces originales aisladas */}
-            <label className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
               <div className="flex items-center gap-2">
-                <Mic size={13} className="text-amber-400" />
-                <div>
-                  <span className="text-[10px] font-medium text-text-primary block">
-                    Voz original  (vocals.wav)
-                  </span>
-
-                </div>
+                <button
+                  type="button"
+                  title="Añadir esta pista al Timeline ahora"
+                  disabled={!jobId || videos.length === 0 || importingTrackKey !== null}
+                  onClick={() => handleImportSingleTrack("tts_segments")}
+                  className="p-1 text-text-muted hover:text-primary transition-colors disabled:opacity-25 disabled:cursor-not-allowed rounded hover:bg-background-elevated"
+                >
+                  {importingTrackKey === "tts_segments" ? (
+                    <Loader2 size={13} className="animate-spin text-primary" />
+                  ) : (
+                    <FolderInput size={13} />
+                  )}
+                </button>
+                <input
+                  type="checkbox"
+                  checked={importTTSSegments}
+                  onChange={(e) => setImportTTSSegments(e.target.checked)}
+                  title="Importación automática al finalizar inferencia"
+                  className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+                />
               </div>
-              <input
-                type="checkbox"
-                checked={importOriginalVocals}
-                onChange={(e) => setImportOriginalVocals(e.target.checked)}
-                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
-              />
-            </label>
+            </div>
 
-            {/* Segmentos de voz original recortados paralelos */}
-            <label className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
-              <div className="flex items-center gap-2">
-                <Layers size={13} className="text-blue-400" />
-                <div>
-                  <span className="text-[10px] font-medium text-text-primary block">
-                    Segmentos originales (Seqs_src/*.wav)
-                  </span>
-
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={importOriginalSegments}
-                onChange={(e) => setImportOriginalSegments(e.target.checked)}
-                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
-              />
-            </label>
-
-            {/* Audio original completo */}
-            <label className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
-              <div className="flex items-center gap-2">
-                <Radio size={13} className="text-cyan-400" />
-                <div>
-                  <span className="text-[10px] font-medium text-text-primary block">
-                    Pista de Audio
-                  </span>
-
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={importOriginalAudio}
-                onChange={(e) => setImportOriginalAudio(e.target.checked)}
-                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
-              />
-            </label>
-
-            {/* Video renderizado */}
-            <label className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover cursor-pointer transition-colors">
+            {/* Video sin audio */}
+            <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
               <div className="flex items-center gap-2">
                 <Film size={13} className="text-purple-400" />
-                <div>
-                  <span className="text-[10px] font-medium text-text-primary block">
-                    Pista de Video
-                  </span>
-
-                </div>
+                <span className="text-[10px] font-medium text-text-primary block">
+                  Pista de Video (video_only.mp4)
+                </span>
               </div>
-              <input
-                type="checkbox"
-                checked={importMergedVideo}
-                onChange={(e) => setImportMergedVideo(e.target.checked)}
-                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
-              />
-            </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  title="Añadir esta pista al Timeline ahora"
+                  disabled={!jobId || videos.length === 0 || importingTrackKey !== null}
+                  onClick={() => handleImportSingleTrack("video")}
+                  className="p-1 text-text-muted hover:text-primary transition-colors disabled:opacity-25 disabled:cursor-not-allowed rounded hover:bg-background-elevated"
+                >
+                  {importingTrackKey === "video" ? (
+                    <Loader2 size={13} className="animate-spin text-primary" />
+                  ) : (
+                    <FolderInput size={13} />
+                  )}
+                </button>
+                <input
+                  type="checkbox"
+                  checked={importMergedVideo}
+                  onChange={(e) => setImportMergedVideo(e.target.checked)}
+                  title="Importación automática al finalizar inferencia"
+                  className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+                />
+              </div>
+            </div>
+
+            {/* Instrumental */}
+            <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
+              <div className="flex items-center gap-2">
+                <Music size={13} className="text-emerald-400" />
+                <span className="text-[10px] font-medium text-text-primary block">
+                  Pista Instrumental (no_vocals.wav)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  title="Añadir esta pista al Timeline ahora"
+                  disabled={!jobId || videos.length === 0 || importingTrackKey !== null}
+                  onClick={() => handleImportSingleTrack("instrumental")}
+                  className="p-1 text-text-muted hover:text-primary transition-colors disabled:opacity-25 disabled:cursor-not-allowed rounded hover:bg-background-elevated"
+                >
+                  {importingTrackKey === "instrumental" ? (
+                    <Loader2 size={13} className="animate-spin text-primary" />
+                  ) : (
+                    <FolderInput size={13} />
+                  )}
+                </button>
+                <input
+                  type="checkbox"
+                  checked={importInstrumental}
+                  onChange={(e) => setImportInstrumental(e.target.checked)}
+                  title="Importación automática al finalizar inferencia"
+                  className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+                />
+              </div>
+            </div>
+
+            {/* Voces originales aisladas */}
+            <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
+              <div className="flex items-center gap-2">
+                <Mic size={13} className="text-amber-400" />
+                <span className="text-[10px] font-medium text-text-primary block">
+                  Voz original (vocals.wav)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  title="Añadir esta pista al Timeline ahora"
+                  disabled={!jobId || videos.length === 0 || importingTrackKey !== null}
+                  onClick={() => handleImportSingleTrack("vocals_original")}
+                  className="p-1 text-text-muted hover:text-primary transition-colors disabled:opacity-25 disabled:cursor-not-allowed rounded hover:bg-background-elevated"
+                >
+                  {importingTrackKey === "vocals_original" ? (
+                    <Loader2 size={13} className="animate-spin text-primary" />
+                  ) : (
+                    <FolderInput size={13} />
+                  )}
+                </button>
+                <input
+                  type="checkbox"
+                  checked={importOriginalVocals}
+                  onChange={(e) => setImportOriginalVocals(e.target.checked)}
+                  title="Importación automática al finalizar inferencia"
+                  className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+                />
+              </div>
+            </div>
+
+            {/* Segmentos de voz original recortados paralelos */}
+            <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
+              <div className="flex items-center gap-2">
+                <Layers size={13} className="text-blue-400" />
+                <span className="text-[10px] font-medium text-text-primary block">
+                  Segmentos originales (Seqs_src/*.wav)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  title="Añadir esta pista al Timeline ahora"
+                  disabled={!jobId || videos.length === 0 || importingTrackKey !== null}
+                  onClick={() => handleImportSingleTrack("original_segments")}
+                  className="p-1 text-text-muted hover:text-primary transition-colors disabled:opacity-25 disabled:cursor-not-allowed rounded hover:bg-background-elevated"
+                >
+                  {importingTrackKey === "original_segments" ? (
+                    <Loader2 size={13} className="animate-spin text-primary" />
+                  ) : (
+                    <FolderInput size={13} />
+                  )}
+                </button>
+                <input
+                  type="checkbox"
+                  checked={importOriginalSegments}
+                  onChange={(e) => setImportOriginalSegments(e.target.checked)}
+                  title="Importación automática al finalizar inferencia"
+                  className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+                />
+              </div>
+            </div>
+
+            {/* Audio original completo */}
+            <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
+              <div className="flex items-center gap-2">
+                <Radio size={13} className="text-cyan-400" />
+                <span className="text-[10px] font-medium text-text-primary block">
+                  Pista de Audio original
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  title="Añadir esta pista al Timeline ahora"
+                  disabled={!jobId || videos.length === 0 || importingTrackKey !== null}
+                  onClick={() => handleImportSingleTrack("original_audio")}
+                  className="p-1 text-text-muted hover:text-primary transition-colors disabled:opacity-25 disabled:cursor-not-allowed rounded hover:bg-background-elevated"
+                >
+                  {importingTrackKey === "original_audio" ? (
+                    <Loader2 size={13} className="animate-spin text-primary" />
+                  ) : (
+                    <FolderInput size={13} />
+                  )}
+                </button>
+                <input
+                  type="checkbox"
+                  checked={importOriginalAudio}
+                  onChange={(e) => setImportOriginalAudio(e.target.checked)}
+                  title="Importación automática al finalizar inferencia"
+                  className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+                />
+              </div>
+            </div>
           </div>
         </div>
 

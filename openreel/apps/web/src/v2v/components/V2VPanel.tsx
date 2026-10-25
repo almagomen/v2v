@@ -285,6 +285,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         {
           forceReprocess: isForcingReprocess,
           enableEmotions: useV2VStore.getState().enableEmotions,
+          initialEmotionPerSentence: useV2VStore.getState().initialEmotionPerSentence,
+          initialEmotionTag: useV2VStore.getState().initialEmotionTag,
         }
       );
       setJobId(res.job_id);

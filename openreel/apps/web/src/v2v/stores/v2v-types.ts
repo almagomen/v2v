@@ -104,11 +104,14 @@ export interface JobState {
 
   // Preferencias de inferencia y montaje en timeline
   enableEmotions: boolean;
+  initialEmotionPerSentence: boolean;
+  initialEmotionTag: string;
+  importTTSSegments: boolean;
+  importMergedVideo: boolean;
   importInstrumental: boolean;
   importOriginalAudio: boolean;
   importOriginalVocals: boolean;
   importOriginalSegments: boolean;
-  importMergedVideo: boolean;
 }
 
 export interface JobActions {
@@ -118,11 +121,15 @@ export interface JobActions {
   syncWithProject: (projectId: string | null) => void;
 
   setEnableEmotions: (enabled: boolean) => void;
+  setInitialEmotionPerSentence: (enabled: boolean) => void;
+  setInitialEmotionTag: (tag: string) => void;
+  setImportTTSSegments: (enabled: boolean) => void;
+  setImportMergedVideo: (enabled: boolean) => void;
   setImportInstrumental: (enabled: boolean) => void;
   setImportOriginalAudio: (enabled: boolean) => void;
   setImportOriginalVocals: (enabled: boolean) => void;
   setImportOriginalSegments: (enabled: boolean) => void;
-  setImportMergedVideo: (enabled: boolean) => void;
+  importSingleTrackToTimeline: (trackKey: string, videoIndex?: number) => Promise<boolean>;
 
   setUrls: (urls: string) => void;
   setJobId: (jobId: string | null) => void;

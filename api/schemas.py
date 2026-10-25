@@ -22,6 +22,12 @@ class ProcessUrlsRequest(BaseModel):
     enable_emotions: Optional[bool] = Field(
         True, description="Habilitar inferencia y modulación de emociones/prosodia en el modelo"
     )
+    initial_emotion_per_sentence: Optional[bool] = Field(
+        False, description="Incluir una emoción al inicio de cada frase"
+    )
+    initial_emotion_tag: Optional[str] = Field(
+        "[excited]", description="Tag de emoción específica a incluir al inicio de cada frase (ej: [excited], [confident])"
+    )
 
 
 class ProcessUrlsResponse(BaseModel):

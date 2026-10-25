@@ -70,6 +70,8 @@ def _run_pipeline(
     force_reprocess: bool = False,
     speaker_map: dict[str, str] | None = None,
     enable_emotions: bool = True,
+    initial_emotion_per_sentence: bool = False,
+    initial_emotion_tag: str = "[excited]",
 ) -> None:
     """Run pipeline with stdout redirected to job log."""
     from src.pipeline import process_video_queue, split_all_sequences
@@ -134,6 +136,8 @@ def _run_pipeline(
                 total_count=len(urls),
                 force_reprocess=force_reprocess,
                 enable_emotions=enable_emotions,
+                initial_emotion_per_sentence=initial_emotion_per_sentence,
+                initial_emotion_tag=initial_emotion_tag,
             )
 
             if not res_list:
@@ -264,7 +268,7 @@ def _run_pipeline(
                     print(f"📦 [TAR] {len(paths_es)} seg. empaquetados en {t_tar:.2f}s ({sz_mb:.1f}MB)")
                 if tar_src_file:
                     sz_src_mb = tar_src_file.stat().st_size / (1024 * 1024)
-                    print(f"📦 [TAR Orig] Seg. originales empaquetados en {t_tar_src:.2f}s ({sz_src_mb:.1f}MB)\n")
+                    print(f"📦 [TAR Orig] Seg. orig. empaquetados en {t_tar_src:.2f}s ({sz_src_mb:.1f}MB)\n")
             except Exception as e:
                 print(f"⚠️ Error en pre-caching TAR: {e}\n")
 
@@ -352,6 +356,8 @@ def start_process(
     force_reprocess: bool = False,
     speaker_map: dict[str, str] | None = None,
     enable_emotions: bool = True,
+    initial_emotion_per_sentence: bool = False,
+    initial_emotion_tag: str = "[excited]",
 ) -> str:
     """Start pipeline in background, return job_id."""
     job_id = create_job()
@@ -366,6 +372,8 @@ def start_process(
             force_reprocess,
             speaker_map,
             enable_emotions,
+            initial_emotion_per_sentence,
+            initial_emotion_tag,
         ),
     )
     thread.start()

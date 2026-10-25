@@ -139,15 +139,34 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
     setTimelineHeight: (timelineHeight) => set({ timelineHeight }),
 
     enableEmotions: loadV2VPreferences().enableEmotions,
+    initialEmotionPerSentence: loadV2VPreferences().initialEmotionPerSentence,
+    initialEmotionTag: loadV2VPreferences().initialEmotionTag,
+    importTTSSegments: loadV2VPreferences().importTTSSegments,
+    importMergedVideo: loadV2VPreferences().importMergedVideo,
     importInstrumental: loadV2VPreferences().importInstrumental,
     importOriginalAudio: loadV2VPreferences().importOriginalAudio,
     importOriginalVocals: loadV2VPreferences().importOriginalVocals,
     importOriginalSegments: loadV2VPreferences().importOriginalSegments,
-    importMergedVideo: loadV2VPreferences().importMergedVideo,
 
     setEnableEmotions: (enableEmotions) => {
       saveV2VPreferences({ enableEmotions });
       set({ enableEmotions });
+    },
+    setInitialEmotionPerSentence: (initialEmotionPerSentence) => {
+      saveV2VPreferences({ initialEmotionPerSentence });
+      set({ initialEmotionPerSentence });
+    },
+    setInitialEmotionTag: (initialEmotionTag) => {
+      saveV2VPreferences({ initialEmotionTag });
+      set({ initialEmotionTag });
+    },
+    setImportTTSSegments: (importTTSSegments) => {
+      saveV2VPreferences({ importTTSSegments });
+      set({ importTTSSegments });
+    },
+    setImportMergedVideo: (importMergedVideo) => {
+      saveV2VPreferences({ importMergedVideo });
+      set({ importMergedVideo });
     },
     setImportInstrumental: (importInstrumental) => {
       saveV2VPreferences({ importInstrumental });
@@ -164,10 +183,6 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
     setImportOriginalSegments: (importOriginalSegments) => {
       saveV2VPreferences({ importOriginalSegments });
       set({ importOriginalSegments });
-    },
-    setImportMergedVideo: (importMergedVideo) => {
-      saveV2VPreferences({ importMergedVideo });
-      set({ importMergedVideo });
     },
 
     syncWithProject: (projectId: string | null) => {
@@ -1361,6 +1376,236 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
         }
       } catch (err) {
         console.warn("[V2V] Error actualizando proyecto tras regenerar título:", err);
+      }
+    },
+
+    importSingleTrackToTimeline: async (trackKey: string, videoIndex?: number) => {
+      const state = get();
+      const jobId = state.jobId;
+      if (!jobId || state.videos.length === 0) {
+        toast.error("No hay video disponible", "Procesa primero un video antes de importar pistas.");
+        return false;
+      }
+      const vIdx = videoIndex ?? state.selectedVideoIndex ?? 0;
+      const v = state.videos[vIdx] || state.videos[0];
+      if (!v) return false;
+
+      let workingProject = useProjectStore.getState().project;
+
+      try {
+        if (trackKey === "video") {
+          let blob: Blob | null = null;
+          try {
+            blob = await v2vApi.fetchAssetBlob(jobId, v.index, "video_only");
+          } catch {
+            blob = await v2vApi.fetchOutputVideoBlob(jobId, v.index).catch(() => null);
+          }
+          if (!blob) throw new Error("No se pudo descargar el archivo de video.");
+          const fileName = v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4";
+          const file = new File([blob], fileName, { type: "video/mp4" });
+          const res = await importMultipleMediaIntoProject(workingProject, [file], { quick: true });
+          if (!res.success || !res.project) throw new Error("Error importando video a la librería.");
+          workingProject = res.project;
+          const media = workingProject.mediaLibrary.items.find((m) => m.name === fileName);
+          if (media) {
+            const { project: p1, trackId } = await addTrackAndGetId(workingProject, "video");
+            if (trackId) {
+              const p2 = renameTrackInProject(p1, trackId, "Video");
+              const clipRes = (await addClipToDetachedProject(p2, trackId, media.id, 0)) as any;
+              workingProject = clipRes.project || p2;
+            }
+          }
+        } else if (trackKey === "instrumental") {
+          const blob = await v2vApi.fetchAssetBlob(jobId, v.index, "instrumental");
+          const isM4A = blob.type.includes("mp4");
+          const fileName = isM4A ? "no_vocals.m4a" : "no_vocals.wav";
+          const file = new File([blob], fileName, { type: isM4A ? "audio/mp4" : "audio/wav" });
+          const res = await importMultipleMediaIntoProject(workingProject, [file], { quick: true });
+          if (!res.success || !res.project) throw new Error("Error importando instrumental a la librería.");
+          workingProject = res.project;
+          const media = workingProject.mediaLibrary.items.find((m) => m.name === fileName);
+          if (media) {
+            const { project: p1, trackId } = await addTrackAndGetId(workingProject, "audio");
+            if (trackId) {
+              const p2 = renameTrackInProject(p1, trackId, "INSTRUMENTAL");
+              const clipRes = (await addClipToDetachedProject(p2, trackId, media.id, 0)) as any;
+              workingProject = clipRes.project || p2;
+            }
+          }
+        } else if (trackKey === "vocals_original") {
+          const blob = await v2vApi.fetchAssetBlob(jobId, v.index, "vocals");
+          const fileName = "vocals.wav";
+          const file = new File([blob], fileName, { type: "audio/wav" });
+          const res = await importMultipleMediaIntoProject(workingProject, [file], { quick: true });
+          if (!res.success || !res.project) throw new Error("Error importando voz original a la librería.");
+          workingProject = res.project;
+          const media = workingProject.mediaLibrary.items.find((m) => m.name === fileName);
+          if (media) {
+            const { project: p1, trackId } = await addTrackAndGetId(workingProject, "audio");
+            if (trackId) {
+              let p2 = renameTrackInProject(p1, trackId, "VOCALS_ORIGINAL");
+              p2 = muteTrackInProject(p2, trackId, true);
+              const clipRes = (await addClipToDetachedProject(p2, trackId, media.id, 0)) as any;
+              workingProject = clipRes.project || p2;
+            }
+          }
+        } else if (trackKey === "original_audio") {
+          const blob = await v2vApi.fetchAssetBlob(jobId, v.index, "original_audio");
+          const fileName = v.original_audio_path?.split(/[\\/]/).pop() || "original_audio.webm";
+          const file = new File([blob], fileName, { type: "audio/webm" });
+          const res = await importMultipleMediaIntoProject(workingProject, [file], { quick: true });
+          if (!res.success || !res.project) throw new Error("Error importando audio original a la librería.");
+          workingProject = res.project;
+          const media = workingProject.mediaLibrary.items.find((m) => m.name === fileName);
+          if (media) {
+            const { project: p1, trackId } = await addTrackAndGetId(workingProject, "audio");
+            if (trackId) {
+              let p2 = renameTrackInProject(p1, trackId, "ORIGINAL_AUDIO");
+              p2 = muteTrackInProject(p2, trackId, true);
+              const clipRes = (await addClipToDetachedProject(p2, trackId, media.id, 0)) as any;
+              workingProject = clipRes.project || p2;
+            }
+          }
+        } else if (trackKey === "tts_segments") {
+          const audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
+          const tarMap = await v2vApi.fetchAudioSegmentsTar(jobId, v.index);
+          const ttsMediaItems: MediaItem[] = [];
+          for (const seg of audioSegs) {
+            const segPad = String(seg.seg).padStart(3, "0");
+            const entry = Array.from(tarMap.entries()).find(([k]) => k.includes(`_${segPad}.m4a`) || k.includes(`_${segPad}.wav`));
+            if (!entry) continue;
+            const [tarName, blob] = entry;
+            const logicalName = tarName.split("/").pop() || `tts_${segPad}.m4a`;
+            const isM4A = logicalName.endsWith(".m4a");
+            const meta = {
+              duration: seg.duration || 1,
+              width: 0,
+              height: 0,
+              frameRate: 0,
+              codec: isM4A ? "aac" : "pcm_s16le",
+              sampleRate: 44100,
+              channels: 1,
+              fileSize: blob.size,
+            };
+            const itemId = uuidv4();
+            const item: MediaItem = {
+              id: itemId,
+              name: logicalName,
+              type: "audio",
+              fileHandle: null,
+              blob: null,
+              metadata: meta,
+              thumbnailUrl: null,
+              waveformData: null,
+            };
+            ttsMediaItems.push(item);
+            saveMediaBlob(workingProject.id, itemId, blob, meta).catch(() => {});
+          }
+          workingProject = {
+            ...workingProject,
+            mediaLibrary: {
+              ...workingProject.mediaLibrary,
+              items: [...workingProject.mediaLibrary.items, ...ttsMediaItems],
+            },
+          };
+          const bySpk: Record<string, AudioSegmentItem[]> = {};
+          for (const seg of audioSegs) {
+            const spk = (seg.speaker || "").trim() || `Speaker_${seg.seg}`;
+            (bySpk[spk] ||= []).push(seg);
+          }
+          const allClips: Array<{ trackId: string; mediaId: string; startTime: number; duration?: number }> = [];
+          for (const sKey of Object.keys(bySpk)) {
+            const segs = bySpk[sKey].sort((a, b) => a.seg - b.seg);
+            const { project: p2, trackId } = await addTrackAndGetId(workingProject, "audio");
+            workingProject = p2;
+            if (!trackId) continue;
+            workingProject = renameTrackInProject(workingProject, trackId, sKey);
+            for (const seg of segs) {
+              const media = findSegmentMediaInLibrary(workingProject.mediaLibrary.items, seg);
+              if (media) {
+                allClips.push({
+                  trackId,
+                  mediaId: media.id,
+                  startTime: seg.start,
+                  duration: seg.duration || Math.max(seg.end - seg.start, 0.1),
+                });
+              }
+            }
+          }
+          const { project: p3 } = await addMultipleClipsToDetachedProject(workingProject, allClips);
+          workingProject = p3;
+        } else if (trackKey === "original_segments") {
+          const srcSegs = await v2vApi.getSrcAudioSegments(jobId, v.index).catch(() => []);
+          const tarMap = await v2vApi.fetchSrcAudioSegmentsTar(jobId, v.index).catch(() => new Map());
+          const srcMediaItems: MediaItem[] = [];
+          for (const seg of srcSegs) {
+            const segPad = String(seg.seg).padStart(3, "0");
+            const entry = Array.from(tarMap.entries()).find(([k]) => k.includes(`_${segPad}.m4a`) || k.includes(`_${segPad}.wav`));
+            if (!entry) continue;
+            const [tarName, blob] = entry;
+            const logicalName = tarName.split("/").pop() || `vocals_${segPad}.m4a`;
+            const isM4A = logicalName.endsWith(".m4a");
+            const meta = {
+              duration: seg.duration || 1,
+              width: 0,
+              height: 0,
+              frameRate: 0,
+              codec: isM4A ? "aac" : "pcm_s16le",
+              sampleRate: 44100,
+              channels: 1,
+              fileSize: blob.size,
+            };
+            const itemId = uuidv4();
+            const item: MediaItem = {
+              id: itemId,
+              name: logicalName,
+              type: "audio",
+              fileHandle: null,
+              blob: null,
+              metadata: meta,
+              thumbnailUrl: null,
+              waveformData: null,
+            };
+            srcMediaItems.push(item);
+            saveMediaBlob(workingProject.id, itemId, blob, meta).catch(() => {});
+          }
+          workingProject = {
+            ...workingProject,
+            mediaLibrary: {
+              ...workingProject.mediaLibrary,
+              items: [...workingProject.mediaLibrary.items, ...srcMediaItems],
+            },
+          };
+          const { project: p2, trackId } = await addTrackAndGetId(workingProject, "audio");
+          workingProject = p2;
+          if (trackId) {
+            let pTrack = renameTrackInProject(workingProject, trackId, "ORIGINAL_SEGMENTS");
+            pTrack = muteTrackInProject(pTrack, trackId, true);
+            const allClips: Array<{ trackId: string; mediaId: string; startTime: number; duration?: number }> = [];
+            for (const seg of srcSegs) {
+              const segPad = String(seg.seg).padStart(3, "0");
+              const media = workingProject.mediaLibrary.items.find((m) => m.name.includes(`vocals_${segPad}.`));
+              if (media) {
+                allClips.push({
+                  trackId,
+                  mediaId: media.id,
+                  startTime: seg.start,
+                  duration: seg.duration || Math.max(seg.end - seg.start, 0.1),
+                });
+              }
+            }
+            const { project: p3 } = await addMultipleClipsToDetachedProject(pTrack, allClips);
+            workingProject = p3;
+          }
+        }
+
+        useProjectStore.getState().loadProject(workingProject);
+        toast.success("Pista importada", `La pista '${trackKey}' se ha añadido al timeline.`);
+        return true;
+      } catch (err: any) {
+        console.error(`[V2V] Error importando pista ${trackKey}:`, err);
+        toast.error("Error al importar pista", err?.message || "Ocurrió un error");
+        return false;
       }
     },
 

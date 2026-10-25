@@ -165,7 +165,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         slotDuration: apiRow.slot_duration,
         origDuration: apiRow.orig_duration ?? apiRow.slot_duration,
         preventOverlap: false,
-        originalText: apiRow.original_text || "",
+        originalText: apiRow.original_text || apiRow.tts_text || "",
         draftText: ttsText,
         loadedText: ttsText,
         loadedSpeed,

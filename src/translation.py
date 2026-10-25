@@ -110,6 +110,8 @@ def translate_text_list(
     times: Optional[list[Tuple[float, float]]] = None,
     segments_meta: Optional[list[dict]] = None,
     enable_emotions: bool = True,
+    initial_emotion_per_sentence: bool = False,
+    initial_emotion_tag: str = "[excited]",
     return_details: bool = False,
 ) -> list[str] | Tuple[list[str], list[dict]] | None:
     """
@@ -375,9 +377,20 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                                 clean_val = re.sub(r"^\[\d+(?:\.\d+)?s?\]:?\s*", "", clean_val).strip()
                                 curr_meta = segments_meta[i] if (segments_meta and i < len(segments_meta)) else {}
                                 clean_val = validate_and_place_breaks(clean_val, curr_meta)
+
+                                if initial_emotion_per_sentence:
+                                    tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
+                                    clean_val = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", clean_val).strip()
+                                    clean_val = f"{tag_to_insert} {clean_val}".strip()
+
                                 aligned_list.append(clean_val if clean_val else list_sentences[i])
                             else:
-                                aligned_list.append(list_sentences[i])
+                                fallback_text = list_sentences[i]
+                                if initial_emotion_per_sentence:
+                                    tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
+                                    clean_fb = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", fallback_text).strip()
+                                    fallback_text = f"{tag_to_insert} {clean_fb}".strip()
+                                aligned_list.append(fallback_text)
 
                             phonemes_map[i] = seg_phonemes
 
@@ -511,7 +524,7 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
 
                 if raw_title:
                     title = raw_title.replace("\n", " ").strip("\"'")
-                    print(f"⏱️ [Título '{model}'] viral en {duration:.1f}s:\n{title}", flush=True)
+                    print(f"⏱️ [Título '{model}'] viral en {duration:.1f}s:\n✅ {title}", flush=True)
                     return title
 
             except Exception as e:

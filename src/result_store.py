@@ -56,9 +56,11 @@ def sanitize_video_info(info: dict) -> dict:
         "height": info.get("height"),
         "fps": info.get("fps"),
         "description": (info.get("description") or "")[:500],
-        "_download_time": info.get("_download_time", 0.0),
-        "_stems_time": info.get("_stems_time", 0.0),
     }
+    if "video_stream" in info and isinstance(info["video_stream"], dict):
+        clean["video_stream"] = info["video_stream"]
+    if "audio_stream" in info and isinstance(info["audio_stream"], dict):
+        clean["audio_stream"] = info["audio_stream"]
     return {k: v for k, v in clean.items() if v is not None}
 
 
@@ -111,20 +113,50 @@ def create_result(
     timings: Optional[dict] = None,
     assets: Optional[dict] = None,
 ) -> dict:
-    """Crea la estructura estándar unificada de result.json."""
+    """
+    Crea la estructura estándar 100% unificada de result.json.
+    Toda la información se consolida exclusivamente dentro de 'segments',
+    fusionando campos de 'original_segments' sin repetir claves duplicadas.
+    """
+    unified_segments = []
+    orig_map = {orig.get("seg", idx + 1): orig for idx, orig in enumerate(original_segments or [])}
+
+    for idx, seg in enumerate(segments):
+        s = dict(seg)
+        seg_id = s.get("seg", idx + 1)
+        orig = orig_map.get(seg_id)
+        if orig:
+            orig_text = orig.get("original_text", orig.get("text", ""))
+            if "original_text" not in s and orig_text and orig_text != s.get("text"):
+                s["original_text"] = orig_text
+            if "orig_start" not in s and "start" in orig:
+                s["orig_start"] = orig["start"]
+            if "orig_end" not in s and "end" in orig:
+                s["orig_end"] = orig["end"]
+            if "orig_duration" not in s and "duration" in orig:
+                s["orig_duration"] = orig["duration"]
+            if "original_speaker" not in s and orig.get("speaker"):
+                s["original_speaker"] = orig["speaker"]
+            if "orig_syllable_count" not in s and "syllable_count" in orig:
+                if orig["syllable_count"] != s.get("syllable_count"):
+                    s["orig_syllable_count"] = orig["syllable_count"]
+            if "internal_pause_sec" not in s and "internal_pause_sec" in orig:
+                s["internal_pause_sec"] = orig["internal_pause_sec"]
+            if "phonemes" not in s and "phonemes" in orig:
+                s["phonemes"] = orig["phonemes"]
+        unified_segments.append(s)
+
     data = {
         "version": 2,
         "url": url,
         "output_name": output_name,
         "source_lang": source_lang,
         "target_lang": target_lang,
-        "segments": segments,
+        "segments": unified_segments,
         "info": sanitize_video_info(info),
         "timings": timings or {},
         "assets": assets or {},
     }
-    if original_segments is not None:
-        data["original_segments"] = original_segments
     return data
 
 
@@ -197,7 +229,6 @@ def create_segment_entry(
     entry = {
         "seg": int(seg),
         "text": str(text),
-        "original_text": str(resolved_orig),
         "start": s_val,
         "end": e_val,
         "duration": dur,
@@ -207,6 +238,8 @@ def create_segment_entry(
         "speaker": speaker or "mrbeast",
         "original_speaker": original_speaker or speaker or "SPEAKER_00",
     }
+    if resolved_orig and str(resolved_orig).strip() != str(text).strip():
+        entry["original_text"] = str(resolved_orig)
     if syl_cnt:
         entry["syllable_count"] = syl_cnt
     if clean_phonemes:
@@ -243,7 +276,7 @@ def get_result_original_segments(folder: Path) -> list[dict]:
         return data["original_segments"]
     origs = []
     for s in data.get("segments", []):
-        origs.append({
+        entry = {
             "seg": s.get("seg"),
             "start": s.get("orig_start", s.get("start", 0.0)),
             "end": s.get("orig_end", s.get("end", 0.0)),
@@ -252,7 +285,14 @@ def get_result_original_segments(folder: Path) -> list[dict]:
             "original_text": s.get("original_text", s.get("text", "")),
             "speaker": s.get("original_speaker", s.get("speaker", "")),
             "original_speaker": s.get("original_speaker", s.get("speaker", "")),
-        })
+        }
+        if "orig_syllable_count" in s:
+            entry["syllable_count"] = s["orig_syllable_count"]
+        elif "syllable_count" in s:
+            entry["syllable_count"] = s["syllable_count"]
+        if "internal_pause_sec" in s:
+            entry["internal_pause_sec"] = s["internal_pause_sec"]
+        origs.append(entry)
     return origs
 
 
