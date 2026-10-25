@@ -67,7 +67,6 @@ apps/web/src/v2v/
 │   ├── V2VPanel.tsx                   # Panel principal: inferencia, modelos, tokens, limpieza por proyecto
 │   ├── V2VSegmentBulkEditor.tsx       # Editor masivo flotante de segmentos (STT vs TTS, retraducción, sliders)
 │   ├── V2VGenerateTTSSection.tsx      # Generador y sintetizador TTS por segmentos
-│   ├── CloneVoiceSegmentSection.tsx   # Clonación y síntesis de voz de clip seleccionado
 │   ├── ColabExportTab.tsx             # Pestaña de exportación y render final acelerado por GPU en Colab
 │   ├── TokensConfigSection.tsx        # Configuración de claves de API y modelos Gemini
 │   ├── SpeakerSelector.tsx            # Selector de voz y emoción inicial
@@ -93,8 +92,7 @@ apps/web/src/v2v/
     ├── v2v-segment-ids.ts             # Generador y parser de IDs deterministas de segmentos
     ├── v2v-utils.ts                   # Normalización de tokens, nombres lógicos y emparejamiento
     ├── v2v-detached-actions.ts        # Acciones sobre proyectos desacoplados e inserción en lote
-    ├── v2v-emotions.ts                # Catálogo unificado de emociones Fish Audio (s2.1)
-    └── v2v-folder-utils.ts            # Helpers de carpetas y assets de jobs V2V en la librería
+    └── v2v-emotions.ts                # Catálogo unificado de emociones Fish Audio (s2.1)
 ```
 
 ---

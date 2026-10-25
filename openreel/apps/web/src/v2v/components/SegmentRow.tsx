@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   AlertTriangle,
   Clock,
@@ -79,6 +79,21 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
   const [newPhPron, setNewPhPron] = useState("");
   const [playing, setPlaying] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current);
+        audioUrlRef.current = null;
+      }
+    };
+  }, []);
   const hasCustomFishAudio = Math.abs(row.temperature - 0.7) > 0.01;
   const hasCustomPhonemes = Boolean(row.phonemes && Object.keys(row.phonemes).length > 0);
 
@@ -121,23 +136,35 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
 
   const handlePlayAudio = async () => {
     if (playing) return;
+    let url: string | null = null;
     try {
       setPlaying(true);
       const blob = await v2vApi.fetchAudioSegmentBlob(jobId, videoIndex, row.seg);
-      const url = URL.createObjectURL(blob);
+      url = URL.createObjectURL(blob);
+      audioUrlRef.current = url;
       const audio = new Audio(url);
+      audioRef.current = audio;
       audio.onended = () => {
         setPlaying(false);
-        URL.revokeObjectURL(url);
+        if (url) URL.revokeObjectURL(url);
+        audioUrlRef.current = null;
+        audioRef.current = null;
       };
       audio.onerror = () => {
         setPlaying(false);
-        URL.revokeObjectURL(url);
+        if (url) URL.revokeObjectURL(url);
+        audioUrlRef.current = null;
+        audioRef.current = null;
         toast.error("Error al reproducir", "No se pudo cargar el audio del segmento.");
       };
       await audio.play();
     } catch {
       setPlaying(false);
+      if (url) {
+        URL.revokeObjectURL(url);
+        audioUrlRef.current = null;
+      }
+      audioRef.current = null;
       toast.error("Error", "No se pudo reproducir el audio.");
     }
   };

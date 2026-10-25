@@ -112,7 +112,7 @@ def create_result(
     assets: Optional[dict] = None,
 ) -> dict:
     """Crea la estructura estándar unificada de result.json."""
-    return {
+    data = {
         "version": 2,
         "url": url,
         "output_name": output_name,
@@ -123,6 +123,9 @@ def create_result(
         "timings": timings or {},
         "assets": assets or {},
     }
+    if original_segments is not None:
+        data["original_segments"] = original_segments
+    return data
 
 
 def update_result_assets(folder: Path, assets: dict) -> None:

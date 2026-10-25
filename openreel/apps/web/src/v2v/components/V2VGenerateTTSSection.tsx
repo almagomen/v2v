@@ -114,6 +114,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
   } | null>(null);
 
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewAudioUrlRef = useRef<string | null>(null);
 
   // Inserción de emoción en la posición de la barra de texto / cursor
   const insertEmotionAtCursor = useCallback((tag: string) => {
@@ -280,6 +281,10 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
         previewAudioRef.current.pause();
         previewAudioRef.current = null;
       }
+      if (previewAudioUrlRef.current) {
+        URL.revokeObjectURL(previewAudioUrlRef.current);
+        previewAudioUrlRef.current = null;
+      }
     };
   }, []);
 
@@ -418,24 +423,45 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
 
       if (previewAudioRef.current) {
         previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
+      if (previewAudioUrlRef.current) {
+        URL.revokeObjectURL(previewAudioUrlRef.current);
+        previewAudioUrlRef.current = null;
       }
 
       const audioUrl = URL.createObjectURL(audioResult.blob);
+      previewAudioUrlRef.current = audioUrl;
       const audio = new Audio(audioUrl);
       previewAudioRef.current = audio;
 
       audio.onended = () => {
         setIsPlayingPreview(false);
         URL.revokeObjectURL(audioUrl);
+        if (previewAudioUrlRef.current === audioUrl) {
+          previewAudioUrlRef.current = null;
+        }
       };
       audio.onerror = () => {
         setIsPlayingPreview(false);
         URL.revokeObjectURL(audioUrl);
+        if (previewAudioUrlRef.current === audioUrl) {
+          previewAudioUrlRef.current = null;
+        }
         toast.error("Error", "No se pudo reproducir la preescucha.");
       };
 
-      await audio.play();
-      setIsPlayingPreview(true);
+      try {
+        await audio.play();
+        setIsPlayingPreview(true);
+      } catch (playErr) {
+        setIsPlayingPreview(false);
+        URL.revokeObjectURL(audioUrl);
+        if (previewAudioUrlRef.current === audioUrl) {
+          previewAudioUrlRef.current = null;
+        }
+        throw playErr;
+      }
     } catch (err: any) {
       toast.error("Error al preescuchar", err?.message || "Ocurrió un error");
     } finally {

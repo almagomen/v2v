@@ -595,31 +595,6 @@ export const v2vApi = {
     return { blob, segIdx, duration, filename };
   },
 
-  async regenerateVideo(
-    jobId: string,
-    videoIndex: number,
-    segments: Segment[],
-    translateLang: string | null,
-    speaker: string
-  ): Promise<{ output_path: string; filename: string }> {
-    const res = await fetch(url("/api/regenerate-video"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        job_id: jobId,
-        video_index: videoIndex,
-        segments,
-        translate_lang: translateLang,
-        speaker,
-      }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al regenerar video");
-    }
-    return readJsonOrThrow<{ output_path: string; filename: string }>(res);
-  },
-
   async applyAudioSpeed(
     jobId: string,
     videoIndex: number,
@@ -663,17 +638,6 @@ export const v2vApi = {
       return data.log || "";
     } catch {
       return "";
-    }
-  },
-
-  async getJobItems(jobId: string): Promise<JobUrlItem[]> {
-    const res = await fetch(url(`/api/job/${jobId}/items`));
-    if (!res.ok) return [];
-    try {
-      const data = await readJsonOrThrow<{ items?: JobUrlItem[] }>(res);
-      return data.items || [];
-    } catch {
-      return [];
     }
   },
 

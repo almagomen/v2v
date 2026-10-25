@@ -1,7 +1,7 @@
 """Pydantic schemas for v2v API."""
 
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional, Any, Literal
+from typing import Optional, Any
 
 
 class ProcessUrlsRequest(BaseModel):
@@ -48,7 +48,7 @@ class SegmentSchema(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def normalize_columns(cls, v: Any) -> Any:
+    def normalize_columns(_cls, v: Any) -> Any:
         if isinstance(v, dict):
             seg = v.get("seg") or v.get("Seg")
             start = v.get("start") or v.get("Inicio")
@@ -108,15 +108,6 @@ class RegenerateSegmentRequest(BaseModel):
     volume: float = Field(0.0, ge=-10.0, le=10.0, description="Fish Audio ajuste volumen en dB")
     phonemes: Optional[dict[str, str]] = Field(None, description="Diccionario de pronunciación fonética para términos especiales")
     prevent_overlap: Optional[bool] = Field(False, description="Si es True, aplica técnicas de ajuste anticolisión al espacio antes del siguiente segmento")
-
-
-
-class RegenerateVideoRequest(BaseModel):
-    job_id: str = Field(..., description="ID del job")
-    video_index: int = Field(0, description="Índice del video en el job")
-    segments: list[SegmentSchema]
-    translate_lang: Optional[str] = None
-    speaker: str = "mrbeast"
 
 
 class ApplySpeedRequest(BaseModel):

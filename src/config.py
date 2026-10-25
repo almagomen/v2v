@@ -21,8 +21,8 @@ def is_colab() -> bool:
     if "google.colab" in sys.modules:
         return True
     try:
-        import google.colab
-        return True
+        import importlib.util
+        return importlib.util.find_spec("google.colab") is not None
     except Exception:
         return False
 

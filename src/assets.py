@@ -79,8 +79,3 @@ def get_segment(folder: Path, seg_index: int) -> Path | None:
             return cand
 
     return None
-
-
-def register_segment(folder: Path, seg_index: int, path: Path) -> None:
-    """No-op: los segmentos de audio se resuelven dinámicamente desde el sistema de archivos (Seqs_trg/)."""
-    pass
