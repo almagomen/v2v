@@ -144,16 +144,19 @@ def translate_text_list(
             start_t, end_t = times[i]
             meta = segments_meta[i] if (segments_meta and i < len(segments_meta)) else {}
             total_dur = max(0.4, round(end_t - start_t, 2))
+            internal_pause = float(meta.get("internal_pause_sec", 0.0) or 0.0)
+            speech_target_sec = max(0.4, round(total_dur - internal_pause, 2))
+
             orig_syl = int(meta.get("syllable_count") or count_syllables_approx(clean_s))
             orig_chars = len(clean_s)
 
-            # Tasa natural de locución en doblaje: ~5.0 a 5.6 sílabas/s y ~15.0 a 17.5 chars/s
-            speech_target_sec = max(0.4, total_dur)
-            target_chars = int(round(max(orig_chars * 0.95, speech_target_sec * 15.5)))
+            # Tasa natural de locución en doblaje basada en tiempo neto de habla (evita doble conteo con [break]):
+            # ~5.0 a 5.6 sílabas/s y ~15.0 a 17.5 chars/s
+            target_chars = int(round(speech_target_sec * 15.5))
             min_chars = max(4, int(round(target_chars * 0.85)))
             max_chars = max(min_chars + 8, int(round(target_chars * 1.15)))
 
-            target_syl = int(round(max(orig_syl * 0.95, speech_target_sec * 5.0)))
+            target_syl = int(round(speech_target_sec * 5.0))
             min_syl = max(1, int(round(target_syl * 0.85)))
             max_syl = max(min_syl + 2, int(round(speech_target_sec * 5.8)))
 
@@ -293,6 +296,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     # Si el modelo no soporta response_format (ej. Gemma), reintentar sin formato estricto
                     err_text = str(e_rf).lower()
                     if ("response_format" in err_text or "schema" in err_text) and not any(c in err_text for c in ("503", "429", "high demand")):
+                        print(f"⚠️ [Fallback Traducción] '{model}' no soporta response_format JSON estricto, reintentando en modo texto...", flush=True)
                         call_kwargs.pop("response_format", None)
                         interaction = client.interactions.create(**call_kwargs)
                     else:
@@ -316,6 +320,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         parsed = json.loads(clean_json)
                     except (json.JSONDecodeError, Exception):
                         # Reparar secuencias de escape inválidas (comunes en rutas de Windows como C:\Program Files\... o regex)
+                        print(f"⚠️ [Fallback JSON] Reparando secuencias de escape en salida de '{model}'...", flush=True)
                         sanitized_json = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', clean_json)
                         parsed = json.loads(sanitized_json)
 
@@ -348,9 +353,21 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                                 clean_val = re.sub(r"^\[\d+(?:\.\d+)?s?\]:?\s*", "", clean_val).strip()
                                 curr_meta = segments_meta[i - 1] if (segments_meta and i - 1 < len(segments_meta)) else {}
                                 clean_val = validate_and_place_breaks(clean_val, curr_meta)
+
+                                if initial_emotion_per_sentence:
+                                    tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
+                                    clean_val = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", clean_val).strip()
+                                    clean_val = f"{tag_to_insert} {clean_val}".strip()
+
                                 aligned_list.append(clean_val if clean_val else list_sentences[i - 1])
                             else:
-                                aligned_list.append(list_sentences[i - 1])
+                                print(f"⚠️ [Fallback Traducción] Clave #{i} ausente o vacía en respuesta de '{model}', conservando texto original.", flush=True)
+                                fallback_text = list_sentences[i - 1]
+                                if initial_emotion_per_sentence:
+                                    tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
+                                    clean_fb = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", fallback_text).strip()
+                                    fallback_text = f"{tag_to_insert} {clean_fb}".strip()
+                                aligned_list.append(fallback_text)
 
                             phonemes_map[i - 1] = seg_phonemes
 
@@ -385,6 +402,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
 
                                 aligned_list.append(clean_val if clean_val else list_sentences[i])
                             else:
+                                print(f"⚠️ [Fallback Traducción] Clave #{i + 1} ausente o vacía en respuesta de '{model}', conservando texto original.", flush=True)
                                 fallback_text = list_sentences[i]
                                 if initial_emotion_per_sentence:
                                     tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"

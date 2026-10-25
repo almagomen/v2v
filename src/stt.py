@@ -69,7 +69,14 @@ def transcribe_and_process(
         def _run_whisper():
             t0 = time.perf_counter()
             whisper_model = get_whisper_model()
-            res = whisper_model.transcribe(str(media_path), verbose=None)
+            try:
+                # isp=1_cm=2.5+++0: Corrige timestamps alucinados con nonspeech_sections sin trocear oraciones en comas
+                res = whisper_model.transcribe(str(media_path), regroup="isp=1_cm=2.5+++0", verbose=None)
+                if hasattr(res, "regroup_history") and not getattr(res, "regroup_history", None):
+                    print("⚠️ [Fallback STT] stable-ts no generó historial de reagrupación (regroup_history vacío).", flush=True)
+            except Exception as e:
+                print(f"⚠️ [Fallback STT] 'regroup' personalizado no aceptado ({e}), ejecutando transcribe por defecto.", flush=True)
+                res = whisper_model.transcribe(str(media_path), verbose=None)
             t_taken = time.perf_counter() - t0
             return res, t_taken
 
@@ -112,13 +119,20 @@ def transcribe_and_process(
         except Exception as e:
             print(f"⚠️ No se pudo guardar whisper_raw.json: {e}")
 
+        nonspeech_sections = []
+        if hasattr(segments, "to_dict"):
+            nonspeech_sections = segments.to_dict().get("nonspeech_sections", []) or []
+        elif isinstance(segments, dict):
+            nonspeech_sections = segments.get("nonspeech_sections", []) or []
+
         t0_group = time.perf_counter()
         result = process_audio(
             segments,
             diarize_segments,
             group_segments=True,
-            target_duration=target_duration,
-            max_gap=gap,
+            target_duration=target_duration if target_duration is not None else 7.5,
+            max_gap=gap if gap is not None else 0.85,
+            nonspeech_sections=nonspeech_sections,
         )
         t_group = time.perf_counter() - t0_group
         total_stt_wall = time.perf_counter() - t0_stt_wall

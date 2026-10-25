@@ -193,10 +193,17 @@ def adjust_audio_duration(
         return audio
 
 
-def distribute_silence_padding(arr: Any, target_samples: int, rate: int) -> Any:
+def distribute_silence_padding(
+    arr: Any,
+    target_samples: int,
+    rate: int,
+    max_per_valley: Optional[int] = None,
+    allow_tail_pad: bool = True,
+) -> Any:
     """
     Distribuye el padding de silencio necesario entre los valles de silencio internos (respiros/[break])
     y el final del audio, evitando dejar un hueco muerto gigante al final del clip.
+    Si allow_tail_pad es False, expande únicamente las pausas internas entre frases sin añadir colas de silencio al final.
     Soporta tensores de PyTorch y arrays de NumPy.
     """
     needed_pad = target_samples - arr.shape[-1]
@@ -206,8 +213,12 @@ def distribute_silence_padding(arr: Any, target_samples: int, rate: int) -> Any:
     is_torch = hasattr(arr, "device") and hasattr(arr, "cpu")
     arr_np = arr.detach().cpu().numpy() if is_torch else arr
 
-    # Si el padding necesario es muy pequeño (<= 0.15s), agregarlo directamente al final
-    if needed_pad < int(0.15 * rate):
+    # Si no se permite padding en la cola y no hay valles internos, no forzar ceros al final
+    if not allow_tail_pad and needed_pad < int(0.08 * rate):
+        return arr
+
+    # Si el padding necesario es muy pequeño (<= 0.15s) y se permite padding final
+    if allow_tail_pad and needed_pad < int(0.15 * rate):
         pad = np.zeros((arr_np.shape[0], needed_pad), dtype=arr_np.dtype)
         res_np = np.concatenate([arr_np, pad], axis=-1)
         return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
@@ -262,15 +273,21 @@ def distribute_silence_padding(arr: Any, target_samples: int, rate: int) -> Any:
     valleys = [v for v in valleys if v > min_edge and v < (total_samples - min_edge)]
 
     if not valleys:
+        if not allow_tail_pad:
+            return arr
         pad = np.zeros((arr_np.shape[0], needed_pad), dtype=arr_np.dtype)
         res_np = np.concatenate([arr_np, pad], axis=-1)
         return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
 
-    num_points = len(valleys) + 1
-    max_per_valley = int(0.80 * rate)
-    valley_share = min(max_per_valley, needed_pad // num_points)
-    allocated_to_valleys = valley_share * len(valleys)
-    end_share = needed_pad - allocated_to_valleys
+    limit_valley = max_per_valley if max_per_valley is not None else (int(0.35 * rate) if not allow_tail_pad else int(0.80 * rate))
+    if allow_tail_pad:
+        num_points = len(valleys) + 1
+        valley_share = min(limit_valley, needed_pad // num_points)
+        allocated_to_valleys = valley_share * len(valleys)
+        end_share = needed_pad - allocated_to_valleys
+    else:
+        valley_share = min(limit_valley, needed_pad // len(valleys)) if valleys else 0
+        end_share = 0
 
     fade_len = max(64, min(int(0.005 * rate), valley_share // 2 if valley_share > 0 else 64))
     fade_out = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
@@ -286,7 +303,8 @@ def distribute_silence_padding(arr: Any, target_samples: int, rate: int) -> Any:
         if chunk.shape[-1] >= fade_len:
             chunk[:, -fade_len:] *= fade_out
         parts.append(chunk)
-        parts.append(silence_chunk)
+        if valley_share > 0:
+            parts.append(silence_chunk)
         prev_idx = v_idx
 
     chunk_last = arr_np[:, prev_idx:].copy()
@@ -294,15 +312,16 @@ def distribute_silence_padding(arr: Any, target_samples: int, rate: int) -> Any:
         chunk_last[:, :fade_len] *= fade_in
     parts.append(chunk_last)
 
-    if end_share > 0:
+    if allow_tail_pad and end_share > 0:
         parts.append(np.zeros((arr_np.shape[0], end_share), dtype=arr_np.dtype))
 
     res_np = np.concatenate(parts, axis=-1)
-    if res_np.shape[-1] < target_samples:
-        extra = np.zeros((arr_np.shape[0], target_samples - res_np.shape[-1]), dtype=arr_np.dtype)
-        res_np = np.concatenate([res_np, extra], axis=-1)
-    elif res_np.shape[-1] > target_samples:
-        res_np = res_np[:, :target_samples]
+    if allow_tail_pad:
+        if res_np.shape[-1] < target_samples:
+            extra = np.zeros((arr_np.shape[0], target_samples - res_np.shape[-1]), dtype=arr_np.dtype)
+            res_np = np.concatenate([res_np, extra], axis=-1)
+        elif res_np.shape[-1] > target_samples:
+            res_np = res_np[:, :target_samples]
 
     return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
 
@@ -466,6 +485,7 @@ def get_audio_file_duration(file_path: Path | str, fallback: Optional[float] = N
     except Exception:
         pass
 
+    print(f"⚠️ [Fallback Duración] No se pudo medir duración física de '{Path(file_path).name}', usando fallback={fallback}s.", flush=True)
     return fallback
 
 
@@ -555,27 +575,32 @@ def synthesize_segment_audio(
             diff_pct = int(round((ratio_slow - 1.0) * 100))
             diff_str = f"+{diff_pct}%" if diff_pct > 0 else f"{diff_pct}%" if diff_pct < 0 else "0%"
 
-            # Margen Neutro y extensión sin colisión:
-            # Se conserva el audio 100% puro y tal cual (sin recorte de ondas ni relleno artificial de silencio)
-            if ratio_slow >= 0.95:
+            # Margen Neutro y fidelidad temporal en Timeline:
+            # Si ratio_slow >= 0.92: Mantener el audio 100% intacto a 1.00x, sin estirar y sin colas de silencio
+            if ratio_slow >= 0.92:
                 mode_tag = f"✨ 1.00x ({diff_str})"
             else:
-                # Sub-duración (< 0.95x):
-                min_allowed_speed = 0.75
-                if ratio_slow < min_allowed_speed:
-                    # Freno Inteligente en 0.75x: ralentizar al piso seguro y distribuir el sobrante en pausas
-                    effective_speed = min_allowed_speed
+                # Sub-duración (< 0.92x):
+                # 1. Expandir suavemente valles internos de silencio (sin añadir silencio al final del clip)
+                target_samples = int(orig_duration * rate)
+                arr_expanded = distribute_silence_padding(
+                    arr, target_samples, rate, max_per_valley=int(0.35 * rate), allow_tail_pad=False
+                )
+                expanded_dur = float(arr_expanded.shape[-1]) / float(rate)
+                expanded_ratio = expanded_dur / orig_duration
+
+                if expanded_ratio >= 0.92:
+                    arr = arr_expanded
+                    mode_tag = f"✨ 1.00x (pausas +{int(round((expanded_ratio - ratio_slow) * 100))}%)"
+                else:
+                    arr = arr_expanded
+                    # 2. Si aún después de expandir pausas internas sigue < 0.92x, piso estricto de 0.90x
+                    # (máximo 10% de estiramiento imperceptible, sin rellenar con ceros la cola)
+                    min_allowed_speed = 0.90
+                    effective_speed = max(min_allowed_speed, expanded_ratio)
+                    mode_tag = f"🔉 {effective_speed:.2f}x"
                     stretch_samples = int(arr.shape[-1] / effective_speed)
                     arr = adjust_audio_duration(arr, stretch_samples, rate)
-                    mode_tag = f"🔉 {effective_speed:.2f}x"
-                    target_samples = int(orig_duration * rate)
-                    if target_samples > arr.shape[-1] and torch is not None:
-                        arr = distribute_silence_padding(arr, target_samples, rate)
-                else:
-                    # En rango seguro [0.75x, 0.95x): expandir suavemente al tiempo original
-                    mode_tag = f"🔉 {ratio_slow:.2f}x"
-                    target_samples = int(orig_duration * rate)
-                    arr = adjust_audio_duration(arr, target_samples, rate)
 
     # Micro-fade out suave (5ms estándar) al final para eliminar ruidos de corte abrupto
     fade_len_5ms = max(16, min(int(0.005 * rate), arr.shape[-1]))
@@ -613,7 +638,8 @@ def synthesize_segment_audio(
             ]
             try:
                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ [Fallback Audio] Falló codificación AAC (.m4a) para {out_p.name} ({e}), guardando como .wav.", flush=True)
                 torchaudio.save(str(out_p.with_suffix(".wav")), arr, sample_rate=rate)
             finally:
                 if tmp_wav.exists():
@@ -762,13 +788,16 @@ def clone_voice_segments(
         ]
         next_seg_start = min(next_starts) if next_starts else None
 
-        # Límite máximo disponible antes de chocar con el siguiente clip (menos zona segura de 40ms)
+        # Límite máximo disponible antes de chocar o invadir silencios musicales
+        slack = 0.55
         if next_seg_start is not None:
-            max_allowed_dur = max(0.2, next_seg_start - start_time - 0.04)
+            hard_limit = max(0.2, next_seg_start - start_time - 0.04)
         elif video_total_duration is not None:
-            max_allowed_dur = max(0.2, video_total_duration - start_time - 0.05)
+            hard_limit = max(0.2, video_total_duration - start_time - 0.05)
         else:
-            max_allowed_dur = None
+            hard_limit = dur_en + slack
+
+        max_allowed_dur = min(hard_limit, dur_en + slack)
 
         audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.m4a"
         raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"
