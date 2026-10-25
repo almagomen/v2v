@@ -311,18 +311,23 @@ def smart_group_segments_strict(
         is_tiny = cur_seg["duration"] < 2.5 or cur_seg["word_count"] <= 3
 
         if is_tiny:
+            cur_last_word = cur_seg["words"][-1]["word"] if cur_seg.get("words") else ""
+            cur_ends_sentence = has_major_punct(cur_last_word)
+
             can_merge_prev = False
             gap_prev = float("inf")
             if merged_segments and merged_segments[-1]["speaker"] == cur_seg["speaker"]:
                 gap_prev = cur_seg["start"] - merged_segments[-1]["end"]
-                if gap_prev <= 0.65 and (merged_segments[-1]["duration"] + cur_seg["duration"]) <= max_merge_duration:
+                prev_last_word = merged_segments[-1]["words"][-1]["word"] if merged_segments[-1].get("words") else ""
+                prev_ended_sentence = has_major_punct(prev_last_word)
+                if gap_prev <= 0.65 and not (prev_ended_sentence and gap_prev >= 0.35) and (merged_segments[-1]["duration"] + cur_seg["duration"]) <= max_merge_duration:
                     can_merge_prev = True
 
             can_merge_next = False
             gap_next = float("inf")
             if i + 1 < len(grouped_segments) and grouped_segments[i + 1]["speaker"] == cur_seg["speaker"]:
                 gap_next = grouped_segments[i + 1]["start"] - cur_seg["end"]
-                if gap_next <= 0.65 and (cur_seg["duration"] + grouped_segments[i + 1]["duration"]) <= max_merge_duration:
+                if gap_next <= 0.65 and not (cur_ends_sentence and gap_next >= 0.35) and (cur_seg["duration"] + grouped_segments[i + 1]["duration"]) <= max_merge_duration:
                     can_merge_next = True
 
             # Priorizar el vecino con menor separación de silencio

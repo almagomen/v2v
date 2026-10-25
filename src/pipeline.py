@@ -240,15 +240,8 @@ def split_audio_sequences(
         s_sec = float(text_dict.get("orig_start") if text_dict.get("orig_start") is not None else text_dict.get("start", 0.0))
         e_sec = float(text_dict.get("orig_end") if text_dict.get("orig_end") is not None else text_dict.get("end", 0.0))
 
-        # Collar de seguridad de 50ms antes y después para proteger ataques y caídas de consonantes
-        prev_end_bound = float(texts_to_process[idx - 1].get("end", 0.0)) if idx > 0 else 0.0
-        next_start_bound = float(texts_to_process[idx + 1].get("start", arr.shape[-1] / org_sr)) if idx + 1 < len(texts_to_process) else (arr.shape[-1] / org_sr)
-
-        safe_s_sec = max(prev_end_bound, s_sec - 0.05)
-        safe_e_sec = min(next_start_bound, e_sec + 0.05)
-
-        start = max(0, int(round(safe_s_sec * org_sr)))
-        end = min(arr.shape[-1], int(round(safe_e_sec * org_sr)))
+        start = max(0, int(round(s_sec * org_sr)))
+        end = min(arr.shape[-1], int(round(e_sec * org_sr)))
         arr_split = arr[:, start:end]
 
         seq_num = edit_indices[idx] if edit_indices else idx + 1
