@@ -60,45 +60,19 @@ def set_default_gemini_model(model_name: str) -> None:
     set_default_title_model(model_name)
 
 
-def validate_and_place_breaks(text: str, meta: Optional[dict] = None) -> str:
-    """
-    Verifica que los marcadores [break] y [long-break] estén en la posición sintáctica correcta:
-    - Remueve breaks indebidos al inicio absoluto o al final de la frase.
-    - Normaliza espaciados alrededor de breaks internos.
-    - Si la frase no contiene break pero el audio original contenía una pausa interna acústica (internal_pause_sec >= 0.35s),
-      inserta [break] o [long-break] en la cesura lógica más apropiada (punto seguido, punto y coma, coma central).
-    """
+def sanitize_dialogue_text(text: str) -> str:
+    """Limpia etiquetas obsoletas o residuales ([break], [long-break], [emphasis]) y normaliza espacios."""
     if not text:
-        return text
-
-    # 1. Limpieza de breaks indebidos en los extremos
-    cleaned = re.sub(r"^(\s*\[(?:long-)?break\]\s*)+", "", text)
-    cleaned = re.sub(r"^(\[[a-zA-Z\s\-]+\])\s*\[(?:long-)?break\]\s*", r"\1 ", cleaned)
-    cleaned = re.sub(r"(\s*\[(?:long-)?break\]\s*)+([.,!?:;]?\s*)$", r"\2", cleaned)
-    cleaned = re.sub(r"\s*\[(long-)?break\]\s*", r" [\1break] ", cleaned).strip()
-
-    # Si ya contiene break en el cuerpo del texto, respetarlo
-    if "[break]" in cleaned or "[long-break]" in cleaned:
-        return cleaned
-
-    # 2. Si no contiene break, verificar si el segmento original tenía pausa interna
-    if meta:
-        internal_pause = float(meta.get("internal_pause_sec", 0.0) or 0.0)
-        if internal_pause >= 0.35:
-            break_tag = "[long-break]" if internal_pause >= 0.85 else "[break]"
-            # Buscar cesura lógica: punto seguido (. ), punto y coma (; )
-            if re.search(r"\.\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]", cleaned):
-                cleaned = re.sub(r"\.\s+([A-ZÁÉÍÓÚÑa-záéíóúñ])", rf". {break_tag} \1", cleaned, count=1)
-            elif "; " in cleaned:
-                cleaned = cleaned.replace("; ", f"; {break_tag} ", 1)
-            elif ", " in cleaned:
-                parts = cleaned.split(", ")
-                if len(parts) >= 2:
-                    mid_idx = len(parts) // 2
-                    parts[mid_idx - 1] = parts[mid_idx - 1] + f", {break_tag}"
-                    cleaned = " ".join(parts)
-
+        return ""
+    cleaned = re.sub(r"\[(long-)?break\]", "", text)
+    cleaned = re.sub(r"\[emphasis\]", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
+
+
+def validate_and_place_breaks(text: str, meta: Optional[dict] = None) -> str:
+    """Función de compatibilidad: sanitiza texto de diálogo asegurando ausencia de etiquetas sintéticas espurias."""
+    return sanitize_dialogue_text(text)
 
 
 def translate_text_list(
@@ -116,8 +90,8 @@ def translate_text_list(
 ) -> list[str] | Tuple[list[str], list[dict]] | None:
     """
     Traduce o adapta una lista de frases a un idioma objetivo usando Gemini (Interactions API).
-    Soporta doblaje isométrico con presupuesto de sílabas, tiempo neto y tags prosódicos,
-    cascada limpia de modelos (lite -> gemma), control de enable_emotions y rotación de API Keys.
+    Soporta doblaje isométrico puro con presupuesto de sílabas y tiempo neto,
+    cascada limpia de modelos (lite -> gemma), inyección de emoción inicial y rotación de API Keys.
     """
     if not list_sentences:
         return []
@@ -138,8 +112,7 @@ def translate_text_list(
     for i, s in enumerate(list_sentences):
         k = str(i + 1)
         # Limpieza de entrada: enviar lenguaje natural humano a Gemini sin contaminaciones
-        clean_s = re.sub(r"\[(long-)?break\]", "", s).strip()
-        clean_s = re.sub(r"\s+", " ", clean_s)
+        clean_s = sanitize_dialogue_text(s)
         if has_times:
             start_t, end_t = times[i]
             meta = segments_meta[i] if (segments_meta and i < len(segments_meta)) else {}
@@ -150,7 +123,7 @@ def translate_text_list(
             orig_syl = int(meta.get("syllable_count") or count_syllables_approx(clean_s))
             orig_chars = len(clean_s)
 
-            # Tasa natural de locución en doblaje basada en tiempo neto de habla (evita doble conteo con [break]):
+            # Tasa natural de locución en doblaje basada en tiempo neto de habla:
             # ~5.0 a 5.6 sílabas/s y ~15.0 a 17.5 chars/s
             target_chars = int(round(speech_target_sec * 15.5))
             min_chars = max(4, int(round(target_chars * 0.85)))
@@ -164,41 +137,24 @@ def translate_text_list(
         else:
             input_dict[k] = clean_s
 
-    if enable_emotions:
-        from src.expression import CANONICAL_EMOTIONS
-        active_emotions = sorted([e for e in CANONICAL_EMOTIONS if not ("break" in e or "laughing" in e and "crowd" in e)])
-        emotions_catalog_str = ", ".join(f"[{e}]" for e in active_emotions)
-        emotion_guideline = f"""   - Modulación prosódica y expresiones: Analiza el contexto, el tono emocional y la intención comunicativa de cada frase en el diálogo y compáralo con el catálogo canónico de expresiones disponibles:
-     {emotions_catalog_str}
-     * Cuando la frase exprese una emoción o inflexión clara, incorpora la expresión del catálogo que mejor le corresponda.
-     * Ubicación: Colócala al inicio de la frase para definir la actitud general o en el punto exacto de la frase donde ocurra el cambio emocional."""
-        pacing_emotion_hint = "- MODULACIÓN PROSÓDICA: Evalúa el contenido semántico y conversacional de cada enunciado y selecciona libremente del catálogo canónico la modulación que capture la intención del hablante."
-    else:
-        emotion_guideline = """   - Modulación: Mantén una entonación natural y neutra, sin marcadores de emoción."""
-        pacing_emotion_hint = "- MODULACIÓN: Entrega la locución con entonación neutra y natural."
-
-    pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO (CONTROL DE TIEMPO Y RANGO DE CARACTERES):
+    pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO (CONTROL DE TIEMPO Y EXTENSIÓN):
    Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars]: texto original`.
    En doblaje audiovisual profesional, el ritmo debe ser fluido y natural (~15 a 17 caracteres por segundo).
-   - ISOMORFISMO DE LONGITUD: Ajusta la extensión de tu traducción en {target_lang_name} para que caiga DENTRO del rango de ~M-Z chars (proporcional al tiempo del video). No hagas la frase excesivamente corta (dejaría silencios muertos) ni excesivamente larga (se aceleraría la voz).
-   - PRESERVACIÓN Y MANEJO DE PAUSAS: Si la escena contiene silencios naturales o respiraciones, puedes usar marcadores de pausa:
-     * `[break]`: para pausas breves, respiros naturales y cesuras lógicas entre dos oraciones o cláusulas.
-     * `[long-break]`: para pausas prolongadas, transiciones de plano o silencios deliberados.
-     (Nunca ubiques marcadores de pausa al inicio o al final absoluto de una frase).
-   {pacing_emotion_hint}
+   - ISOMORFISMO DE LONGITUD: Ajusta la extensión de tu traducción en {target_lang_name} para que caiga DENTRO del rango de ~M-Z chars (proporcional al tiempo del video). No hagas la frase excesivamente corta (evita vacíos) ni excesivamente larga (evita aceleración de voz).
+   - NATURALIDAD Y PUNTUACIÓN: Emplea puntuación gramatical estándar (comas, puntos, exclamación, interrogación) para marcar las pausas y entonaciones orales del habla. NO agregues etiquetas artificiales entre corchetes como [break], [pause] o emociones inventadas.
    - SEGMENTOS BREVES (< 2.0s): Respeta la concisión temporal manteniendo la traducción breve y directa sin adiciones innecesarias.
    - En tu JSON de salida entrega ÚNICAMENTE el texto adaptado dentro de cada objeto, SIN repetir el prefijo de metadatos (prohibido poner `[Xs slot | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
 
     empty_dict_str = "{}"
     if is_same_lang:
         role_mission = f"""Eres un director de voz y especialista en adaptación prosódica de diálogos para síntesis de voz (TTS).
-Tu misión es ADAPTAR cada frase en {target_lang_name} para su locución por modelos de voz (TTS), preservando con total fidelidad el texto, la idea y la intención original del {source_lang_name}, pero dotándola de ritmo oral natural, pausas orgánicas y modulaciones vocales adecuadas."""
+Tu misión es ADAPTAR cada frase en {target_lang_name} para su locución por modelos de voz (TTS), preservando con total fidelidad el texto, la idea y la intención original del {source_lang_name}, pero dotándola de ritmo oral natural, pausas orgánicas y excelente fonética."""
     else:
         role_mission = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
 Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo."""
 
-    ex_text_1 = f"[excited] frase 1 adaptada al {target_lang_name}" if enable_emotions else f"frase 1 adaptada al {target_lang_name}"
-    ex_text_2 = f"frase 2 [break] adaptada al {target_lang_name}"
+    ex_text_1 = f"frase 1 adaptada al {target_lang_name}"
+    ex_text_2 = f"frase 2 adaptada al {target_lang_name}"
 
     prompt = f"""{role_mission}
 
@@ -209,14 +165,10 @@ Directrices obligatorias:
 4. VOZ HABLADA Y DOBLAJE: El texto será sintetizado por modelos de voz (TTS). La frase debe tener ritmo fonético natural, ser directa y sonar convincente y orgánica al ser escuchada.
 {pacing_instruction}
 6. COHERENCIA Y CONTINUIDAD ENTRE FRASES: Las frases forman parte de una narración continua en un timeline audiovisual. Si una frase continúa la idea de la clave anterior (o deja una idea abierta para la clave siguiente), preserva la ilación gramatical natural, usando puntuación de enlace (comas o puntos seguidos) para que al reproducirse consecutivamente en el reproductor suenen como un discurso fluido y continuo, sin interrupciones abruptas ni pausas antinaturales.
-7. MODULACIÓN PROSÓDICA, ÉNFASIS Y PAUSAS:
-{emotion_guideline}
-   - Control de pausas internas:
-     * `[break]`: para pausas breves, respiros naturales y cesuras lógicas entre dos oraciones o cláusulas.
-     * `[long-break]`: para silencios prolongados deliberados, momentos de reflexión o transiciones de escena.
-     * Nunca coloques marcadores de pausa al inicio ni al final absoluto de una frase.
-   - Puedes anteponer `[emphasis]` inmediatamente antes de una palabra clave para acentuarla con fuerza vocal.
-   - Preserva estrictamente la entonación interrogativa (¿?) y exclamativa (¡!) para una modulación prosódica creíble.
+7. PUNTUACIÓN Y MODULACIÓN PROSÓDICA:
+   - Preserva estrictamente la entonación interrogativa (¿?) y exclamativa (¡!) para una entonación creíble.
+   - Usa comas, dos puntos y puntos seguidos para articular un ritmo oral fluido y natural.
+   - NO inventes ni agregues etiquetas entre corchetes (prohibido [break], [pause], etc.).
 8. DETECCIÓN FONÉTICA Y GLOSARIO DE PRONUNCIACIÓN (TTS):
    Identifica en cada frase cualquier vocablo cuya lectura ortográfica literal en {target_lang_name} pueda ser pronunciada de forma errónea, distorsionada o antinatural por un sintetizador de voz. Evalúa rigurosamente candidatos en cualquier área temática que cumplan con alguno de los siguientes criterios:
    a) Nombres propios, marcas, productos, entidades o topónimos de origen no nativo o grafía singular.
@@ -358,6 +310,8 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                                     tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
                                     clean_val = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", clean_val).strip()
                                     clean_val = f"{tag_to_insert} {clean_val}".strip()
+                                elif not enable_emotions:
+                                    clean_val = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", clean_val).strip()
 
                                 aligned_list.append(clean_val if clean_val else list_sentences[i - 1])
                             else:
@@ -367,6 +321,8 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                                     tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
                                     clean_fb = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", fallback_text).strip()
                                     fallback_text = f"{tag_to_insert} {clean_fb}".strip()
+                                elif not enable_emotions:
+                                    fallback_text = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", fallback_text).strip()
                                 aligned_list.append(fallback_text)
 
                             phonemes_map[i - 1] = seg_phonemes
@@ -399,6 +355,8 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                                     tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
                                     clean_val = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", clean_val).strip()
                                     clean_val = f"{tag_to_insert} {clean_val}".strip()
+                                elif not enable_emotions:
+                                    clean_val = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", clean_val).strip()
 
                                 aligned_list.append(clean_val if clean_val else list_sentences[i])
                             else:
@@ -408,6 +366,8 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                                     tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
                                     clean_fb = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", fallback_text).strip()
                                     fallback_text = f"{tag_to_insert} {clean_fb}".strip()
+                                elif not enable_emotions:
+                                    fallback_text = re.sub(r"^\[[a-zA-Z0-9\s_-]+\]\s*", "", fallback_text).strip()
                                 aligned_list.append(fallback_text)
 
                             phonemes_map[i] = seg_phonemes
