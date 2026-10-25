@@ -422,7 +422,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
 
 
                     if aligned_list and len(aligned_list) == total_count:
-                        print(f"⏱️ [Traducción] Completada con '{model}' en {duration:.1f}s", flush=True)
+                        print(f"⏱️ [Traducción '{model}'] segs. en {duration:.1f}s", flush=True)
                         if return_details:
                             phonemes_list = [phonemes_map.get(i, {}) for i in range(total_count)]
                             return aligned_list, phonemes_list

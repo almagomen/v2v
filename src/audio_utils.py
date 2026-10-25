@@ -576,11 +576,11 @@ def synthesize_segment_audio(
             diff_str = f"+{diff_pct}%" if diff_pct > 0 else f"{diff_pct}%" if diff_pct < 0 else "0%"
 
             # Margen Neutro y fidelidad temporal en Timeline:
-            # Si ratio_slow >= 0.92: Mantener el audio 100% intacto a 1.00x, sin estirar y sin colas de silencio
-            if ratio_slow >= 0.92:
+            # Si ratio_slow >= 0.95: Mantener el audio 100% intacto a 1.00x, sin estirar y sin colas de silencio
+            if ratio_slow >= 0.95:
                 mode_tag = f"✨ 1.00x ({diff_str})"
             else:
-                # Sub-duración (< 0.92x):
+                # Sub-duración (< 0.95x):
                 # 1. Expandir suavemente valles internos de silencio (sin añadir silencio al final del clip)
                 target_samples = int(orig_duration * rate)
                 arr_expanded = distribute_silence_padding(
@@ -589,14 +589,14 @@ def synthesize_segment_audio(
                 expanded_dur = float(arr_expanded.shape[-1]) / float(rate)
                 expanded_ratio = expanded_dur / orig_duration
 
-                if expanded_ratio >= 0.92:
+                if expanded_ratio >= 0.95:
                     arr = arr_expanded
                     mode_tag = f"✨ 1.00x (pausas +{int(round((expanded_ratio - ratio_slow) * 100))}%)"
                 else:
                     arr = arr_expanded
-                    # 2. Si aún después de expandir pausas internas sigue < 0.92x, piso estricto de 0.90x
-                    # (máximo 10% de estiramiento imperceptible, sin rellenar con ceros la cola)
-                    min_allowed_speed = 0.90
+                    # 2. Si aún después de expandir pausas internas sigue < 0.95x, piso estricto de 0.85x
+                    # (máximo 15% de estiramiento imperceptible, sin rellenar con ceros la cola)
+                    min_allowed_speed = 0.85
                     effective_speed = max(min_allowed_speed, expanded_ratio)
                     mode_tag = f"🔉 {effective_speed:.2f}x"
                     stretch_samples = int(arr.shape[-1] / effective_speed)
