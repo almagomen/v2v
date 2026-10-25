@@ -12,6 +12,7 @@ import {
   Mic,
   Radio,
   Film,
+  Video,
   Layers,
   FolderInput,
   Smile,
@@ -76,6 +77,8 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
     setInitialEmotionTag,
     importTTSSegments,
     setImportTTSSegments,
+    importVideoOnly,
+    setImportVideoOnly,
     importMergedVideo,
     setImportMergedVideo,
     importInstrumental,
@@ -456,10 +459,42 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                   type="button"
                   title="Añadir esta pista al Timeline ahora"
                   disabled={!jobId || videos.length === 0 || importingTrackKey !== null}
-                  onClick={() => handleImportSingleTrack("video")}
+                  onClick={() => handleImportSingleTrack("video_only")}
                   className="p-1 text-text-muted hover:text-primary transition-colors disabled:opacity-25 disabled:cursor-not-allowed rounded hover:bg-background-elevated"
                 >
-                  {importingTrackKey === "video" ? (
+                  {importingTrackKey === "video_only" || importingTrackKey === "video" ? (
+                    <Loader2 size={13} className="animate-spin text-primary" />
+                  ) : (
+                    <FolderInput size={13} />
+                  )}
+                </button>
+                <input
+                  type="checkbox"
+                  checked={importVideoOnly}
+                  onChange={(e) => setImportVideoOnly(e.target.checked)}
+                  title="Importación automática al finalizar inferencia"
+                  className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+                />
+              </div>
+            </div>
+
+            {/* Video original completo con audio */}
+            <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
+              <div className="flex items-center gap-2">
+                <Video size={13} className="text-indigo-400" />
+                <span className="text-[10px] font-medium text-text-primary block">
+                  Video Original (merged.mp4)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  title="Añadir esta pista al Timeline ahora"
+                  disabled={!jobId || videos.length === 0 || importingTrackKey !== null}
+                  onClick={() => handleImportSingleTrack("merged_video")}
+                  className="p-1 text-text-muted hover:text-primary transition-colors disabled:opacity-25 disabled:cursor-not-allowed rounded hover:bg-background-elevated"
+                >
+                  {importingTrackKey === "merged_video" ? (
                     <Loader2 size={13} className="animate-spin text-primary" />
                   ) : (
                     <FolderInput size={13} />

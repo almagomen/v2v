@@ -8,6 +8,7 @@ export interface V2VUserPreferences {
   initialEmotionPerSentence: boolean;
   initialEmotionTag: string;
   importTTSSegments: boolean;
+  importVideoOnly: boolean;
   importMergedVideo: boolean;
   importInstrumental: boolean;
   importOriginalAudio: boolean;
@@ -20,7 +21,8 @@ export const DEFAULT_V2V_PREFERENCES: V2VUserPreferences = {
   initialEmotionPerSentence: false,
   initialEmotionTag: "[excited]",
   importTTSSegments: true,
-  importMergedVideo: true,
+  importVideoOnly: true,
+  importMergedVideo: false,
   importInstrumental: true,
   importOriginalAudio: false,
   importOriginalVocals: false,

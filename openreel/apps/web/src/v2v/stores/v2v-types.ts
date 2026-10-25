@@ -107,6 +107,7 @@ export interface JobState {
   initialEmotionPerSentence: boolean;
   initialEmotionTag: string;
   importTTSSegments: boolean;
+  importVideoOnly: boolean;
   importMergedVideo: boolean;
   importInstrumental: boolean;
   importOriginalAudio: boolean;
@@ -124,6 +125,7 @@ export interface JobActions {
   setInitialEmotionPerSentence: (enabled: boolean) => void;
   setInitialEmotionTag: (tag: string) => void;
   setImportTTSSegments: (enabled: boolean) => void;
+  setImportVideoOnly: (enabled: boolean) => void;
   setImportMergedVideo: (enabled: boolean) => void;
   setImportInstrumental: (enabled: boolean) => void;
   setImportOriginalAudio: (enabled: boolean) => void;

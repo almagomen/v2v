@@ -142,6 +142,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
     initialEmotionPerSentence: loadV2VPreferences().initialEmotionPerSentence,
     initialEmotionTag: loadV2VPreferences().initialEmotionTag,
     importTTSSegments: loadV2VPreferences().importTTSSegments,
+    importVideoOnly: loadV2VPreferences().importVideoOnly ?? true,
     importMergedVideo: loadV2VPreferences().importMergedVideo,
     importInstrumental: loadV2VPreferences().importInstrumental,
     importOriginalAudio: loadV2VPreferences().importOriginalAudio,
@@ -163,6 +164,10 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
     setImportTTSSegments: (importTTSSegments) => {
       saveV2VPreferences({ importTTSSegments });
       set({ importTTSSegments });
+    },
+    setImportVideoOnly: (importVideoOnly) => {
+      saveV2VPreferences({ importVideoOnly });
+      set({ importVideoOnly });
     },
     setImportMergedVideo: (importMergedVideo) => {
       saveV2VPreferences({ importMergedVideo });
@@ -583,9 +588,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       serverFn: v.video_only_path?.split(/[\\/]/).pop() || "", 
                       logicalName: v.video_only_path?.split(/[\\/]/).pop() || "video_only.mp4", 
                       type: 'video', 
-                      toTimeline: true, 
+                      toTimeline: currentPrefs.importVideoOnly, 
                       trackPrefix: 'Video',
-                      enabled: !!(v.video_only_path || v.video_path) 
+                      enabled: !!(v.video_only_path || v.video_path) && currentPrefs.importVideoOnly 
                     },
                     { 
                       id: 'instrumental', 
@@ -665,7 +670,8 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     if (currentPrefs.importInstrumental) activeOpts.push(`🎸 Instrumental`);
                     if (currentPrefs.importOriginalVocals) activeOpts.push(`🎤 Voz original`);
                     if (currentPrefs.importOriginalAudio) activeOpts.push(`🎵 Audio original`);
-                    if (currentPrefs.importMergedVideo) activeOpts.push(`🎬 Video`);
+                    if (currentPrefs.importVideoOnly) activeOpts.push(`🎬 Video (sin audio)`);
+                    if (currentPrefs.importMergedVideo) activeOpts.push(`🎞️ Video Merged`);
 
                     get().appendUrlLog(urlForLog, `• 📥 Descargando medios:\n${activeOpts.join(" + ")}...`);
                   }
@@ -1393,7 +1399,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
       let workingProject = useProjectStore.getState().project;
 
       try {
-        if (trackKey === "video") {
+        if (trackKey === "video" || trackKey === "video_only") {
           let blob: Blob | null = null;
           try {
             blob = await v2vApi.fetchAssetBlob(jobId, v.index, "video_only");
@@ -1411,6 +1417,31 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
             const { project: p1, trackId } = await addTrackAndGetId(workingProject, "video");
             if (trackId) {
               const p2 = renameTrackInProject(p1, trackId, "Video");
+              const clipRes = (await addClipToDetachedProject(p2, trackId, media.id, 0)) as any;
+              workingProject = clipRes.project || p2;
+            }
+          }
+        } else if (trackKey === "merged" || trackKey === "merged_video") {
+          let blob: Blob | null = null;
+          try {
+            blob = await v2vApi.fetchAssetBlob(jobId, v.index, "merged");
+          } catch {
+            if (v.video_path) {
+              const fn = v.video_path.split(/[\\/]/).pop() || "merged.mp4";
+              blob = await v2vApi.fetchFileBlob(jobId, v.index, fn).catch(() => null);
+            }
+          }
+          if (!blob) throw new Error("No se pudo descargar el video merged.");
+          const fileName = v.video_path?.split(/[\\/]/).pop() || "merged.mp4";
+          const file = new File([blob], fileName, { type: "video/mp4" });
+          const res = await importMultipleMediaIntoProject(workingProject, [file], { quick: true });
+          if (!res.success || !res.project) throw new Error("Error importando video merged a la librería.");
+          workingProject = res.project;
+          const media = workingProject.mediaLibrary.items.find((m) => m.name === fileName);
+          if (media) {
+            const { project: p1, trackId } = await addTrackAndGetId(workingProject, "video");
+            if (trackId) {
+              const p2 = renameTrackInProject(p1, trackId, "MERGED_VIDEO");
               const clipRes = (await addClipToDetachedProject(p2, trackId, media.id, 0)) as any;
               workingProject = clipRes.project || p2;
             }

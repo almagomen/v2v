@@ -4,6 +4,7 @@ Transcripción STT con Whisper y procesamiento con diarización.
 import concurrent.futures
 import contextlib
 import io
+import re
 import time
 from pathlib import Path
 from typing import Union, Tuple, Any, Optional
