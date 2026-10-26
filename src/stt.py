@@ -46,19 +46,6 @@ def get_whisper_model():
     )
 
 
-def preload_silero_vad() -> Any:
-    """Precarga el modelo Silero VAD en la caché local de PyTorch Hub para evitar descargas en caliente."""
-    if torch is None:
-        return None
-    try:
-        model = torch.hub.load("snakers4/silero-vad", "silero_vad", trust_repo=True)
-        print("✅ Silero VAD precargado en caché local.")
-        return model
-    except Exception as e:
-        print(f"⚠️ No se pudo precargar Silero VAD ({e}). Se descargará bajo demanda si es necesario.")
-        return None
-
-
 def sanitize_whisper_raw(segments_obj: Any, detected_language: str = "es") -> dict:
     """
     Sanitiza y compacta el volcado crudo de Whisper para auditoría y debug,
@@ -119,23 +106,7 @@ def transcribe_and_process(
         def _run_whisper():
             t0 = time.perf_counter()
             whisper_model = get_whisper_model()
-            try:
-                # vad=True activa Silero VAD para no cortar inicios de palabras;
-                # p=0.06+0.06 añade micro-padding de 60ms en bordes sin pisar palabras contiguas.
-                res = whisper_model.transcribe(
-                    str(media_path),
-                    vad=True,
-                    regroup="isp=1_cm=2.5+1.2++0_p=0.06+0.06",
-                    verbose=None,
-                )
-                print(f"[STT] Transcripción con vad/regroup completada", flush=True)
-            except Exception as e:
-                print(f"⚠️ [Fallback STT] Transcribe con vad/regroup falló ({e}), intentando sin vad...", flush=True)
-                try:
-                    res = whisper_model.transcribe(str(media_path), regroup="isp=1_cm=2.5+1.2++0", verbose=None)
-                except Exception as e2:
-                    print(f"⚠️ [Fallback STT] Ejecutando transcribe estándar ({e2}).", flush=True)
-                    res = whisper_model.transcribe(str(media_path), verbose=None)
+            res = whisper_model.transcribe(str(media_path), verbose=None)
             t_taken = time.perf_counter() - t0
             return res, t_taken
 
@@ -178,7 +149,7 @@ def transcribe_and_process(
             segments,
             diarize_segments,
             group_segments=True,
-            hard_gap=gap if gap is not None else 1.1,
+            hard_gap=gap if gap is not None else 1.3,
         )
         t_group = time.perf_counter() - t0_group
         total_stt_wall = time.perf_counter() - t0_stt_wall

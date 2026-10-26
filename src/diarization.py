@@ -156,21 +156,43 @@ def count_syllables_approx(text: str) -> int:
     return max(1, total)
 
 
+def is_dangling_word_agnostic(word: str) -> bool:
+    """
+    Detección agnóstica multilingüe de palabras conectoras débiles sin listas de diccionarios:
+    Una palabra es colgante si no termina en puntuación mayor (. ! ? ; :) y:
+    - Es extremadamente corta (1 o 2 letras alfanuméricas, ej: e, y, o, a, de, do, da, in, on, at, to, um, un, il, le).
+    - O es una partícula común de enlace de 3 letras en minúscula (com, con, que, and, for, the, por, pra, pro, etc.).
+    """
+    w = word.strip()
+    if not w or has_major_punct(w):
+        return False
+    if re.search(r"[,—\-]$", w):
+        return False
+    raw_letters = re.sub(r"[^\wáéíóúâêîôûãõàèìòùäëïöüñçÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÄËÏÖÜÑÇ]", "", w)
+    if len(raw_letters) <= 2:
+        return True
+    if len(raw_letters) == 3 and w.islower() and w in (
+        "com", "con", "que", "and", "for", "the", "por", "pra", "pro", "das", "dos", "los", "las", "les", "des", "une"
+    ):
+        return True
+    return False
+
+
 def smart_group_segments_strict(
     assigned_segments: list[dict],
-    hard_gap: float = 1.1,
-    min_sentence_gap: float = 0.16,
-    min_silence_gap: float = 0.70,
-    min_duration: float = 2.2,
+    hard_gap: float = 1.3,
+    max_gap: float = 0.85,
+    min_sentence_gap: float = 0.18,
+    min_silence_gap: float = 0.48,
+    min_duration: float = 2.8,
     nonspeech_sections: list[dict] | None = None,
     **kwargs,
 ) -> list[dict]:
     """
-    Agrupa palabras en segmentos prosódicos continuos agnósticos del idioma en dos pasos:
-    Paso 1: Corte natural guiado por pausas acústicas reales, respiraciones y signos mayores,
-            preservando unidades semánticas fluidas sin cortes artificiales arbitrarios.
-    Paso 2: Fusión de micro-segmentos huérfanos (< 2.5s o <= 3 palabras) hacia el vecino
-            del mismo hablante con menor separación acústica.
+    Agrupa palabras en segmentos prosódicos continuos agnósticos del idioma:
+    Paso 1: Corte natural guiado por pausas acústicas reales (0.48s) y signos mayores (. ! ? ; :),
+            con protección agnóstica contra conectores colgantes y absorción inmediata de colas huérfanas.
+    Paso 2: Fusión limpia de micro-segmentos huérfanos residuales (< 2.8s o <= 3 palabras) con su vecino.
     """
     if not assigned_segments:
         return []
@@ -212,11 +234,10 @@ def smart_group_segments_strict(
         end_t = words_list[-1]["end"]
         dur = max(0.1, round(end_t - start_t, 3))
 
-        # Cálculo robusto y limpio de pausas internas sumando gaps reales entre palabras contiguas
         internal_pause_time = 0.0
         for idx_w in range(1, len(words_list)):
             gap = words_list[idx_w]["start"] - words_list[idx_w - 1]["end"]
-            if gap >= 0.35:
+            if gap >= 0.32:
                 internal_pause_time += gap
 
         net_dur = max(0.1, round(dur - internal_pause_time, 3))
@@ -239,51 +260,104 @@ def smart_group_segments_strict(
             "words": words_list,
         }
 
-    # ─── PASO 1: Corte natural guiado por fronteras acústicas y respiraciones ───
+    # ─── PASO 1: Agrupamiento natural con absorción de colas huérfanas ───
     grouped_segments = []
-    current_words = [all_words[0]]
-    seg_start = all_words[0]["start"]
+    n = len(all_words)
+    start_idx = 0
 
-    for curr in range(1, len(all_words)):
-        curr_word = all_words[curr]
-        prev_word = all_words[curr - 1]
-        speaker = current_words[0]["speaker"]
+    while start_idx < n:
+        speaker = all_words[start_idx]["speaker"]
+        seg_start = all_words[start_idx]["start"]
+        chosen_cut_idx = None
+        curr = start_idx
 
-        prev_end = prev_word["end"]
-        gap_before_curr = curr_word["start"] - prev_end
-        dur_up_to_prev = prev_end - seg_start
+        while curr < n:
+            # 1. Corte inmediato si cambia el interlocutor (diarización estricta)
+            if curr > start_idx and all_words[curr]["speaker"] != speaker:
+                chosen_cut_idx = curr - 1
+                break
 
-        should_cut = False
+            # 2. Comprobaciones con la palabra anterior
+            if curr > start_idx:
+                prev_end = all_words[curr - 1]["end"]
+                gap_before_curr = all_words[curr]["start"] - prev_end
+                dur_up_to_prev = prev_end - seg_start
+                prev_word_str = all_words[curr - 1]["word"]
+                curr_word_str = all_words[curr]["word"]
 
-        # 1. Cambio de hablante (diarización estricta)
-        if curr_word["speaker"] != speaker:
-            should_cut = True
-        # 2. Silencio de escena o pausa mayor entre planos/frases
-        elif gap_before_curr >= hard_gap:
-            should_cut = True
-        # 3. Fin de oración mayor (. ! ? ; :) con un mínimo de desarrollo y respiro posterior
-        elif has_major_punct(prev_word["word"]):
-            if dur_up_to_prev >= min_duration and gap_before_curr >= min_sentence_gap:
-                should_cut = True
-        # 4. Pausa de respiración acústica real del hablante
-        elif dur_up_to_prev >= 3.0 and gap_before_curr >= min_silence_gap:
-            should_cut = True
+                # A. Silencio duro (>= hard_gap, ej. 1.3s): corte de escena / plano
+                if gap_before_curr >= hard_gap:
+                    if is_dangling_word_agnostic(prev_word_str):
+                        # Retroceder buscando la última palabra no-dangling dentro del segmento actual
+                        back = curr - 1
+                        found_safe = False
+                        while back > start_idx:
+                            if not is_dangling_word_agnostic(all_words[back - 1]["word"]):
+                                chosen_cut_idx = back - 1
+                                found_safe = True
+                                break
+                            back -= 1
+                        if found_safe:
+                            break
+                    else:
+                        chosen_cut_idx = curr - 1
+                        break
 
-        if should_cut:
-            seg = create_segment_from_words(current_words)
-            if seg:
-                grouped_segments.append(seg)
-            current_words = [curr_word]
-            seg_start = curr_word["start"]
-        else:
-            current_words.append(curr_word)
+                # B. Condiciones de corte tras alcanzar min_duration (>= 2.8s) sobre palabras no colgantes:
+                if dur_up_to_prev >= min_duration and not is_dangling_word_agnostic(prev_word_str):
+                    # 1. Fin de oración mayor ([. ! ? ¡ ¿ ; :]) con respiro posterior
+                    if has_major_punct(prev_word_str) and gap_before_curr >= min_sentence_gap:
+                        chosen_cut_idx = curr - 1
+                        break
 
-    if current_words:
-        seg = create_segment_from_words(current_words)
+                    # 2. Siguiente palabra inicia con mayúscula (nueva oración de Whisper) tras respiro
+                    if gap_before_curr >= 0.32 and curr_word_str and curr_word_str.strip()[:1].isupper() and not has_major_punct(prev_word_str):
+                        chosen_cut_idx = curr - 1
+                        break
+
+                    # 3. Pausa acústica de respiración real (gap >= min_silence_gap, 0.48s)
+                    if gap_before_curr >= min_silence_gap:
+                        chosen_cut_idx = curr - 1
+                        break
+
+                    # 4. Silencio estándar mayor que max_gap (0.85s)
+                    if gap_before_curr >= max_gap:
+                        chosen_cut_idx = curr - 1
+                        break
+
+            if curr == n - 1:
+                chosen_cut_idx = curr
+                break
+
+            curr += 1
+
+        if chosen_cut_idx is None or chosen_cut_idx < start_idx:
+            chosen_cut_idx = start_idx
+
+        # 3. Prevención y absorción de colas huérfanas (Orphan Tail Absorption)
+        if chosen_cut_idx + 1 < n and all_words[chosen_cut_idx + 1]["speaker"] == speaker:
+            peek = chosen_cut_idx + 1
+            peek_start = all_words[peek]["start"]
+            gap_to_tail = peek_start - all_words[chosen_cut_idx]["end"]
+            if gap_to_tail <= 0.60:
+                while peek < n and all_words[peek]["speaker"] == speaker:
+                    if peek > chosen_cut_idx + 1 and (all_words[peek]["start"] - all_words[peek - 1]["end"]) >= hard_gap:
+                        break
+                    peek += 1
+                remaining_words_count = peek - (chosen_cut_idx + 1)
+                if remaining_words_count > 0:
+                    remaining_dur = all_words[peek - 1]["end"] - peek_start
+                    # Si la cola residual antes del próximo silencio dura < 2.2s o tiene <= 3 palabras, absorberla
+                    if remaining_dur < 2.2 or remaining_words_count <= 3:
+                        chosen_cut_idx = peek - 1
+
+        seg_words = all_words[start_idx : chosen_cut_idx + 1]
+        seg = create_segment_from_words(seg_words)
         if seg:
             grouped_segments.append(seg)
+        start_idx = chosen_cut_idx + 1
 
-    # ─── PASO 2: Fusión limpia de micro-segmentos (< 2.5s o <= 3 palabras) ───
+    # ─── PASO 2: Fusión limpia de micro-segmentos huérfanos (< 2.8s o <= 3 palabras) ───
     if len(grouped_segments) <= 1:
         return grouped_segments
 
@@ -291,7 +365,7 @@ def smart_group_segments_strict(
     i = 0
     while i < len(grouped_segments):
         cur_seg = grouped_segments[i]
-        is_tiny = cur_seg["duration"] < 2.5 or cur_seg["word_count"] <= 3
+        is_tiny = cur_seg["duration"] < 2.8 or cur_seg["word_count"] <= 3
 
         if is_tiny:
             cur_last_word = cur_seg["words"][-1]["word"] if cur_seg.get("words") else ""
@@ -303,14 +377,14 @@ def smart_group_segments_strict(
                 gap_prev = cur_seg["start"] - merged_segments[-1]["end"]
                 prev_last_word = merged_segments[-1]["words"][-1]["word"] if merged_segments[-1].get("words") else ""
                 prev_ended_sentence = has_major_punct(prev_last_word)
-                if gap_prev <= 0.85 and not (prev_ended_sentence and gap_prev >= 0.35):
+                if gap_prev <= 0.55 and not (prev_ended_sentence and gap_prev >= 0.35):
                     can_merge_prev = True
 
             can_merge_next = False
             gap_next = float("inf")
             if i + 1 < len(grouped_segments) and grouped_segments[i + 1]["speaker"] == cur_seg["speaker"]:
                 gap_next = grouped_segments[i + 1]["start"] - cur_seg["end"]
-                if gap_next <= 0.85 and not (cur_ends_sentence and gap_next >= 0.35):
+                if gap_next <= 0.55 and not (cur_ends_sentence and gap_next >= 0.35):
                     can_merge_next = True
 
             # Priorizar el vecino con menor separación de silencio
@@ -351,10 +425,11 @@ def process_audio(
     diarization_result: Any,
     group_segments: bool = True,
     include_words: bool = False,
-    hard_gap: float = 1.1,
-    min_sentence_gap: float = 0.16,
-    min_silence_gap: float = 0.70,
-    min_duration: float = 2.2,
+    hard_gap: float = 1.3,
+    max_gap: float = 0.85,
+    min_sentence_gap: float = 0.18,
+    min_silence_gap: float = 0.48,
+    min_duration: float = 2.8,
     nonspeech_sections: list[dict] | None = None,
     **kwargs,
 ) -> list[dict]:
@@ -363,6 +438,7 @@ def process_audio(
         assigned_data = smart_group_segments_strict(
             assigned_data,
             hard_gap=hard_gap,
+            max_gap=max_gap,
             min_sentence_gap=min_sentence_gap,
             min_silence_gap=min_silence_gap,
             min_duration=min_duration,
