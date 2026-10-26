@@ -4,7 +4,6 @@ export const PROJECT_JOB_STORAGE_PREFIX = "openreel.v2v.projectJob.";
 export const V2V_PREFERENCES_STORAGE_KEY = "openreel.v2v.preferences";
 
 export interface V2VUserPreferences {
-  enableEmotions: boolean;
   initialEmotionPerSentence: boolean;
   initialEmotionTag: string;
   importTTSSegments: boolean;
@@ -17,7 +16,6 @@ export interface V2VUserPreferences {
 }
 
 export const DEFAULT_V2V_PREFERENCES: V2VUserPreferences = {
-  enableEmotions: true,
   initialEmotionPerSentence: false,
   initialEmotionTag: "[excited]",
   importTTSSegments: true,

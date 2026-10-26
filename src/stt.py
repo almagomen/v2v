@@ -46,6 +46,56 @@ def get_whisper_model():
     )
 
 
+def preload_silero_vad() -> Any:
+    """Precarga el modelo Silero VAD en la caché local de PyTorch Hub para evitar descargas en caliente."""
+    if torch is None:
+        return None
+    try:
+        model = torch.hub.load("snakers4/silero-vad", "silero_vad", trust_repo=True)
+        print("✅ Silero VAD precargado en caché local.")
+        return model
+    except Exception as e:
+        print(f"⚠️ No se pudo precargar Silero VAD ({e}). Se descargará bajo demanda si es necesario.")
+        return None
+
+
+def sanitize_whisper_raw(segments_obj: Any, detected_language: str = "es") -> dict:
+    """
+    Sanitiza y compacta el volcado crudo de Whisper para auditoría y debug,
+    eliminando la copia espejo ('ori_dict'), miles de micro-secciones de silencio
+    ('nonspeech_sections') y metadatos descartables, reduciendo el peso de varios MB a ~30-50 KB.
+    """
+    raw_dict = {}
+    if hasattr(segments_obj, "to_dict"):
+        raw_dict = segments_obj.to_dict()
+    elif isinstance(segments_obj, dict):
+        raw_dict = segments_obj
+    elif hasattr(segments_obj, "__dict__"):
+        raw_dict = segments_obj.__dict__
+
+    clean_segments = []
+    for s in raw_dict.get("segments", []):
+        clean_words = []
+        for w in s.get("words", []):
+            clean_words.append({
+                "word": str(w.get("word", "")),
+                "start": round(float(w.get("start", 0.0)), 3),
+                "end": round(float(w.get("end", 0.0)), 3),
+            })
+        clean_segments.append({
+            "start": round(float(s.get("start", 0.0)), 3),
+            "end": round(float(s.get("end", 0.0)), 3),
+            "text": str(s.get("text", "")).strip(),
+            "words": clean_words,
+        })
+
+    return {
+        "language": raw_dict.get("language") or detected_language,
+        "text": raw_dict.get("text") or getattr(segments_obj, "text", ""),
+        "segments": clean_segments,
+    }
+
+
 def transcribe_and_process(
     media_path: Path | str | None = None,
     segments: Any = None,
@@ -114,17 +164,12 @@ def transcribe_and_process(
         # Extraer idioma detectado antes de procesar
         detected_language = getattr(segments, "language", "es") if segments else "es"
 
-        # Guardar volcado crudo de Whisper para debug y auditoría (palabras, timestamps y probabilidades)
+        # Guardar volcado crudo y compacto de Whisper para debug y auditoría (palabras y timestamps)
         try:
             raw_path = Path(media_path).parent / "whisper_raw.json"
             import json
-            if hasattr(segments, "to_dict"):
-                raw_payload = segments.to_dict()
-            elif hasattr(segments, "__dict__"):
-                raw_payload = segments.__dict__
-            else:
-                raw_payload = {"text": getattr(segments, "text", str(segments)), "language": detected_language}
-            raw_path.write_text(json.dumps(raw_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            sanitized_payload = sanitize_whisper_raw(segments, detected_language)
+            raw_path.write_text(json.dumps(sanitized_payload, indent=2, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             print(f"⚠️ No se pudo guardar whisper_raw.json: {e}")
 
@@ -133,7 +178,7 @@ def transcribe_and_process(
             segments,
             diarize_segments,
             group_segments=True,
-            max_gap=gap if gap is not None else 0.85,
+            hard_gap=gap if gap is not None else 1.1,
         )
         t_group = time.perf_counter() - t0_group
         total_stt_wall = time.perf_counter() - t0_stt_wall
@@ -200,9 +245,9 @@ def run_main(
     url: str,
     translate: Union[bool, str] = False,
     title: Optional[str] = None,
-    enable_emotions: bool = True,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
+    **kwargs,
 ) -> Tuple[list[dict], str, list[dict], str, dict]:
     """
     Pipeline principal: transcribe, opcionalmente traduce, genera título.
@@ -220,12 +265,6 @@ def run_main(
     t_whisper = step_timings.get("whisper", 0.0)
     t_diarize = step_timings.get("diarization", 0.0)
 
-    try:
-        from src.expression import extract_acoustic_prosody
-        result = extract_acoustic_prosody(vocals_path, result)
-    except Exception as e_ac:
-        print(f"⚠️ Error en prosodia acústica: {e_ac}")
-
     times = []
     texts = []
     for r in result:
@@ -236,9 +275,9 @@ def run_main(
     t_trans = 0.0
 
     target_language = translate if translate else detected_language
-    should_infer = bool(translate or enable_emotions)
+    should_translate = bool(translate and str(translate).strip().lower() != detected_language.strip().lower())
 
-    if should_infer:
+    if should_translate:
         t0_trans = time.perf_counter()
         translated_texts, phonemes_list = translate_text_list(
             texts,
@@ -246,7 +285,6 @@ def run_main(
             source_lang=detected_language,
             times=times,
             segments_meta=result,
-            enable_emotions=enable_emotions,
             initial_emotion_per_sentence=initial_emotion_per_sentence,
             initial_emotion_tag=initial_emotion_tag,
             return_details=True,
@@ -338,10 +376,6 @@ def run_main(
         )
         for i, r in enumerate(result)
     ]
-
-    # Limpiar clave temporal de pista acústica de los segmentos originales
-    for r in result:
-        r.pop("acoustic_hint", None)
 
     # Inferencia asíncrona con resolución garantizada antes de retornar al pipeline
     fallback_summary = " ".join(t["text"] for t in (translated_result or result)) if (translated_result or result) else (title or "")

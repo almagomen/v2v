@@ -594,9 +594,9 @@ def synthesize_segment_audio(
                     mode_tag = f"✨ 1.00x (pausas +{int(round((expanded_ratio - ratio_slow) * 100))}%)"
                 else:
                     arr = arr_expanded
-                    # 2. Si aún después de expandir pausas internas sigue < 0.94x, piso estricto de 0.90x
-                    # (máximo 10% de estiramiento suave imperceptible, nunca caer a 0.85x ni colas de ceros)
-                    min_allowed_speed = 0.90
+                    # 2. Si aún después de expandir pausas internas sigue < 0.94x, piso estricto de 0.85x
+                    # (máximo 15% de estiramiento suave imperceptible, nunca caer a 0.85x ni colas de ceros)
+                    min_allowed_speed = 0.85
                     effective_speed = max(min_allowed_speed, expanded_ratio)
                     mode_tag = f"🔉 {effective_speed:.2f}x"
                     stretch_samples = int(arr.shape[-1] / effective_speed)
@@ -789,15 +789,20 @@ def clone_voice_segments(
         next_seg_start = min(next_starts) if next_starts else None
 
         # Límite máximo disponible antes de chocar o invadir silencios musicales
-        slack = 0.55
         if next_seg_start is not None:
             hard_limit = max(0.2, next_seg_start - start_time - 0.04)
         elif video_total_duration is not None:
             hard_limit = max(0.2, video_total_duration - start_time - 0.05)
         else:
-            hard_limit = dur_en + slack
+            hard_limit = max(dur_en + 0.8, 2.0)
 
-        max_allowed_dur = min(hard_limit, dur_en + slack)
+        # Para clips cortos (< 2.5s), permitimos margen elástico proporcional al silencio real disponible
+        # evitando aceleraciones forzadas (ej. 1.27x en siglas o muletillas breves)
+        if dur_en < 2.5:
+            dynamic_slack = max(0.9, min(1.8, hard_limit - dur_en))
+            max_allowed_dur = min(hard_limit, dur_en + dynamic_slack)
+        else:
+            max_allowed_dur = min(hard_limit, dur_en + 0.65)
 
         audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.m4a"
         raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"

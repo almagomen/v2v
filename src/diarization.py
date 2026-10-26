@@ -123,7 +123,6 @@ def assign_speakers_by_word(whisper_result: Any, diarization: Any) -> list[dict]
 
 
 MAJOR_PUNCT = re.compile(r"[.!?¡¿;:]+$")
-CLAUSE_PUNCT = re.compile(r"[,—\-]+|\.{2,}$")
 TITLE_ABBREV = re.compile(r"^[A-ZÁÉÍÓÚÑÇÀÈÌÒÙÄËÏÖÜ][a-záéíóúñç]{0,2}\.$")
 INTERNAL_DOT = re.compile(r"\w\.\w")
 
@@ -140,14 +139,6 @@ def has_major_punct(word: str) -> bool:
     if TITLE_ABBREV.match(w):
         return False
     return True
-
-
-def has_clause_punct(word: str) -> bool:
-    """Verifica si la palabra termina en signo de cláusula intermedia (, - — ...) excluyendo abreviaturas."""
-    w = word.strip()
-    if not w:
-        return False
-    return bool(CLAUSE_PUNCT.search(w))
 
 
 def count_syllables_approx(text: str) -> int:
@@ -169,10 +160,8 @@ def smart_group_segments_strict(
     assigned_segments: list[dict],
     hard_gap: float = 1.1,
     min_sentence_gap: float = 0.16,
-    min_silence_gap: float = 0.42,
-    min_clause_gap: float = 0.30,
+    min_silence_gap: float = 0.70,
     min_duration: float = 2.2,
-    max_merge_duration: float = 10.0,
     nonspeech_sections: list[dict] | None = None,
     **kwargs,
 ) -> list[dict]:
@@ -279,12 +268,6 @@ def smart_group_segments_strict(
         # 4. Pausa de respiración acústica real del hablante
         elif dur_up_to_prev >= 3.0 and gap_before_curr >= min_silence_gap:
             should_cut = True
-        # 5. Cláusula intermedia (, - — ...) o fin de segmento nativo de Whisper
-        elif (has_clause_punct(prev_word["word"]) or prev_word.get("is_seg_end")) and dur_up_to_prev >= 3.2 and gap_before_curr >= min_clause_gap:
-            should_cut = True
-        # 6. Salvaguarda extrema para evitar enunciados continuos gigantescos (>12s)
-        elif dur_up_to_prev >= 12.0 and gap_before_curr >= 0.20:
-            should_cut = True
 
         if should_cut:
             seg = create_segment_from_words(current_words)
@@ -320,14 +303,14 @@ def smart_group_segments_strict(
                 gap_prev = cur_seg["start"] - merged_segments[-1]["end"]
                 prev_last_word = merged_segments[-1]["words"][-1]["word"] if merged_segments[-1].get("words") else ""
                 prev_ended_sentence = has_major_punct(prev_last_word)
-                if gap_prev <= 0.65 and not (prev_ended_sentence and gap_prev >= 0.35) and (merged_segments[-1]["duration"] + cur_seg["duration"]) <= max_merge_duration:
+                if gap_prev <= 0.85 and not (prev_ended_sentence and gap_prev >= 0.35):
                     can_merge_prev = True
 
             can_merge_next = False
             gap_next = float("inf")
             if i + 1 < len(grouped_segments) and grouped_segments[i + 1]["speaker"] == cur_seg["speaker"]:
                 gap_next = grouped_segments[i + 1]["start"] - cur_seg["end"]
-                if gap_next <= 0.65 and not (cur_ends_sentence and gap_next >= 0.35) and (cur_seg["duration"] + grouped_segments[i + 1]["duration"]) <= max_merge_duration:
+                if gap_next <= 0.85 and not (cur_ends_sentence and gap_next >= 0.35):
                     can_merge_next = True
 
             # Priorizar el vecino con menor separación de silencio
@@ -370,10 +353,8 @@ def process_audio(
     include_words: bool = False,
     hard_gap: float = 1.1,
     min_sentence_gap: float = 0.16,
-    min_silence_gap: float = 0.42,
-    min_clause_gap: float = 0.30,
+    min_silence_gap: float = 0.70,
     min_duration: float = 2.2,
-    max_merge_duration: float = 10.0,
     nonspeech_sections: list[dict] | None = None,
     **kwargs,
 ) -> list[dict]:
@@ -384,9 +365,7 @@ def process_audio(
             hard_gap=hard_gap,
             min_sentence_gap=min_sentence_gap,
             min_silence_gap=min_silence_gap,
-            min_clause_gap=min_clause_gap,
             min_duration=min_duration,
-            max_merge_duration=max_merge_duration,
             nonspeech_sections=nonspeech_sections,
             **kwargs,
         )

@@ -349,7 +349,6 @@ export const v2vApi = {
     options?: {
       forceReprocess?: boolean;
       speakerMap?: Record<string, string>;
-      enableEmotions?: boolean;
       initialEmotionPerSentence?: boolean;
       initialEmotionTag?: string;
     },
@@ -366,7 +365,6 @@ export const v2vApi = {
         emotion: emotion || null,
         force_reprocess: options?.forceReprocess ?? false,
         speaker_map: options?.speakerMap,
-        enable_emotions: options?.enableEmotions ?? true,
         initial_emotion_per_sentence: options?.initialEmotionPerSentence ?? false,
         initial_emotion_tag: options?.initialEmotionTag ?? "auto",
       }),

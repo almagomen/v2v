@@ -103,7 +103,6 @@ export interface JobState {
   currentProjectId: string | null;
 
   // Preferencias de inferencia y montaje en timeline
-  enableEmotions: boolean;
   initialEmotionPerSentence: boolean;
   initialEmotionTag: string;
   importTTSSegments: boolean;
@@ -121,7 +120,6 @@ export interface JobActions {
   setTimelineHeight: (height: number) => void;
   syncWithProject: (projectId: string | null) => void;
 
-  setEnableEmotions: (enabled: boolean) => void;
   setInitialEmotionPerSentence: (enabled: boolean) => void;
   setInitialEmotionTag: (tag: string) => void;
   setImportTTSSegments: (enabled: boolean) => void;

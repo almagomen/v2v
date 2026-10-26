@@ -69,8 +69,6 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
   const [importingTrackKey, setImportingTrackKey] = useState<string | null>(null);
 
   const {
-    enableEmotions,
-    setEnableEmotions,
     initialEmotionPerSentence,
     setInitialEmotionPerSentence,
     initialEmotionTag,
@@ -337,22 +335,6 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
           </div>
 
           <div className="space-y-1.5">
-            {/* Inferencia contextual de emociones */}
-            <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
-              <div className="flex items-center gap-2">
-                <Sparkles size={13} className="text-emerald-400" />
-                <span className="text-[10px] font-medium text-text-primary block">
-                  Inferencia Contextual de Emociones y Prosodia
-                </span>
-              </div>
-              <input
-                type="checkbox"
-                checked={enableEmotions}
-                onChange={(e) => setEnableEmotions(e.target.checked)}
-                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
-              />
-            </div>
-
             {/* Incluir emoción al inicio de cada frase */}
             <div className="space-y-1">
               <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">

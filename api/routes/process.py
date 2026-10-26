@@ -35,7 +35,6 @@ def process_urls(req: ProcessUrlsRequest):
         emotion=req.emotion,
         force_reprocess=bool(req.force_reprocess),
         speaker_map=req.speaker_map,
-        enable_emotions=True if req.enable_emotions is None else bool(req.enable_emotions),
         initial_emotion_per_sentence=bool(req.initial_emotion_per_sentence),
         initial_emotion_tag=req.initial_emotion_tag or "[excited]",
     )

@@ -284,7 +284,6 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         null,
         {
           forceReprocess: isForcingReprocess,
-          enableEmotions: useV2VStore.getState().enableEmotions,
           initialEmotionPerSentence: useV2VStore.getState().initialEmotionPerSentence,
           initialEmotionTag: useV2VStore.getState().initialEmotionTag,
         }

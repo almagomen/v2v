@@ -69,9 +69,9 @@ def _run_pipeline(
     emotion: str | None = None,
     force_reprocess: bool = False,
     speaker_map: dict[str, str] | None = None,
-    enable_emotions: bool = True,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
+    **kwargs,
 ) -> None:
     """Run pipeline with stdout redirected to job log."""
     from src.pipeline import process_video_queue, split_all_sequences
@@ -135,7 +135,6 @@ def _run_pipeline(
                 current_idx=idx + 1,
                 total_count=len(urls),
                 force_reprocess=force_reprocess,
-                enable_emotions=enable_emotions,
                 initial_emotion_per_sentence=initial_emotion_per_sentence,
                 initial_emotion_tag=initial_emotion_tag,
             )
@@ -355,9 +354,9 @@ def start_process(
     emotion: str | None = None,
     force_reprocess: bool = False,
     speaker_map: dict[str, str] | None = None,
-    enable_emotions: bool = True,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
+    **kwargs,
 ) -> str:
     """Start pipeline in background, return job_id."""
     job_id = create_job()
@@ -371,7 +370,6 @@ def start_process(
             emotion,
             force_reprocess,
             speaker_map,
-            enable_emotions,
             initial_emotion_per_sentence,
             initial_emotion_tag,
         ),

@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Union, Optional
 
 try:
+    import torch
     import torchaudio
 except ImportError:
+    torch = None
     torchaudio = None
 
 from src.download import yt
@@ -34,9 +36,9 @@ def process_video_queue(
     current_idx: Optional[int] = None,
     total_count: Optional[int] = None,
     force_reprocess: bool = False,
-    enable_emotions: bool = True,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
+    **kwargs,
 ) -> list[dict]:
     """
     Procesa una cola de videos: descarga, transcribe y traduce.
@@ -149,7 +151,6 @@ def process_video_queue(
                 u,
                 translate=translate_lang,
                 title=safe_title,
-                enable_emotions=enable_emotions,
                 initial_emotion_per_sentence=initial_emotion_per_sentence,
                 initial_emotion_tag=initial_emotion_tag,
             )
@@ -236,13 +237,39 @@ def split_audio_sequences(
         texts if edit_indices is None else [texts[i - 1] for i in edit_indices]
     )
 
+    total_samples = arr.shape[-1]
+    total_audio_sec = total_samples / float(org_sr) if org_sr > 0 else 0.0
+
     for idx, text_dict in enumerate(texts_to_process):
         s_sec = float(text_dict.get("orig_start") if text_dict.get("orig_start") is not None else text_dict.get("start", 0.0))
         e_sec = float(text_dict.get("orig_end") if text_dict.get("orig_end") is not None else text_dict.get("end", 0.0))
 
-        start = max(0, int(round(s_sec * org_sr)))
-        end = min(arr.shape[-1], int(round(e_sec * org_sr)))
-        arr_split = arr[:, start:end]
+        # Espacio de silencio disponible antes y después del segmento
+        prev_end_sec = float(texts_to_process[idx - 1].get("orig_end", texts_to_process[idx - 1].get("end", 0.0))) if idx > 0 else 0.0
+        next_start_sec = float(texts_to_process[idx + 1].get("orig_start", texts_to_process[idx + 1].get("start", total_audio_sec))) if idx + 1 < len(texts_to_process) else total_audio_sec
+
+        gap_before = max(0.0, s_sec - prev_end_sec)
+        gap_after = max(0.0, next_start_sec - e_sec)
+
+        # Extensión acústica suave: hasta 50ms de ataque y 150ms de release hacia el silencio natural
+        # sin invadir el segmento adyacente (máximo 40% del gap disponible)
+        lead_margin = min(0.050, gap_before * 0.40)
+        tail_margin = min(0.150, gap_after * 0.40)
+
+        start = max(0, int(round((s_sec - lead_margin) * org_sr)))
+        end = min(total_samples, int(round((e_sec + tail_margin) * org_sr)))
+        arr_split = arr[:, start:end].clone()
+
+        # Aplicar micro-fade in (5ms) y micro-fade out (15ms) para evitar clicks o cortes bruscos de resonancias
+        if arr_split.shape[-1] > int(0.03 * org_sr) and torch is not None:
+            fade_in_len = min(int(0.005 * org_sr), arr_split.shape[-1] // 4)
+            fade_out_len = min(int(0.015 * org_sr), arr_split.shape[-1] // 4)
+            if fade_in_len > 0:
+                fade_in = torch.linspace(0.0, 1.0, fade_in_len, device=arr_split.device)
+                arr_split[:, :fade_in_len] *= fade_in
+            if fade_out_len > 0:
+                fade_out = torch.linspace(1.0, 0.0, fade_out_len, device=arr_split.device)
+                arr_split[:, -fade_out_len:] *= fade_out
 
         seq_num = edit_indices[idx] if edit_indices else idx + 1
         audio_filename = f"{audio_path.stem}_{seq_num:03d}.wav"

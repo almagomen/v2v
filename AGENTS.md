@@ -44,6 +44,17 @@ Este documento es la **fuente de verdad única** de arquitectura, reglas de aisl
    - En fallbacks individuales de red, **prohibido `Promise.all` masivo** sin control de concurrencia; usar lotes concurrentes (máximo 5) con reintentos para evitar saturación de sockets en Chromium (error 429/502).
    - **Fidelidad Temporal en Timeline (Sin Duración Forzada de Fallback)**: La duración en timeline de los clips TTS y originales refleja siempre su duración física real; prohibido aplicar fallbacks que fuercen la duración del audio original sobre el TTS o viceversa.
 
+5. **Política de Cero Código Muerto y Barrido Post-Refactor (Zero-Dead-Code Policy)**:
+   - Todo asistente de IA o desarrollador DEBE realizar un barrido completo de código huérfano después de modificar, simplificar o retirar cualquier funcionalidad, algoritmo, parámetro o endpoint:
+     1. **Rastreo Integral Upstream y Downstream**: Realizar búsqueda exhaustiva (`grep`) de cada identificador, parámetro o flag eliminado a lo largo de toda la cadena completa:
+        - UI (`TokensConfigSection`, `V2VPanel`, etc.)
+        - Stores y Tipos (`v2v-types.ts`, `v2v-storage.ts`, `v2v-job-slice.ts`)
+        - Cliente API (`v2v-api.ts`)
+        - Backend FastAPI (`schemas.py`, `service.py`, `routes/process.py`)
+        - Pipeline y STT/TTS (`pipeline.py`, `stt.py`, `translation.py`, `audio_utils.py`)
+     2. **Eliminación en Cascada**: Prohibido dejar parámetros "fantasma", props no usadas, campos obsoletos en schemas o llamadas accesorias de extracción/cálculo cuyos resultados terminen descartados (ej. `.pop()`, métricas no leídas, módulos huérfanos).
+     3. **Validación Dual de Compilación**: Tras cualquier refactorización, es obligatorio validar la sintaxis backend (`python -m py_compile`) y la compilación estricta de TypeScript (`pnpm --filter @openreel/web build`) antes de dar la tarea por concluida.
+
 ---
 
 ## 1. Filosofía de la Integración

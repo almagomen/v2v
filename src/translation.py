@@ -68,10 +68,10 @@ def translate_text_list(
     print_full_prompt: bool = False,
     times: Optional[list[Tuple[float, float]]] = None,
     segments_meta: Optional[list[dict]] = None,
-    enable_emotions: bool = True,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
     return_details: bool = False,
+    **kwargs,
 ) -> list[str] | Tuple[list[str], list[dict]] | None:
     """
     Traduce o adapta una lista de frases a un idioma objetivo usando Gemini (Interactions API).
