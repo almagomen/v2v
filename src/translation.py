@@ -4,12 +4,13 @@ import os
 import json
 import re
 import time
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from google import genai
 
 from src.config import get_google_api_keys, rotate_google_api_key
-from src.diarization import count_syllables_approx
+from src.entities import check_entities, collect_known_terms, lock_text, restore_text
+from src.pacing import budget_for, build_fit_prompt, fit_deviation, needs_rewrite, speech_rate
 
 LANGUAGE_NAMES = {
     "es": "Español",
@@ -60,6 +61,14 @@ def set_default_gemini_model(model_name: str) -> None:
     set_default_title_model(model_name)
 
 
+def _chunk_size() -> int:
+    """Segmentos por llamada al MT. Videos largos se parten para no truncar el JSON."""
+    try:
+        return max(2, int(os.environ.get("TRANSLATION_CHUNK_SEGMENTS", "80")))
+    except ValueError:
+        return 80
+
+
 def translate_text_list(
     list_sentences: list[str],
     target_lang: str,
@@ -75,8 +84,14 @@ def translate_text_list(
 ) -> list[str] | Tuple[list[str], list[dict]] | None:
     """
     Traduce o adapta una lista de frases a un idioma objetivo usando Gemini (Interactions API).
-    Soporta doblaje isométrico puro con presupuesto de sílabas y tiempo neto,
-    cascada limpia de modelos (lite -> gemma), inyección de emoción inicial y rotación de API Keys.
+
+    - Doblaje isométrico: presupuesto de sílabas/tiempo neto por segmento.
+    - Entity lock: nombres técnicos, archivos, rutas y versiones viajan como ⟦E#⟧ y se
+      restauran tras verificar que el modelo no los tocó.
+    - Chunking: la lista se parte en bloques (TRANSLATION_CHUNK_SEGMENTS, 80 por defecto)
+      con 2 frases de contexto previo por bloque. Un bloque inválido se reintenta partido
+      a la mitad antes de rotar de clave o de modelo.
+    - Cascada de modelos (lite -> gemma) y rotación de API Keys.
     """
     if not list_sentences:
         return []
@@ -92,39 +107,51 @@ def translate_text_list(
 
     total_count = len(list_sentences)
     has_times = bool(times and len(times) == total_count)
+    fit_enabled = os.environ.get("TRANSLATION_FIT_BUDGET", "1").strip().lower() not in ("0", "false", "no")
 
-    input_dict = {}
-    for i, s in enumerate(list_sentences):
-        k = str(i + 1)
-        clean_s = s.strip()
-        if has_times:
-            start_t, end_t = times[i]
-            meta = segments_meta[i] if (segments_meta and i < len(segments_meta)) else {}
-            total_dur = max(0.4, round(end_t - start_t, 2))
-            internal_pause = float(meta.get("internal_pause_sec", 0.0) or 0.0)
-            speech_target_sec = max(0.4, round(total_dur - internal_pause, 2))
+    # ─── Entity lock: congelar términos técnicos antes de tocar el prompt ───
+    known_terms = collect_known_terms([(s or "") for s in list_sentences])
+    locked_sentences: list[str] = []
+    lock_maps: list[dict[int, str]] = []
+    for s in list_sentences:
+        locked, mapping = lock_text((s or "").strip(), known=known_terms)
+        locked_sentences.append(locked)
+        lock_maps.append(mapping)
+    entity_total = sum(len(m) for m in lock_maps)
+    if entity_total:
+        locked_segments = sum(1 for m in lock_maps if m)
+        print(f"🔒 [Entidades] {entity_total} término(s) protegidos en {locked_segments} segmento(s)", flush=True)
 
-            orig_syl = int(meta.get("syllable_count") or count_syllables_approx(clean_s))
-            orig_chars = len(clean_s)
+    # ─── Línea de entrada por segmento (prefijo de presupuesto + texto bloqueado) ───
+    entry_lines: list[str] = []
+    speech_seconds: list[float] = [0.0] * total_count
+    for i in range(total_count):
+        locked_s = locked_sentences[i]
+        if not has_times:
+            entry_lines.append(locked_s)
+            continue
 
-            # Tasa natural de locución en doblaje basada en tiempo neto de habla:
-            # ~5.0 a 5.6 sílabas/s y ~15.0 a 17.5 chars/s
-            target_chars = int(round(speech_target_sec * 15.5))
-            min_chars = max(4, int(round(target_chars * 0.85)))
-            max_chars = max(min_chars + 8, int(round(target_chars * 1.15)))
+        start_t, end_t = times[i]
+        meta = segments_meta[i] if (segments_meta and i < len(segments_meta)) else {}
+        total_dur = max(0.4, round(end_t - start_t, 2))
+        internal_pause = float(meta.get("internal_pause_sec", 0.0) or 0.0)
+        speech_target_sec = max(0.4, round(total_dur - internal_pause, 2))
+        speech_seconds[i] = speech_target_sec
 
-            target_syl = int(round(speech_target_sec * 5.0))
-            min_syl = max(1, int(round(target_syl * 0.85)))
-            max_syl = max(min_syl + 2, int(round(speech_target_sec * 5.8)))
+        b = budget_for(target_lang, speech_target_sec)
+        entry_lines.append(
+            f"[{total_dur:.1f}s slot | ~{b['syl_min']}-{b['syl_max']} sílabas | "
+            f"~{b['chars_min']}-{b['chars_max']} chars]: {locked_s}"
+        )
 
-            input_dict[k] = f"[{total_dur:.1f}s slot | ~{min_syl}-{max_syl} sílabas | ~{min_chars}-{max_chars} chars]: {clean_s}"
-        else:
-            input_dict[k] = clean_s
+    chars_per_sec = speech_rate(target_lang)[1]
 
     pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO (CONTROL DE TIEMPO Y EXTENSIÓN):
    Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars]: texto original`.
-   En doblaje audiovisual profesional, el ritmo debe ser fluido y natural (~15 a 17 caracteres por segundo).
-   - ISOMORFISMO DE LONGITUD: Ajusta la extensión de tu traducción en {target_lang_name} para que caiga DENTRO del rango de ~M-Z chars (proporcional al tiempo del video). No hagas la frase excesivamente corta (evita vacíos) ni excesivamente larga (evita aceleración de voz).
+   El ritmo medido en doblaje profesional de {target_lang_name} es ~{chars_per_sec:.0f} caracteres por segundo, y ese valor ya está aplicado en el rango.
+   - ENCAJE: tu traducción debe caer DENTRO del rango de ~M-Z chars (proporcional al tiempo del video).
+   - QUEDARSE CORTO ES EL ERROR MÁS CARO: si el texto no llena el slot, queda silencio muerto entre frases. Antes de recortar de más, agregá matices naturales del habla.
+   - PASARSE TAMBIÉN CUESTA: un texto por encima del rango obliga a acelerar la voz y suena artificial.
    - RITMO ORAL: Entrega un texto hablado directo, fluido y creíble.
    - SEGMENTOS BREVES (< 2.0s): Respeta la concisión temporal manteniendo la traducción breve y directa sin adiciones innecesarias.
    - En tu JSON de salida entrega ÚNICAMENTE el texto adaptado dentro de cada objeto, SIN repetir el prefijo de metadatos (prohibido poner `[Xs slot | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
@@ -137,14 +164,51 @@ Tu misión es ADAPTAR cada frase en {target_lang_name} para su locución por mod
         role_mission = f"""Eres un especialista en doblaje audiovisual, transcreación y adaptación de diálogos para síntesis de voz (TTS).
 Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total fidelidad la IDEA, la intención, el significado y el tono original del {source_lang_name}, pero adaptándola para que suene 100% natural, fluida y creíble como la expresaría un hablante nativo."""
 
-    ex_text_1 = f"frase 1 adaptada al {target_lang_name}"
-    ex_text_2 = f"frase 2 adaptada al {target_lang_name}"
+    # Solo se inyecta cuando hay entidades: no gastar tokens de instrucción en videos sin tecnicismos.
+    if entity_total:
+        entity_rule = """9. TOKENS PROTEGIDOS (PROHIBIDO TRADUCIR O ALTERAR):
+   Las entidades técnicas, nombres de producto, nombres de archivo, rutas, versiones, siglas y cifras aparecen como marcadores opacos ⟦E1⟧, ⟦E2⟧, ... dentro del texto de entrada.
+   - Conserva cada marcador EXACTAMENTE igual: mismos caracteres, mismo número, una sola vez y en la misma posición relativa de la frase.
+   - No los traduzcas, no los expandas, no los expliques, no los elimines y no inventes marcadores nuevos.
+   - No cuentan para el presupuesto de caracteres indicado en el prefijo temporal.
+   - Traduce con normalidad el resto de la frase alrededor de los marcadores."""
+    else:
+        entity_rule = "9. CIFRAS Y NOMBRES: Conserva sin cambios los números, nombres de archivo, rutas, versiones y siglas técnicas que aparezcan en el texto."
 
-    prompt = f"""{role_mission}
+    def _build_prompt(entries: dict[str, str], count: int, context: list[str]) -> str:
+        ex_text_1 = f"frase 1 adaptada al {target_lang_name}"
+        ex_text_2 = f"frase 2 adaptada al {target_lang_name}"
+
+        def _ex(k: int, text: str) -> str:
+            return f'  "{k}": {{\n    "text": "{text}",\n    "phonemes": {empty_dict_str}\n  }}'
+
+        # El ejemplo no debe repetir la última clave cuando el bloque es corto
+        # (con count=1 se generaban "1", "2" y otra vez "1").
+        if count <= 2:
+            example_json = ",\n".join(
+                _ex(k, ex_text_1 if k == 1 else ex_text_2) for k in range(1, count + 1)
+            )
+        else:
+            example_json = (
+                _ex(1, ex_text_1) + ",\n"
+                + _ex(2, ex_text_2) + ",\n"
+                + "  ...\n"
+                + _ex(count, f"frase {count} adaptada al {target_lang_name}")
+            )
+
+        contexto = ""
+        if context:
+            contexto = (
+                "\nContexto previo (referencia de ilación: YA fue traducido en el bloque anterior. "
+                "NO lo traduzcas, NO lo repitas y NO lo incluyas en tu respuesta):\n"
+                f"{json.dumps(context, ensure_ascii=False)}\n"
+            )
+
+        return f"""{role_mission}
 
 Directrices obligatorias:
-1. REGLA ESTRICTA 1-A-1 E ISOMORFISMO: La entrada contiene EXACTAMENTE {total_count} frases indexadas con claves numéricas del "1" al "{total_count}". Tu salida DEBE ser un objeto JSON con EXACTAMENTE las mismas {total_count} claves numéricas (del "1" al "{total_count}").
-2. INTEGRIDAD TEMPORAL Y SEGMENTOS INDIVIDUALES: Cada clave numérica "N" representa un clip de audio individual fijado en la línea de tiempo del video. No agregues claves nuevas, no omitas claves y no traslades contenido entre claves adyacentes. Cuando un segmento corresponda a unidades mínimas de habla (interjecciones, partículas discursivas o de enlace, afirmaciones breves, muletillas o reacciones espontáneas del hablante), adáptalo de forma concisa y directa en su propia clave "N" respetando su duración temporal, sin intentar rellenar artificialmente ni tomar texto del segmento siguiente. La clave final "{total_count}" debe corresponder al cierre del video.
+1. REGLA ESTRICTA 1-A-1 E ISOMORFISMO: La entrada contiene EXACTAMENTE {count} frases indexadas con claves numéricas del "1" al "{count}". Tu salida DEBE ser un objeto JSON con EXACTAMENTE las mismas {count} claves numéricas (del "1" al "{count}").
+2. INTEGRIDAD TEMPORAL Y SEGMENTOS INDIVIDUALES: Cada clave numérica "N" representa un clip de audio individual fijado en la línea de tiempo del video. No agregues claves nuevas, no omitas claves y no traslades contenido entre claves adyacentes. Cuando un segmento corresponda a unidades mínimas de habla (interjecciones, partículas discursivas o de enlace, afirmaciones breves, muletillas o reacciones espontáneas del hablante), adáptalo de forma concisa y directa en su propia clave "N" respetando su duración temporal, sin intentar rellenar artificialmente ni tomar texto del segmento siguiente. La clave final "{count}" debe corresponder al cierre del bloque.
 3. REESCRIBE MANTENIENDO LA IDEA: Preserva la misma idea central y sentido, usando expresiones coloquiales y naturales adecuadas al {target_lang_name}.
 4. VOZ HABLADA Y DOBLAJE: El texto será sintetizado por modelos de voz (TTS). La frase debe tener ritmo fonético natural, ser directa y sonar convincente y orgánica al ser escuchada.
 {pacing_instruction}
@@ -163,38 +227,232 @@ Directrices obligatorias:
    - Como clave: la palabra exacta tal como está escrita en tu texto traducido.
    - Como valor: su transcripción fonética legible e intuitiva para un hablante de {target_lang_name}, marcando con tilde la sílaba con mayor fuerza de entonación (acento prosódico) para guiar con precisión la pronunciación de la voz sintética.
    - En tu salida, asocia el diccionario al campo "phonemes": {{"Palabra": "Pronunciación"}}. Si una frase contiene únicamente vocabulario cotidiano estándar de {target_lang_name}, deja "phonemes": {empty_dict_str}.
-
+{entity_rule}
+{contexto}
 Texto original ({source_lang_name}) indexado por segmento:
 ---
-{json.dumps(input_dict, indent=2, ensure_ascii=False)}
+{json.dumps(entries, indent=2, ensure_ascii=False)}
 ---
 
-Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves numéricas del "1" al "{total_count}":
+Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves numéricas del "1" al "{count}":
 {{
-  "1": {{
-    "text": "{ex_text_1}",
-    "phonemes": {empty_dict_str}
-  }},
-  "2": {{
-    "text": "{ex_text_2}",
-    "phonemes": {empty_dict_str}
-  }},
-  ...
-  "{total_count}": {{
-    "text": "frase {total_count} adaptada al {target_lang_name}",
-    "phonemes": {empty_dict_str}
-  }}
+{example_json}
 }}"""
 
+    def _call_model(client, model: str, is_gemma: bool, prompt_text: str) -> str:
+        call_kwargs = {"model": model, "input": prompt_text}
+        if not is_gemma:
+            call_kwargs["response_format"] = [{"type": "text", "mime_type": "application/json"}]
+        try:
+            interaction = client.interactions.create(**call_kwargs)
+        except Exception as e_rf:
+            err_text = str(e_rf).lower()
+            if ("response_format" in err_text or "schema" in err_text) and not any(
+                c in err_text for c in ("503", "429", "high demand")
+            ):
+                print(f"⚠️ [Fallback Traducción] '{model}' no soporta response_format JSON estricto, reintentando en modo texto...", flush=True)
+                call_kwargs.pop("response_format", None)
+                interaction = client.interactions.create(**call_kwargs)
+            else:
+                raise
+        return getattr(interaction, "output_text", None) or ""
 
+    def _normalize_response(
+        parsed,
+        fallback_texts: list[str],
+    ) -> tuple[Optional[list[str]], dict[int, dict[str, str]], set[int]]:
+        """Extrae textos y fonemas de la respuesta (dict indexado o lista)."""
+        count = len(fallback_texts)
+        if isinstance(parsed, dict):
+            indexed = True
+        elif isinstance(parsed, list):
+            indexed = False
+        else:
+            return None, {}, set()
 
-    # En la celda del cuaderno se puede activar el prompt completo; en el panel V2V mantenemos logs limpios y descriptivos
-    if print_full_prompt:
-        print("\n" + "=" * 60, flush=True)
-        print(f"📄 [PROMPT COMPLETO ENVIADO A GEMINI] ({len(list_sentences)} frases):", flush=True)
-        print("-" * 60, flush=True)
-        print(prompt, flush=True)
-        print("=" * 60 + "\n", flush=True)
+        texts: list[str] = []
+        phonemes: dict[int, dict[str, str]] = {}
+        missing: set[int] = set()
+
+        for n in range(count):
+            if indexed:
+                val = parsed.get(str(n + 1)) or parsed.get(n + 1)
+            else:
+                val = parsed[n] if n < len(parsed) else ""
+
+            txt_raw = ""
+            seg_phonemes: dict[str, str] = {}
+            if isinstance(val, dict):
+                txt_raw = str(val.get("text", "")).strip()
+                ph = val.get("phonemes")
+                if isinstance(ph, dict):
+                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in ph.items() if k and v}
+            elif isinstance(val, list):
+                txt_raw = str(val[0]).strip() if len(val) > 0 else ""
+                if len(val) > 1 and isinstance(val[1], dict):
+                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in val[1].items() if k and v}
+            elif isinstance(val, str):
+                txt_raw = val.strip()
+
+            # Quitar prefijo en caso fortuito de que el LLM repitiera metadata (ej: "[1.2s slot...]: ")
+            clean_val = re.sub(r"^\[[^\]]*(?:slot|sílabas|chars)[^\]]*\]:?\s*", "", txt_raw, flags=re.IGNORECASE).strip()
+            if clean_val:
+                texts.append(clean_val)
+            else:
+                texts.append(fallback_texts[n])
+                missing.add(n)
+            phonemes[n] = seg_phonemes
+
+        return texts, phonemes, missing
+
+    def _run_chunk(
+        client,
+        model: str,
+        is_gemma: bool,
+        indices: list[int],
+        chunk_no: int,
+        chunk_total: int,
+    ) -> Optional[dict[int, dict]]:
+        """Traduce un bloque. Devuelve {índice_global: payload} o None si la respuesta no sirve."""
+        local_entries = {str(n + 1): entry_lines[g] for n, g in enumerate(indices)}
+        context = [locked_sentences[g] for g in range(max(0, indices[0] - 2), indices[0])]
+        prompt = _build_prompt(local_entries, len(indices), context)
+
+        if print_full_prompt:
+            print("\n" + "=" * 60, flush=True)
+            print(f"📄 [PROMPT COMPLETO → {model}] bloque {chunk_no}/{chunk_total} ({len(indices)} frases):", flush=True)
+            print("-" * 60, flush=True)
+            print(prompt, flush=True)
+            print("=" * 60 + "\n", flush=True)
+
+        raw_text = _call_model(client, model, is_gemma, prompt)
+        if not raw_text:
+            return None
+
+        try:
+            parsed = _loads_loose(raw_text, f"[Fallback JSON] bloque {chunk_no} '{model}'")
+        except Exception as exc:
+            print(f"⚠️ [Traducción] bloque {chunk_no}: JSON inválido ({exc})", flush=True)
+            return None
+        fallback_texts = [list_sentences[g] for g in indices]
+        texts, phonemes, missing_local = _normalize_response(parsed, fallback_texts)
+        if texts is None:
+            return None
+
+        # ─── Verificación de entidades + rescate dentro del bloque ───
+        problems: dict[int, list[str]] = {}
+        rescue: dict[str, dict[str, str]] = {}
+        for n, g in enumerate(indices):
+            if n in missing_local or not locked_sentences[g]:
+                continue
+            verdict = check_entities(locked_sentences[g], texts[n])
+            if not verdict["ok"]:
+                problems[n] = [str(r) for r in verdict["reasons"]]
+                rescue[str(n + 1)] = {"source": locked_sentences[g], "text": texts[n]}
+
+        if rescue:
+            print(f"🔁 [Entidades] bloque {chunk_no}: {len(rescue)} segmento(s) con tokens alterados; rescate...", flush=True)
+            fixed = _translate_entity_retry(client, model, is_gemma, rescue, target_lang_name)
+            for key_str, new_text in fixed.items():
+                n = int(key_str) - 1
+                if not (0 <= n < len(indices)) or not new_text.strip():
+                    continue
+                if check_entities(locked_sentences[indices[n]], new_text)["ok"]:
+                    texts[n] = new_text.strip()
+                    problems.pop(n, None)
+
+        # ─── Encaje temporal: una pasada acotada solo sobre los que no caben ───
+        # El prompt ya pide el rango, pero el modelo no lo cumple siempre. Aquí se mide
+        # la duración estimada y se reescribe únicamente lo que queda fuera del slot.
+        # Un fallo de esta pasada nunca descarta el bloque: el ajuste es mejora, no requisito.
+        if fit_enabled and has_times:
+            try:
+                offenders: dict[str, dict[str, str]] = {}
+                for n, g in enumerate(indices):
+                    sec = speech_seconds[g]
+                    if sec <= 0 or n in missing_local:
+                        continue
+                    if not needs_rewrite(texts[n], target_lang, sec, lock_maps[g]):
+                        continue
+                    b = budget_for(target_lang, sec)
+                    dev = fit_deviation(texts[n], target_lang, sec, lock_maps[g])
+                    offenders[str(n + 1)] = {
+                        "texto": texts[n],
+                        "objetivo": f"{b['chars_min']}-{b['chars_max']} caracteres",
+                        "estado": "largo" if dev > 0 else "corto",
+                    }
+
+                if offenders:
+                    print(f"⏱️ [Encaje] bloque {chunk_no}: {len(offenders)} segmento(s) fuera de rango; ajustando...", flush=True)
+                    fitted = _fit_retry(client, model, is_gemma, offenders, target_lang_name)
+                    adjusted = 0
+                    for key_str, new_text in fitted.items():
+                        n = int(key_str) - 1
+                        if not (0 <= n < len(indices)) or not new_text.strip():
+                            continue
+                        g = indices[n]
+                        if not check_entities(locked_sentences[g], new_text)["ok"]:
+                            continue
+                        old_dev = abs(fit_deviation(texts[n], target_lang, speech_seconds[g], lock_maps[g]))
+                        new_dev = abs(fit_deviation(new_text, target_lang, speech_seconds[g], lock_maps[g]))
+                        if new_dev < old_dev:
+                            texts[n] = new_text.strip()
+                            adjusted += 1
+                    print(f"⏱️ [Encaje] bloque {chunk_no}: {adjusted}/{len(offenders)} ajustado(s)", flush=True)
+            except Exception as e_fit:
+                print(f"⚠️ [Encaje] bloque {chunk_no}: ajuste omitido ({e_fit})", flush=True)
+
+        out: dict[int, dict] = {}
+        for n, g in enumerate(indices):
+            out[g] = {
+                "text": restore_text(texts[n], lock_maps[g]),
+                "phonemes": phonemes.get(n, {}),
+                "missing": n in missing_local,
+                "problems": problems.get(n, []),
+            }
+        return out
+
+    def _run_indices(
+        client,
+        model: str,
+        is_gemma: bool,
+        indices: list[int],
+        chunk_no: int,
+        chunk_total: int,
+        depth: int = 0,
+    ) -> Optional[dict[int, dict]]:
+        """Intenta el bloque; si la respuesta es inválida, lo parte a la mitad y reintenta."""
+        part = _run_chunk(client, model, is_gemma, indices, chunk_no, chunk_total)
+        if part is not None:
+            return part
+        if depth >= 2 or len(indices) < 6:
+            return None
+
+        mid = len(indices) // 2
+        print(f"🧩 [Traducción] bloque {chunk_no} partido en {mid}+{len(indices) - mid} tras respuesta inválida", flush=True)
+        left = _run_indices(client, model, is_gemma, indices[:mid], chunk_no, chunk_total, depth + 1)
+        if left is None:
+            return None
+        right = _run_indices(client, model, is_gemma, indices[mid:], chunk_no, chunk_total, depth + 1)
+        if right is None:
+            return None
+        return {**left, **right}
+
+    # ─── Bloques: 80 segmentos o ~14k chars de prompt por llamada ───
+    max_segs = _chunk_size()
+    max_chars = 14000
+    chunks: list[list[int]] = []
+    current: list[int] = []
+    current_chars = 0
+    for i, line in enumerate(entry_lines):
+        if current and (len(current) >= max_segs or current_chars + len(line) > max_chars):
+            chunks.append(current)
+            current, current_chars = [], 0
+        current.append(i)
+        current_chars += len(line)
+    if current:
+        chunks.append(current)
+
     # Modelos a intentar en orden: el solicitado (o DEFAULT), con fallback a los populares
     models_to_try = [model_name.strip()] if (model_name and model_name.strip()) else [DEFAULT_TRANSLATION_MODEL]
     for m in POPULAR_GEMINI_MODELS:
@@ -203,154 +461,63 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
 
     last_error = None
 
-    for m_idx, model in enumerate(models_to_try):
+    for model in models_to_try:
         is_gemma = "gemma" in model.lower()
 
-        keys_to_attempt = list(available_keys)
-        for k_idx, key in enumerate(keys_to_attempt):
+        for key in list(available_keys):
             key_tag = f"...{key[-4:]}" if len(key) >= 4 else "***"
 
-            print(f"🌐 [{source_lang} → {target_lang}] {model} {key_tag} ({total_count} segs)", flush=True)
+            print(f"🌐 [{source_lang} → {target_lang}] {model} {key_tag} ({total_count} segs / {len(chunks)} bloques)", flush=True)
             t_start = time.perf_counter()
 
             try:
-                # Cliente nativo oficial google-genai
                 client = genai.Client(api_key=key)
 
-                call_kwargs = {
-                    "model": model,
-                    "input": prompt,
-                }
-                if not is_gemma:
-                    call_kwargs["response_format"] = [{"type": "text", "mime_type": "application/json"}]
+                resolved: dict[int, dict] = {}
+                for chunk_no, indices in enumerate(chunks, start=1):
+                    part = _run_indices(client, model, is_gemma, indices, chunk_no, len(chunks))
+                    if part is None:
+                        raise RuntimeError(f"bloque {chunk_no}/{len(chunks)} sin JSON utilizable")
+                    resolved.update(part)
 
-                # Inferencia con Interactions API
-                try:
-                    interaction = client.interactions.create(**call_kwargs)
-                except Exception as e_rf:
-                    # Si el modelo no soporta response_format (ej. Gemma), reintentar sin formato estricto
-                    err_text = str(e_rf).lower()
-                    if ("response_format" in err_text or "schema" in err_text) and not any(c in err_text for c in ("503", "429", "high demand")):
-                        print(f"⚠️ [Fallback Traducción] '{model}' no soporta response_format JSON estricto, reintentando en modo texto...", flush=True)
-                        call_kwargs.pop("response_format", None)
-                        interaction = client.interactions.create(**call_kwargs)
-                    else:
-                        raise e_rf
-
-                raw_text = getattr(interaction, "output_text", None) or ""
+                aligned_list = [resolved[i]["text"] for i in range(total_count)]
+                phonemes_map = {i: resolved[i]["phonemes"] for i in range(total_count)}
                 duration = time.perf_counter() - t_start
 
-                if raw_text:
-                    # Extraer bloque JSON si viene envuelto en markdown
-                    clean_json = raw_text.strip()
-                    match_obj = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
-                    if match_obj:
-                        clean_json = match_obj.group(1)
-                    else:
-                        match_arr = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw_text, re.DOTALL)
-                        if match_arr:
-                            clean_json = match_arr.group(1)
+                # Etiqueta de emoción al frente (después del rescate: el modelo no debe verla)
+                if initial_emotion_per_sentence and aligned_list:
+                    tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
+                    aligned_list = [f"{tag_to_insert} {t}".strip() for t in aligned_list]
 
-                    try:
-                        parsed = json.loads(clean_json)
-                    except (json.JSONDecodeError, Exception):
-                        # Reparar secuencias de escape inválidas (comunes en rutas de Windows como C:\Program Files\... o regex)
-                        print(f"⚠️ [Fallback JSON] Reparando secuencias de escape en salida de '{model}'...", flush=True)
-                        sanitized_json = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', clean_json)
-                        parsed = json.loads(sanitized_json)
+                # Fonemas y estado de traducción por segmento
+                if segments_meta and len(segments_meta) == total_count:
+                    for idx, meta_item in enumerate(segments_meta):
+                        ph = phonemes_map.get(idx) or {}
+                        if ph:
+                            meta_item["phonemes"] = ph
+                        elif "phonemes" not in meta_item:
+                            meta_item["phonemes"] = {}
 
-                    aligned_list: list[str] = []
-                    phonemes_map: dict[int, dict[str, str]] = {}
+                        info = resolved[idx]
+                        if info["missing"]:
+                            meta_item["translation_status"] = "fallback"
+                            meta_item.pop("entity_fail", None)
+                        elif info["problems"]:
+                            meta_item["translation_status"] = "entity_fail"
+                            meta_item["entity_fail"] = info["problems"]
+                        else:
+                            meta_item.pop("translation_status", None)
+                            meta_item.pop("entity_fail", None)
 
-                    if isinstance(parsed, dict):
-                        for i in range(1, total_count + 1):
-                            val = parsed.get(str(i)) or parsed.get(i)
-                            txt_raw = ""
-                            seg_phonemes: dict[str, str] = {}
+                if entity_total:
+                    failed = sum(1 for i in range(total_count) if resolved[i]["problems"])
+                    print(f"🔓 [Entidades] {entity_total} restauradas; {failed} segmento(s) con fallo persistente", flush=True)
 
-                            if isinstance(val, dict):
-                                txt_raw = str(val.get("text", "")).strip()
-                                ph = val.get("phonemes")
-                                if isinstance(ph, dict):
-                                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in ph.items() if k and v}
-                            elif isinstance(val, list):
-                                txt_raw = str(val[0]).strip() if len(val) > 0 else ""
-                                if len(val) > 1 and isinstance(val[1], dict):
-                                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in val[1].items() if k and v}
-                            elif isinstance(val, str):
-                                txt_raw = val.strip()
-
-                            if txt_raw:
-                                clean_val = txt_raw.strip()
-                                # Quitar prefijo en caso fortuito de que el LLM repitiera metadata (ej: "[1.2s slot...]: ")
-                                clean_val = re.sub(r"^\[[^\]]*(?:slot|sílabas|chars)[^\]]*\]:?\s*", "", clean_val, flags=re.IGNORECASE).strip()
-
-                                if initial_emotion_per_sentence:
-                                    tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
-                                    clean_val = f"{tag_to_insert} {clean_val}".strip()
-
-                                aligned_list.append(clean_val if clean_val else list_sentences[i - 1])
-                            else:
-                                print(f"⚠️ [Fallback Traducción] Clave #{i} ausente o vacía en respuesta de '{model}', conservando texto original.", flush=True)
-                                fallback_text = list_sentences[i - 1]
-                                if initial_emotion_per_sentence:
-                                    tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
-                                    fallback_text = f"{tag_to_insert} {fallback_text}".strip()
-                                aligned_list.append(fallback_text)
-
-                            phonemes_map[i - 1] = seg_phonemes
-
-                    elif isinstance(parsed, list):
-                        for i in range(total_count):
-                            val = parsed[i] if i < len(parsed) else ""
-                            txt_raw = ""
-                            seg_phonemes = {}
-                            if isinstance(val, dict):
-                                txt_raw = str(val.get("text", "")).strip()
-                                ph = val.get("phonemes")
-                                if isinstance(ph, dict):
-                                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in ph.items() if k and v}
-                            elif isinstance(val, list):
-                                txt_raw = str(val[0]).strip() if len(val) > 0 else ""
-                                if len(val) > 1 and isinstance(val[1], dict):
-                                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in val[1].items() if k and v}
-                            elif isinstance(val, str):
-                                txt_raw = val.strip()
-
-                            if txt_raw:
-                                clean_val = txt_raw.strip()
-                                clean_val = re.sub(r"^\[[^\]]*(?:slot|sílabas|chars)[^\]]*\]:?\s*", "", clean_val, flags=re.IGNORECASE).strip()
-
-                                if initial_emotion_per_sentence:
-                                    tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
-                                    clean_val = f"{tag_to_insert} {clean_val}".strip()
-
-                                aligned_list.append(clean_val if clean_val else list_sentences[i])
-                            else:
-                                print(f"⚠️ [Fallback Traducción] Clave #{i + 1} ausente o vacía en respuesta de '{model}', conservando texto original.", flush=True)
-                                fallback_text = list_sentences[i]
-                                if initial_emotion_per_sentence:
-                                    tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
-                                    fallback_text = f"{tag_to_insert} {fallback_text}".strip()
-                                aligned_list.append(fallback_text)
-
-                            phonemes_map[i] = seg_phonemes
-
-                    # Inyectar fonemas detectados en segments_meta si está provisto
-                    if segments_meta and len(segments_meta) == total_count:
-                        for idx, meta_item in enumerate(segments_meta):
-                            if idx in phonemes_map and phonemes_map[idx]:
-                                meta_item["phonemes"] = phonemes_map[idx]
-                            elif "phonemes" not in meta_item:
-                                meta_item["phonemes"] = {}
-
-
-                    if aligned_list and len(aligned_list) == total_count:
-                        print(f"⏱️ [Traducción '{model}'] segs. en {duration:.1f}s", flush=True)
-                        if return_details:
-                            phonemes_list = [phonemes_map.get(i, {}) for i in range(total_count)]
-                            return aligned_list, phonemes_list
-                        return aligned_list
+                print(f"⏱️ [Traducción '{model}'] segs. en {duration:.1f}s", flush=True)
+                if return_details:
+                    phonemes_list = [phonemes_map.get(i, {}) for i in range(total_count)]
+                    return aligned_list, phonemes_list
+                return aligned_list
 
             except Exception as e:
                 last_error = e
@@ -372,6 +539,116 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
     if return_details:
         return None, None
     return None
+
+
+def _loads_loose(raw_text: str, log_tag: str = "[JSON]") -> Any:
+    """
+    Parsea la salida del modelo tolerando bloques markdown y secuencias de escape
+    inválidas (rutas de Windows tipo C:\\Program Files o regex sin doble barra).
+    """
+    clean_json = raw_text.strip()
+    match_obj = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
+    if match_obj:
+        clean_json = match_obj.group(1)
+    else:
+        match_arr = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw_text, re.DOTALL)
+        if match_arr:
+            clean_json = match_arr.group(1)
+
+    try:
+        return json.loads(clean_json)
+    except Exception:
+        print(f"⚠️ {log_tag} Reparando secuencias de escape...", flush=True)
+        sanitized_json = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', clean_json)
+        return json.loads(sanitized_json)
+
+
+def _call_json_map(client, model: str, is_gemma: bool, prompt: str, log_tag: str) -> dict[str, str]:
+    """
+    Llamada única al modelo que devuelve {clave_numérica: texto}.
+
+    Comparten esta ruta el rescate de entidades y el ajuste de encaje: mismo formato
+    de salida, mismo tratamiento de `response_format` no soportado por Gemma.
+    """
+    call_kwargs: dict[str, Any] = {"model": model, "input": prompt}
+    if not is_gemma:
+        call_kwargs["response_format"] = [{"type": "text", "mime_type": "application/json"}]
+
+    try:
+        interaction = client.interactions.create(**call_kwargs)
+    except Exception as e_rf:
+        err_text = str(e_rf).lower()
+        if "response_format" in err_text or "schema" in err_text:
+            call_kwargs.pop("response_format", None)
+            interaction = client.interactions.create(**call_kwargs)
+        else:
+            raise
+
+    raw_text = getattr(interaction, "output_text", None) or ""
+    if not raw_text:
+        return {}
+
+    parsed = _loads_loose(raw_text, log_tag)
+    fixed: dict[str, str] = {}
+    if isinstance(parsed, dict):
+        for key, val in parsed.items():
+            if isinstance(val, dict):
+                text_val = str(val.get("text", "")).strip()
+            elif isinstance(val, str):
+                text_val = val.strip()
+            else:
+                text_val = ""
+            if str(key).isdigit() and text_val:
+                fixed[str(key)] = text_val
+    return fixed
+
+
+def _fit_retry(
+    client,
+    model: str,
+    is_gemma: bool,
+    payload: dict[str, dict[str, str]],
+    target_lang_name: str,
+) -> dict[str, str]:
+    """
+    Segunda pasada acotada por encaje temporal: reescribe solo los segmentos cuya
+    duración estimada no cae en el slot del video. La aceptación la decide quien llama
+    (entidades intactas y desviación menor que la original).
+    """
+    return _call_json_map(client, model, is_gemma, build_fit_prompt(payload, target_lang_name), "[Encaje]")
+
+
+def _translate_entity_retry(
+    client,
+    model: str,
+    is_gemma: bool,
+    payload: dict[str, dict[str, str]],
+    target_lang_name: str,
+) -> dict[str, str]:
+    """
+    Segunda pasada acotada: solo los segmentos cuyo texto perdió o alteró tokens
+    protegidos. Recibe la fuente bloqueada y la traducción defectuosa para que el
+    modelo corrija sin reescribir todo el video.
+    """
+    prompt = f"""Eres un corrector de traducción para doblaje al {target_lang_name}.
+
+Cada entrada trae `source` (frase con marcadores ⟦E1⟧, ⟦E2⟧... que representan
+términos técnicos) y `text` (su traducción, que perdió o alteró algún marcador).
+
+Corrige el campo `text` cumpliendo, sin excepciones:
+1. Cada marcador presente en `source` aparece exactamente una vez en el nuevo `text`.
+2. Los marcadores conservan su número y su posición relativa en la frase.
+3. No traduzcas, expandas, expliques ni elimines marcadores. No inventes marcadores nuevos.
+4. Todos los números de `source` (versiones, cantidades) se conservan idénticos.
+5. El texto debe seguir siendo una frase natural en {target_lang_name}, de longitud similar.
+
+Entrada:
+{json.dumps(payload, indent=2, ensure_ascii=False)}
+
+Devuelve únicamente un JSON con las mismas claves:
+{{"1": {{"text": "frase corregida con ⟦E1⟧ intacto"}}}}"""
+
+    return _call_json_map(client, model, is_gemma, prompt, "[Rescate entidades]")
 
 
 def generate_tiktok_title(

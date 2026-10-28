@@ -10,6 +10,8 @@ Archivos gestionados:
 """
 
 import json
+import os
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -84,11 +86,20 @@ def load_result(folder: Path) -> Optional[dict]:
 
 
 def is_complete_result(data: Optional[dict]) -> bool:
-    """Verifica si los datos de result.json corresponden a un procesamiento completo (con segmentos e inferencia)."""
+    """
+    Verifica si result.json corresponde a un procesamiento completo.
+
+    Exige segmentos con texto real: una lista de segmentos vacíos (o con `text` en blanco)
+    es un job que murió entre STT y TTS y no debe servirse desde caché.
+    """
     if not isinstance(data, dict):
         return False
     segments = data.get("segments")
-    return bool(segments and isinstance(segments, list) and len(segments) > 0 and data.get("output_name"))
+    if not segments or not isinstance(segments, list):
+        return False
+    if not data.get("output_name"):
+        return False
+    return any(str(s.get("text", "")).strip() for s in segments if isinstance(s, dict))
 
 
 def save_result(folder: Path, data: dict) -> None:
@@ -179,6 +190,15 @@ def update_result_segments(folder: Path, segments: list[dict]) -> None:
     save_result(folder, data)
 
 
+def update_result_qa(folder: Path, qa: dict) -> None:
+    """Persiste el bloque de QA del doblaje (umbrales, métricas y fallos)."""
+    data = load_result(folder)
+    if data is None:
+        return
+    data["qa"] = qa
+    save_result(folder, data)
+
+
 def create_segment_entry(
     seg: int,
     start: float,
@@ -193,6 +213,8 @@ def create_segment_entry(
     orig_duration: Optional[float] = None,
     syllable_count: Optional[int] = None,
     internal_pause_sec: Optional[float] = None,
+    translation_status: Optional[str] = None,
+    entity_fail: Optional[list[str]] = None,
     **extra,
 ) -> dict:
     """
@@ -246,6 +268,10 @@ def create_segment_entry(
         entry["phonemes"] = clean_phonemes
     if internal_pause_sec:
         entry["internal_pause_sec"] = float(internal_pause_sec)
+    if translation_status and translation_status != "ok":
+        entry["translation_status"] = str(translation_status)
+    if entity_fail:
+        entry["entity_fail"] = [str(p) for p in entity_fail][:8]
 
     return entry
 
@@ -306,6 +332,10 @@ def get_result_source_lang(folder: Path) -> Optional[str]:
 
 # ─── url_index.json ─────────────────────────────────────────────────────────
 
+# El índice se escribe desde varios hilos (un job por URL). Sin este lock, dos
+# registros concurrentes hacen read-modify-write y uno pisa al otro.
+_URL_INDEX_LOCK = threading.Lock()
+
 
 def _url_index_path() -> Path:
     return QUEUE_DIR / URL_INDEX_FILENAME
@@ -323,28 +353,32 @@ def load_url_index() -> dict[str, str]:
 
 
 def save_url_index(index: dict[str, str]) -> None:
-    """Guarda el índice URL → carpeta."""
+    """Guarda el índice URL → carpeta de forma atómica."""
     idx_path = _url_index_path()
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
-    idx_path.write_text(
+    tmp_path = idx_path.with_suffix(".json.tmp")
+    tmp_path.write_text(
         json.dumps(index, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    os.replace(tmp_path, idx_path)
 
 
 def register_url(url: str, folder_name: str) -> None:
-    """Registra un mapeo URL → nombre_carpeta en el índice."""
-    index = load_url_index()
-    index[url] = folder_name
-    save_url_index(index)
+    """Registra un mapeo URL → nombre_carpeta en el índice (read-modify-write bajo lock)."""
+    with _URL_INDEX_LOCK:
+        index = load_url_index()
+        index[url] = folder_name
+        save_url_index(index)
 
 
 def unregister_url(url: str) -> None:
-    """Elimina un mapeo URL del índice."""
-    index = load_url_index()
-    if url in index:
-        del index[url]
-        save_url_index(index)
+    """Elimina un mapeo URL del índice (read-modify-write bajo lock)."""
+    with _URL_INDEX_LOCK:
+        index = load_url_index()
+        if url in index:
+            del index[url]
+            save_url_index(index)
 
 
 def lookup_folder_by_url(url: str) -> Optional[str]:

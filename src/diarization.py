@@ -8,12 +8,10 @@ try:
     import torch
     import torchaudio
     from pyannote.audio import Pipeline
-    from pyannote.core import Segment
 except ImportError:
     torch = None
     torchaudio = None
     Pipeline = None
-    Segment = None
 
 from src.config import DEVICE, DEVICE_SECONDARY, DRIVE_DIR, KAGGLE_INPUT_DIR, get_hf_token
 from src.models import get_or_load_model
@@ -71,8 +69,20 @@ def speaker_diarization(diarization_model: Any, wav_audio: str, num_speakers: in
 
 
 def assign_speakers_by_word(whisper_result: Any, diarization: Any) -> list[dict]:
-    """Asigna hablantes a cada segmento de Whisper según la diarización."""
+    """
+    Asigna hablantes a cada palabra y segmento según la diarización.
+
+    Los turnos se materializan una sola vez y cada segmento filtra únicamente los que
+    lo cruzan. Antes se hacía `diarization.crop()` por palabra (O(palabras × turnos),
+    con miles de turnos en un video de 2 h).
+    """
     segments_list = whisper_result.segments if hasattr(whisper_result, "segments") else whisper_result
+
+    turns: list[tuple[float, float, str]] = []
+    if diarization is not None:
+        for segment, _, label in diarization.itertracks(yield_label=True):
+            turns.append((float(segment.start), float(segment.end), str(label)))
+
     assigned_segments = []
 
     for seg in segments_list:
@@ -84,6 +94,9 @@ def assign_speakers_by_word(whisper_result: Any, diarization: Any) -> list[dict]
         if not seg_words:
             seg_words = [{"start": seg_start, "end": seg_end, "word": seg_text}]
 
+        # Turnos de diarización que cruzan este segmento: se filtran una sola vez.
+        local_turns = [t for t in turns if t[0] < seg_end and t[1] > seg_start]
+
         speaker_counts: dict[str, float] = {}
         enriched_words = []
 
@@ -92,15 +105,13 @@ def assign_speakers_by_word(whisper_result: Any, diarization: Any) -> list[dict]
             w_end = float(word["end"] if isinstance(word, dict) else word.end)
             w_text = word["word"] if isinstance(word, dict) else word.word
 
-            word_segment = Segment(w_start, w_end)
-            turn = diarization.crop(word_segment)
             best_speaker = "UNKNOWN"
             max_overlap = 0.0
 
-            for segment, _, label in turn.itertracks(yield_label=True):
-                overlap = segment & word_segment
-                if overlap.duration > max_overlap:
-                    max_overlap = overlap.duration
+            for t_start, t_end, label in local_turns:
+                overlap = min(t_end, w_end) - max(t_start, w_start)
+                if overlap > max_overlap:
+                    max_overlap = overlap
                     best_speaker = label
 
             if best_speaker != "UNKNOWN":

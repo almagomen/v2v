@@ -7,6 +7,13 @@ from typing import Optional, Tuple, Any
 
 import numpy as np
 
+from src.qa import evaluate_segment, format_report, save_report, summarize
+from src.pacing import visible_text
+
+# Estrategia de sincronía del doblaje (no configurables por API: describen el criterio).
+SYNC_TOLERANCE = 0.94   # por debajo de este ratio se rellena con pausas internas
+STRETCH_FLOOR = 0.85    # estiramiento máximo al alargar un clip (nunca por debajo)
+
 try:
     import torch
     import torchaudio
@@ -499,7 +506,7 @@ def synthesize_segment_audio(
     speed: float = 1.0,
     target_duration: Optional[float] = None,
     orig_duration: Optional[float] = None,
-    slowdown_range: Optional[Tuple[float, float]] = None,
+    sync_to_original: bool = True,
     max_allowed_dur: Optional[float] = None,
     tts_fn: Optional[callable] = None,
     cached_arr_rate: Optional[Tuple[Any, int]] = None,
@@ -543,8 +550,8 @@ def synthesize_segment_audio(
 
     mode_tag = "✨ 1.00x (natural)"
 
-    # Sincronía orgánica respecto al audio original (si slowdown_range y orig_duration están activos)
-    if slowdown_range and orig_duration and orig_duration > 0:
+    # Sincronía orgánica respecto al audio original (si sync_to_original y orig_duration están activos)
+    if sync_to_original and orig_duration and orig_duration > 0:
         # 1. CASO OVERFLOW / RIESGO DE CHOQUE:
         # El audio excede el tiempo disponible antes del siguiente segmento
         if max_allowed_dur is not None and raw_dur > max_allowed_dur:
@@ -576,11 +583,11 @@ def synthesize_segment_audio(
             diff_str = f"+{diff_pct}%" if diff_pct > 0 else f"{diff_pct}%" if diff_pct < 0 else "0%"
 
             # Margen Neutro y fidelidad temporal en Timeline:
-            # Si ratio_slow >= 0.94: Mantener el audio 100% intacto a 1.00x, sin estirar y sin colas de silencio
-            if ratio_slow >= 0.94:
+            # Si ratio_slow >= SYNC_TOLERANCE: mantener el audio intacto a 1.00x, sin estirar ni colas de silencio
+            if ratio_slow >= SYNC_TOLERANCE:
                 mode_tag = f"✨ 1.00x ({diff_str})"
             else:
-                # Sub-duración (< 0.94x):
+                # Sub-duración (< SYNC_TOLERANCE):
                 # 1. Expandir suavemente valles internos de silencio (sin añadir silencio artificial al final del clip)
                 target_samples = int(orig_duration * rate)
                 arr_expanded = distribute_silence_padding(
@@ -589,14 +596,14 @@ def synthesize_segment_audio(
                 expanded_dur = float(arr_expanded.shape[-1]) / float(rate)
                 expanded_ratio = expanded_dur / orig_duration
 
-                if expanded_ratio >= 0.94:
+                if expanded_ratio >= SYNC_TOLERANCE:
                     arr = arr_expanded
                     mode_tag = f"✨ 1.00x (pausas +{int(round((expanded_ratio - ratio_slow) * 100))}%)"
                 else:
                     arr = arr_expanded
-                    # 2. Si aún después de expandir pausas internas sigue < 0.94x, piso estricto de 0.85x
-                    # (máximo 15% de estiramiento suave imperceptible, nunca caer a 0.85x ni colas de ceros)
-                    min_allowed_speed = 0.85
+                    # 2. Si tras expandir pausas internas sigue por debajo de SYNC_TOLERANCE, piso de STRETCH_FLOOR
+                    # (estiramiento suave imperceptible; nunca colas de ceros)
+                    min_allowed_speed = STRETCH_FLOOR
                     effective_speed = max(min_allowed_speed, expanded_ratio)
                     mode_tag = f"🔉 {effective_speed:.2f}x"
                     stretch_samples = int(arr.shape[-1] / effective_speed)
@@ -666,7 +673,7 @@ def clone_voice_segments(
     audio_ref: str | Path,
     tts_fn: callable,
     only_indices: Optional[list[int]] = None,
-    slowdown_range: Optional[Tuple[float, float]] = None,
+    sync_to_original: bool = True,
     speed: float = 1.0,
     target_duration: Optional[float] = None,
     speaker_map: Optional[dict[str, str]] = None,
@@ -698,6 +705,8 @@ def clone_voice_segments(
 
     times: list[int] = []
     path_es: list[Path] = []
+    qa_records: list[dict] = []
+    tts_errors = 0
 
     # Obtener duración total del video de forma exhaustiva y precisa
     video_total_duration: Optional[float] = None
@@ -818,7 +827,7 @@ def clone_voice_segments(
             speed=speed,
             target_duration=target_duration,
             orig_duration=dur_en,
-            slowdown_range=slowdown_range,
+            sync_to_original=sync_to_original,
             max_allowed_dur=max_allowed_dur,
             tts_fn=tts_fn,
             cached_arr_rate=cached_tts,
@@ -826,6 +835,7 @@ def clone_voice_segments(
         )
 
         if arr is None or rate is None:
+            tts_errors += 1
             continue
 
         # Actualizar metadatos del segmento: preservando las coordenadas del audio original intactas
@@ -860,24 +870,26 @@ def clone_voice_segments(
         start_samples = int(start_time * rate)
         times.append(start_samples)
 
+        qa_records.append(evaluate_segment(
+            seg=seq_num,
+            orig_duration=dur_en,
+            raw_duration=raw_dur_es,
+            final_duration=final_dur,
+            arr=arr,
+            translation_status=text_dict.get("translation_status"),
+            entity_problems=text_dict.get("entity_fail"),
+            chars=len(visible_text(text)),
+        ))
+
+    if qa_records:
+        expected = len(texts) if only_indices is None else len(texts_to_process)
+        report = summarize(qa_records, expected_segments=expected, tts_errors=tts_errors)
+        if only_indices is None:
+            save_report(path.parent, report)
+        else:
+            print("🩺 [QA] regeneración parcial: reporte no persistido")
+        for line in format_report(report):
+            print(line)
+        print()
+
     return path_es, times, rate
-
-
-def merge_cloned_audio(
-    original_audio_path: Path,
-    cloned_segments: list[Path],
-    segment_times: list[int],
-    sample_rate: int,
-) -> Any:
-    """Combina segmentos de audio clonados en un solo tensor."""
-    arr, org_sr = torchaudio.load(str(original_audio_path))
-    fix_es = torchaudio.functional.resample(arr, orig_freq=org_sr, new_freq=sample_rate)
-    fix_es[:, :] = 0
-
-    for start_samples, audio_seg_path in zip(segment_times, cloned_segments):
-        arr_es, _ = torchaudio.load(str(audio_seg_path))
-        end_samples = start_samples + arr_es.shape[1]
-        if end_samples <= fix_es.shape[1]:
-            fix_es[:, start_samples:end_samples] = arr_es
-
-    return fix_es

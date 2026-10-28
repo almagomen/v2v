@@ -81,6 +81,7 @@ class VideoResult(BaseModel):
     vocals_path: str = ""
     segments: list[SegmentSchema]
     url: str
+    qa: dict[str, Any] = {}
 
 
 class JobResultResponse(BaseModel):

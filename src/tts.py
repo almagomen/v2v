@@ -1,5 +1,6 @@
 import io
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any, Tuple, Optional, Union
@@ -17,6 +18,35 @@ from src.config import get_fish_api_key
 
 FISH_TTS_URL = "https://api.fish.audio/v1/tts"
 DEFAULT_MODEL = "s2.1-pro-free"
+
+# Nivel objetivo de voz para el timeline (RMS, no LUFS). Fish devuelve niveles
+# irregulares según texto y emoción; sin esto el QA mide 3 dB de dispersión entre
+# segmentos y el oyente percibe saltos de volumen.
+TARGET_RMS_DBFS = -18.0
+MAX_GAIN_DB = 9.0
+MIN_GAIN_DB = -9.0
+PEAK_CEILING = 0.98
+
+
+def normalize_segment_level(waveform: Any) -> Any:
+    """Lleva el clip a TARGET_RMS_DBFS con ganancia acotada y techo de pico."""
+    if torch is None or waveform is None:
+        return waveform
+
+    rms = float(waveform.pow(2).mean().sqrt())
+    peak = float(waveform.abs().max())
+    if rms < 1e-6 or peak < 1e-6:
+        return waveform
+
+    gain_db = TARGET_RMS_DBFS - 20.0 * math.log10(rms)
+    gain_db = max(MIN_GAIN_DB, min(MAX_GAIN_DB, gain_db))
+    gain = 10.0 ** (gain_db / 20.0)
+
+    peak_after = peak * gain
+    if peak_after > PEAK_CEILING:
+        gain *= PEAK_CEILING / peak_after
+
+    return waveform * gain
 
 
 def normalize_pronunciation_dictionary(dict_input: Any) -> Optional[list[dict]]:
@@ -236,13 +266,9 @@ def fish_tts(
 
             waveform, sr = torchaudio.load(io.BytesIO(response.content))
 
-            # Ganancia +6 dB post-respuesta: se aplica directamente aquí porque el servidor con el
-            # parámetro volumen aplica un fade inicial; en local el aumento es instantáneo y sin rampa.
-            gain_factor = 10.0 ** (6.0 / 20.0)  # +6.0 dB ≈ 1.995x
-            if torch is not None:
-                waveform = torch.clamp(waveform * gain_factor, -0.99, 0.99)
-            else:
-                waveform = waveform * gain_factor
+            # Nivel uniforme por segmento: el +6 dB fijo anterior recortaba picos en los
+            # segmentos ya fuertes y dejaba flojos los suaves.
+            waveform = normalize_segment_level(waveform)
 
             return waveform, sr
 

@@ -23,6 +23,7 @@ from src.models import get_or_load_model
 from src.diarization import get_diarization_model, speaker_diarization, process_audio
 from src.translation import translate_text_list, generate_tiktok_title
 from src.result_store import create_segment_entry
+from src.lang_utils import same_language
 
 WHISPER_DIR = DRIVE_DIR / "whisper_turbo" if DRIVE_DIR else None
 if not WHISPER_DIR and KAGGLE_INPUT_DIR and KAGGLE_INPUT_DIR.exists():
@@ -246,7 +247,7 @@ def run_main(
     t_trans = 0.0
 
     target_language = translate if translate else detected_language
-    should_translate = bool(translate and str(translate).strip().lower() != detected_language.strip().lower())
+    should_translate = bool(translate and not same_language(str(translate), detected_language))
 
     if should_translate:
         t0_trans = time.perf_counter()
@@ -274,6 +275,8 @@ def run_main(
                     original_speaker=orig.get("original_speaker") or orig.get("speaker"),
                     phonemes=phonemes_list[i] if phonemes_list and i < len(phonemes_list) else orig.get("phonemes"),
                     internal_pause_sec=orig.get("internal_pause_sec"),
+                    translation_status=orig.get("translation_status"),
+                    entity_fail=orig.get("entity_fail"),
                 )
                 for i, ((s, e), txt, orig) in enumerate(zip(times, translated_texts, result))
             ]
@@ -290,6 +293,8 @@ def run_main(
                     original_speaker=orig.get("original_speaker") or orig.get("speaker"),
                     phonemes=phonemes_list[i] if phonemes_list and i < len(phonemes_list) else orig.get("phonemes"),
                     internal_pause_sec=orig.get("internal_pause_sec"),
+                    translation_status=orig.get("translation_status"),
+                    entity_fail=orig.get("entity_fail"),
                 )
                 for i, ((s, e), orig) in enumerate(zip(times, result))
             ]
@@ -306,6 +311,8 @@ def run_main(
                     original_speaker=r.get("original_speaker") or r.get("speaker"),
                     phonemes=r.get("phonemes"),
                     internal_pause_sec=r.get("internal_pause_sec"),
+                    translation_status=r.get("translation_status"),
+                    entity_fail=r.get("entity_fail"),
                 )
                 for i, r in enumerate(result)
             ]

@@ -223,6 +223,8 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
                     speaker=curr.get("speaker") or meta.get("speaker") or "mrbeast",
                     original_speaker=meta.get("original_speaker") or curr.get("original_speaker") or "SPEAKER_00",
                     phonemes=ph or meta.get("phonemes") or curr.get("phonemes"),
+                    translation_status=meta.get("translation_status"),
+                    entity_fail=meta.get("entity_fail"),
                     extra={
                         k: v for k, v in curr.items()
                         if k not in (

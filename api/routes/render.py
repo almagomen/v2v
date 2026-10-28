@@ -399,8 +399,8 @@ def _build_ffmpeg_cmd(
     clips: list[TimelineClip],
     folder: Path,
     output_path: Path,
-    job_id: str = None,
-    video_index: int = None,
+    job_id: Optional[str] = None,
+    video_index: Optional[int] = None,
     gpu_id: int = 0,
     force_reencode: bool = False,
 ) -> list[str]:
@@ -947,12 +947,21 @@ async def render_batch(req: RenderBatchRequest):
                     with completed_lock:
                         err_msg = f"❌ [{idx + 1}/{total}] {item.output_name}: Error FFmpeg – {result.stderr[-300:]}"
                         errors.append(err_msg)
+                        completed_count += 1
                         _batch_progress[batch_id]["logs"].append(err_msg)
+                        _batch_progress[batch_id]["current"] = completed_count
+                        _batch_progress[batch_id]["percentage"] = round((completed_count / max(1, total)) * 100)
                     return
 
                 _save_render_cache_hash(output_path, item.clips, mode=desired_mode)
                 t_ff = time.perf_counter() - t0_ff
-                mode_str = "Stream Copy" if "-c:v copy" in " ".join(cmd) else f"NVENC GPU {gpu_id}"
+                cmd_str = " ".join(cmd)
+                if "-c:v copy" in cmd_str:
+                    mode_str = "Stream Copy"
+                elif "h264_nvenc" in cmd_str:
+                    mode_str = f"NVENC GPU {gpu_id}"
+                else:
+                    mode_str = "CPU libx264"
                 log_render = f"⏱️ [{idx + 1}/{total}] Modo: [{mode_str}] | FFmpeg: {t_ff:.2f}s | {item.output_name}"
                 print(log_render)
                 output_final = output_path
@@ -1002,102 +1011,102 @@ async def render_batch(req: RenderBatchRequest):
             with completed_lock:
                 err_msg = f"❌ [{idx + 1}/{total}] {item.output_name}: {str(e)}"
                 errors.append(err_msg)
+                completed_count += 1
                 _batch_progress[batch_id].setdefault("logs", []).append(err_msg)
+                _batch_progress[batch_id]["current"] = completed_count
+                _batch_progress[batch_id]["percentage"] = round((completed_count / max(1, total)) * 100)
 
-    try:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            list(executor.map(process_render_item, list(enumerate(req.renders))))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        list(executor.map(process_render_item, list(enumerate(req.renders))))
 
-        t_batch_total = time.perf_counter() - t_batch_start
-        mins = int(t_batch_total // 60)
-        secs = int(t_batch_total % 60)
-        fmt_batch = f"{t_batch_total:.1f}s ({mins}m {secs:02d}s)" if mins > 0 else f"{t_batch_total:.1f}s"
-        batch_summary = (
-            f"🏁 RESUMEN LOTE: {len(results)} de {total} videos exportados en {fmt_batch} "
-            f"(Promedio: {(t_batch_total / max(1, len(results))):.1f}s/video)"
-        )
-        print("\n" + "=" * 60)
-        print(batch_summary)
-        print("=" * 60 + "\n")
+    t_batch_total = time.perf_counter() - t_batch_start
+    mins = int(t_batch_total // 60)
+    secs = int(t_batch_total % 60)
+    fmt_batch = f"{t_batch_total:.1f}s ({mins}m {secs:02d}s)" if mins > 0 else f"{t_batch_total:.1f}s"
+    batch_summary = (
+        f"🏁 RESUMEN LOTE: {len(results)} de {total} videos exportados en {fmt_batch} "
+        f"(Promedio: {(t_batch_total / max(1, len(results))):.1f}s/video)"
+    )
+    print("\n" + "=" * 60)
+    print(batch_summary)
+    print("=" * 60 + "\n")
 
-        if not results:
-            _batch_progress[batch_id] = {
-                "status": "error",
-                "current": total,
-                "total": total,
-                "percentage": 100,
-                "current_name": "",
-                "step": "Error al renderizar videos",
-                "logs": _batch_progress[batch_id].get("logs", []) + [batch_summary],
-            }
-            raise HTTPException(
-                status_code=500,
-                detail=f"No se pudo renderizar ningún video. Errores: {'; '.join(errors)}",
-            )
-
-        # Si se solicitó upload a Catbox, retornar lista de URLs
-        if req.upload_to_catbox:
-            curr_logs = _batch_progress[batch_id].get("logs", [])
-            curr_logs.append(batch_summary)
-            _batch_progress[batch_id] = {
-                "status": "done",
-                "current": total,
-                "total": total,
-                "percentage": 100,
-                "current_name": "",
-                "step": f"¡{len(catbox_urls)} video(s) subido(s) a Catbox!",
-                "logs": curr_logs,
-                "total_time": round(t_batch_total, 2),
-            }
-            return {
-                "status": "completed",
-                "videos": catbox_urls,
-                "errors": errors,
-                "expires_in": "24h",
-                "logs": curr_logs,
-                "total_time": round(t_batch_total, 2),
-            }
-
-        curr_logs = _batch_progress[batch_id].get("logs", [])
-        curr_logs.append("📦 Empaquetando archivo ZIP final...")
-        curr_logs.append(batch_summary)
+    if not results:
         _batch_progress[batch_id] = {
-            "status": "packaging",
+            "status": "error",
             "current": total,
             "total": total,
-            "percentage": 95,
+            "percentage": 100,
             "current_name": "",
-            "step": "Empaquetando archivo ZIP final...",
-            "logs": curr_logs,
-            "total_time": round(t_batch_total, 2),
+            "step": "Error al renderizar videos",
+            "logs": _batch_progress[batch_id].get("logs", []) + [batch_summary],
         }
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudo renderizar ningún video. Errores: {'; '.join(errors)}",
+        )
 
-        # Build ZIP directly on disk to prevent RAM exhaustion and Cloudflare HTTP 524 timeouts
-        zip_name = to_zip_name(req.zip_name) or "batch_export"
-        zip_file_path = TEMP_DIR / f"{batch_id}_{zip_name}.zip"
-
-        with zipfile.ZipFile(zip_file_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for output_path, zip_display_name in results:
-                zf.write(output_path, arcname=f"{zip_display_name}.mp4")
-            if errors:
-                zf.writestr("_errors.txt", "\n".join(errors))
-
+    # Si se solicitó upload a Catbox, retornar lista de URLs
+    if req.upload_to_catbox:
+        curr_logs = _batch_progress[batch_id].get("logs", [])
+        curr_logs.append(batch_summary)
         _batch_progress[batch_id] = {
             "status": "done",
             "current": total,
             "total": total,
             "percentage": 100,
             "current_name": "",
-            "step": f"¡{len(results)} videos exportados con éxito!",
+            "step": f"¡{len(catbox_urls)} video(s) subido(s) a Catbox!",
+            "logs": curr_logs,
+            "total_time": round(t_batch_total, 2),
+        }
+        return {
+            "status": "completed",
+            "videos": catbox_urls,
+            "errors": errors,
+            "expires_in": "24h",
+            "logs": curr_logs,
+            "total_time": round(t_batch_total, 2),
         }
 
-        return FileResponse(
-            path=str(zip_file_path),
-            filename=f"{zip_name}.zip",
-            media_type="application/zip",
-        )
-    finally:
-        pass
+    curr_logs = _batch_progress[batch_id].get("logs", [])
+    curr_logs.append("📦 Empaquetando archivo ZIP final...")
+    curr_logs.append(batch_summary)
+    _batch_progress[batch_id] = {
+        "status": "packaging",
+        "current": total,
+        "total": total,
+        "percentage": 95,
+        "current_name": "",
+        "step": "Empaquetando archivo ZIP final...",
+        "logs": curr_logs,
+        "total_time": round(t_batch_total, 2),
+    }
+
+    # Build ZIP directly on disk to prevent RAM exhaustion and Cloudflare HTTP 524 timeouts
+    zip_name = to_zip_name(req.zip_name) or "batch_export"
+    zip_file_path = TEMP_DIR / f"{batch_id}_{zip_name}.zip"
+
+    with zipfile.ZipFile(zip_file_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for output_path, zip_display_name in results:
+            zf.write(output_path, arcname=f"{zip_display_name}.mp4")
+        if errors:
+            zf.writestr("_errors.txt", "\n".join(errors))
+
+    _batch_progress[batch_id] = {
+        "status": "done",
+        "current": total,
+        "total": total,
+        "percentage": 100,
+        "current_name": "",
+        "step": f"¡{len(results)} videos exportados con éxito!",
+    }
+
+    return FileResponse(
+        path=str(zip_file_path),
+        filename=f"{zip_name}.zip",
+        media_type="application/zip",
+    )
 
 
 # ---------------------------------------------------------------------------

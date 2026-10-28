@@ -153,7 +153,7 @@ def _do_regenerate_segment(
         repetition_penalty=repetition_penalty,
         volume=volume,
         source_lang=source_lang,
-        slowdown_range=(0.75, 1.25) if prevent_overlap else None,
+        sync_to_original=prevent_overlap,
     )
 
     if not paths_es:

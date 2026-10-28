@@ -122,6 +122,7 @@ def _run_pipeline(
                 "vocals_path": assets.get("vocals") or "",
                 "segments": segs,
                 "url": url,
+                "qa": (load_result(path.parent) or {}).get("qa") or {},
             }
 
         t_all_start = time.perf_counter()
@@ -169,6 +170,8 @@ def _run_pipeline(
                         orig_start=t.get("orig_start"),
                         orig_end=t.get("orig_end"),
                         orig_duration=t.get("orig_duration"),
+                        translation_status=t.get("translation_status"),
+                        entity_fail=t.get("entity_fail"),
                     )
                     for i, t in enumerate(texts_list)
                 ]
@@ -237,7 +240,7 @@ def _run_pipeline(
             t0_tts = time.perf_counter()
             paths_es, _times, _freq = clone_voice_segments(
                 path, texts, lang, speaker_audio, model_tts,
-                slowdown_range=(0.40, 0.99), stretch_target_ratio=1.0,
+                sync_to_original=True,
                 speaker_map=speaker_map,
                 source_lang=r.get("src_lang", "pt"),
             )
@@ -250,6 +253,12 @@ def _run_pipeline(
 
             # Guardar segmentos actualizados (con emociones y duraciones TTS) — una sola escritura
             update_result_segments(path.parent, texts)
+
+            # Gate de QA: un build degradado se marca en el estado, no se oculta
+            qa_block = (load_result(path.parent) or {}).get("qa") or {}
+            qa_failed = [str(f.get("metric")) for f in qa_block.get("failures") or []]
+            if qa_failed:
+                print(f"⚠️ [QA] build degradado: {', '.join(qa_failed)}", flush=True)
 
             # Pre-empaquetado anticipado en background del TAR de segmentos para entrega instantánea vía Cloudflare
             try:
@@ -277,7 +286,7 @@ def _run_pipeline(
             segments = make_segments(texts)
             videos_data.append(build_entry(idx, path, output_name, segments, assets, r.get("url", "")))
             update_job(job_id, videos=videos_data, progress=(idx + 1.0) / len(urls))
-            set_url_state(r.get("url", ""), "done", f"Listo: {output_name}", index=idx, output_name=output_name, original_title=orig_title)
+            set_url_state(r.get("url", ""), "done", f"Listo: {output_name}" if not qa_failed else f"Listo con avisos QA ({', '.join(qa_failed)}): {output_name}", index=idx, output_name=output_name, original_title=orig_title)
 
             t_link_total = time.perf_counter() - t_link_start
             def _fmt_sec(val: float) -> str:

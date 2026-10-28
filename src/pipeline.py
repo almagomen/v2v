@@ -98,6 +98,7 @@ def process_video_queue(
                             )
                             found_in_cache = True
                             print(f"♻️ Caché detectada por URL: {out_title} ({t_cache:.2f}s)")
+                            _warn_if_degraded(result_data, out_title)
 
             if found_in_cache:
                 continue
@@ -113,6 +114,7 @@ def process_video_queue(
                     t_cache = time.perf_counter() - t_url_pipeline_start
                     out_title = cached_data.get("output_name") or info.get("title") or path.stem
                     print(f"♻️ Cargando caché: {path.name}")
+                    _warn_if_degraded(cached_data, out_title)
                     c_segs = cached_data.get("segments", [])
                     c_orig = cached_data.get("original_segments") or get_result_original_segments(path.parent)
                     for i, cs in enumerate(c_segs):
@@ -219,25 +221,58 @@ def process_video_queue(
     return results
 
 
+def _warn_if_degraded(result_data: dict, label: str) -> None:
+    """
+    Avisa cuando se reutiliza un build cuyo QA no pasó.
+
+    No invalida la caché a propósito: reprocesar desde cero (descarga + STT + TTS) cuesta
+    minutos, y un build degradado se corrige regenerando solo los segmentos afectados.
+    """
+    qa = result_data.get("qa") or {}
+    if qa.get("passed") is False:
+        fails = ", ".join(str(f.get("metric")) for f in qa.get("failures") or []) or "sin detalle"
+        print(f"⚠️ {label}: build degradado en caché ({fails}). Regenerá esos segmentos desde el panel.")
+
+
 def split_audio_sequences(
     audio_path: Path,
     texts: list[dict],
     output_dir: Optional[Path] = None,
     edit_indices: Optional[list[int]] = None,
 ) -> list[Path]:
-    """Divide el audio en secuencias según los segmentos de texto."""
+    """Divide el audio en secuencias según los segmentos de texto.
+
+    Lee solo el tramo de cada segmento (`frame_offset`/`num_frames`). Cargar entero un
+    vocals.wav de 2 h son ~1.2 GB en RAM (44.1 kHz mono float32) y ese pico tumba el job
+    en Colab antes de llegar al TTS.
+    """
     if output_dir is None:
         output_dir = audio_path.parent / "Seqs_src"
     output_dir.mkdir(exist_ok=True)
 
-    arr, org_sr = torchaudio.load(str(audio_path))
+    full_arr = None
+    try:
+        info = torchaudio.info(str(audio_path))
+        org_sr = int(info.sample_rate)
+        total_samples = int(info.num_frames)
+        if total_samples <= 0 or org_sr <= 0:
+            raise ValueError("info sin frames")
+    except Exception:
+        full_arr, org_sr = torchaudio.load(str(audio_path))
+        total_samples = full_arr.shape[-1]
+
+    def read_frames(start: int, count: int):
+        if full_arr is not None:
+            return full_arr[:, start:start + count].clone()
+        chunk, _ = torchaudio.load(str(audio_path), frame_offset=start, num_frames=count)
+        return chunk
+
     generated_files = []
 
     texts_to_process = (
         texts if edit_indices is None else [texts[i - 1] for i in edit_indices]
     )
 
-    total_samples = arr.shape[-1]
     total_audio_sec = total_samples / float(org_sr) if org_sr > 0 else 0.0
 
     for idx, text_dict in enumerate(texts_to_process):
@@ -258,7 +293,9 @@ def split_audio_sequences(
 
         start = max(0, int(round((s_sec - lead_margin) * org_sr)))
         end = min(total_samples, int(round((e_sec + tail_margin) * org_sr)))
-        arr_split = arr[:, start:end].clone()
+        if end <= start:
+            continue
+        arr_split = read_frames(start, end - start)
 
         # Aplicar micro-fade in (5ms) y micro-fade out (15ms) para evitar clicks o cortes bruscos de resonancias
         if arr_split.shape[-1] > int(0.03 * org_sr) and torch is not None:
