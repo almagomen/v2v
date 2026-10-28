@@ -215,6 +215,7 @@ def create_segment_entry(
     internal_pause_sec: Optional[float] = None,
     translation_status: Optional[str] = None,
     entity_fail: Optional[list[str]] = None,
+    untranslated: Optional[list[str]] = None,
     **extra,
 ) -> dict:
     """
@@ -272,6 +273,8 @@ def create_segment_entry(
         entry["translation_status"] = str(translation_status)
     if entity_fail:
         entry["entity_fail"] = [str(p) for p in entity_fail][:8]
+    if untranslated:
+        entry["untranslated"] = [str(t) for t in untranslated][:8]
 
     return entry
 

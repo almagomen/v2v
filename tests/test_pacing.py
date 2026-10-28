@@ -79,6 +79,10 @@ class TestPresupuesto(unittest.TestCase):
         self.assertGreater(b["chars_max"], objetivo)
         self.assertAlmostEqual(b["chars_min"], objetivo * FIT_MIN, delta=2)
         self.assertAlmostEqual(b["chars_max"], objetivo * FIT_MAX, delta=2)
+        # El objetivo único corrige la tendencia a quedarse corto (medido: -6%).
+        self.assertAlmostEqual(b["chars_target"], objetivo, delta=1)
+        self.assertGreaterEqual(b["chars_target"], b["chars_min"])
+        self.assertLessEqual(b["chars_target"], b["chars_max"])
 
     def test_rango_ordenado_y_positivo(self):
         for sec in (0.4, 1.0, 3.5, 12.0):

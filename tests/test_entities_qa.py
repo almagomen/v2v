@@ -6,14 +6,18 @@ Ejecutar desde la raíz del repo:
 """
 from __future__ import annotations
 
+import re
 import unittest
 
 from src.entities import (
+    PLACEHOLDER_TMPL,
     check_entities,
     collect_known_terms,
     lock_text,
+    normalize_asr_casing,
     restore_text,
 )
+from src.lang_utils import shared_tokens
 from src.qa import evaluate_segment, summarize
 
 
@@ -23,16 +27,63 @@ class TestEntityLock(unittest.TestCase):
         locked, mapping = lock_text(src)
         self.assertNotEqual(locked, src)
         self.assertEqual(restore_text(locked, mapping), src)
-        # `Ghidra 12.1` viaja como una sola unidad: el MT no puede separar nombre y versión.
-        self.assertIn("Ghidra 12.1", mapping.values())
+        # Nombre y versión viajan como dos unidades protegidas: el MT no puede
+        # separar una de la otra sin que el chequeo lo detecte.
+        self.assertIn("Ghidra", mapping.values())
+        self.assertIn("12.1", mapping.values())
         self.assertIn("REA", mapping.values())
         self.assertIn("OpenCode", mapping.values())
 
-    def test_une_nombres_de_dos_palabras(self):
-        src = "Instalei o Open Code e o REA Agent hoje."
+    def test_no_fusiona_tokens_contiguos(self):
+        """Unir tokens contiguos congelaba 'Hermes Porém' y metía portugués en el español."""
+        src = "Configura no Hermes hoje"
         _locked, mapping = lock_text(src)
-        self.assertIn("Open Code", mapping.values())
-        self.assertIn("REA Agent", mapping.values())
+        self.assertIn("Hermes", mapping.values())
+        glued = [v for v in mapping.values() if " " in v]
+        self.assertEqual(glued, [], f"términos pegados: {glued}")
+
+    def test_palabra_escrita_en_minuscula_en_el_lote_no_se_bloquea(self):
+        """Una palabra que el ASR escribe alguna vez en minúscula es habla, no una marca."""
+        sentences = [
+            "Configura no Hermes Porém Você tem que reiniciar",
+            "Mas porém você pode usar o Hermes depois.",
+        ]
+        known = collect_known_terms(sentences)
+        self.assertIn("Hermes", known)
+        self.assertNotIn("Porém", known)
+        self.assertNotIn("Você", known)
+
+    def test_formas_estructurales_se_bloquean_sin_estadistica(self):
+        """Versiones, camelCase y archivos no existen en el habla corriente."""
+        sentences = ["Instala o OpenCode 12.1 hoje", "opencode roda o node.js e o 12.1"]
+        known = collect_known_terms(sentences)
+        self.assertIn("OpenCode", known)
+        self.assertIn("12.1", known)
+        self.assertIn("node.js", known)
+
+    def test_normaliza_mayusculas_de_pausa_del_asr(self):
+        """Whisper capitaliza tras cada pausa; el MT lee eso como nombre propio."""
+        raw = "Ela não funciona Mais em outro lugar Porém"
+        self.assertEqual(
+            normalize_asr_casing(raw),
+            "Ela não funciona mais em outro lugar porém",
+        )
+
+    def test_normalizacion_conserva_entidades_y_siglas(self):
+        raw = "Usa o OpenCode e a API Key no Ghidra"
+        out = normalize_asr_casing(raw, keep={"OpenCode", "Ghidra"})
+        self.assertIn("OpenCode", out)
+        self.assertIn("Ghidra", out)
+        self.assertIn("API", out)
+
+    def test_solapamiento_marca_las_palabras_sin_traducir(self):
+        """Los tokens idénticos en origen y salida son el candidato que juzga el modelo."""
+        shared = shared_tokens("No sirve Mais em outro lugar", "No sirve Mais en otro lugar")
+        self.assertIn("mais", shared)
+
+    def test_solapamiento_ignora_las_entidades_bloqueadas(self):
+        shared = shared_tokens("Abre o Ghidra agora", "Abre el Ghidra ahora", ignore=["Ghidra"])
+        self.assertNotIn("ghidra", shared)
 
     def test_nombre_propio_al_inicio_no_se_bloquea_sin_contexto(self):
         src = "Ghidra é a ferramenta que vamos usar."
@@ -49,10 +100,11 @@ class TestEntityLock(unittest.TestCase):
         _locked, mapping = lock_text(sentences[1], known=known)
         self.assertIn("Ghidra", mapping.values())
 
-    def test_stopword_en_mayusculas_no_se_bloquea(self):
-        _locked, mapping = lock_text("EU não sei, mas ELE sabe.")
-        self.assertNotIn("EU", mapping.values())
-        self.assertNotIn("ELE", mapping.values())
+    def test_sigla_que_es_palabra_corriente_no_se_bloquea(self):
+        sentences = ["ELE não sabe, MAS eu sei.", "ele acha que mas não é assim."]
+        known = collect_known_terms(sentences)
+        self.assertNotIn("ELE", known)
+        self.assertNotIn("MAS", known)
 
     def test_archivo_y_ruta(self):
         src = r"Roda o install_ghidra.ps1 dentro de C:\tools\ghidra."
@@ -69,13 +121,15 @@ class TestEntityLock(unittest.TestCase):
 
 class TestEntityCheck(unittest.TestCase):
     def test_ok_si_conserva_tokens_y_numeros(self):
-        locked, _ = lock_text("Instala o Ghidra 12.1 hoje.")
-        verdict = check_entities(locked, "Instala el ⟦E1⟧ hoy.")
+        locked, mapping = lock_text("Instala o Ghidra 12.1 hoje.")
+        self.assertEqual(len(mapping), 2)
+        markers = [PLACEHOLDER_TMPL.format(i) for i in sorted(mapping)]
+        verdict = check_entities(locked, "Instala el " + " ".join(markers) + " hoy.")
         self.assertTrue(verdict["ok"], verdict["reasons"])
 
     def test_detecta_entidad_perdida(self):
-        locked, _ = lock_text("Instala o Ghidra 12.1 hoje.")
-        verdict = check_entities(locked, "Instala el Ghidra 12.1 hoy.")
+        locked, _mapping = lock_text("Instala o Ghidra 12.1 hoje.")
+        verdict = check_entities(locked, re.sub(re.escape(PLACEHOLDER_TMPL.format(1)) + r"\s*", "", locked))
         self.assertFalse(verdict["ok"])
         self.assertEqual(verdict["missing"], [1])
 
@@ -159,6 +213,46 @@ class TestQaGate(unittest.TestCase):
         recs = [self._rec(seg=i) for i in range(1, 6)]
         report = summarize(recs, expected_segments=5)
         self.assertTrue(report["passed"], report["failures"])
+
+    def _timed(self, seg, start, final, orig, residue=None):
+        return evaluate_segment(
+            seg=seg, start=start, orig_duration=orig, raw_duration=final,
+            final_duration=final, arr=[0.3, -0.3] * 50, chars=40, residue=residue,
+        )
+
+    def test_aire_muerto_no_cuenta_las_pausas_del_original(self):
+        """Si el hueco final iguala el de la fuente, no se añadió nada."""
+        recs = [
+            self._timed(1, 0.0, final=4.0, orig=4.0),
+            self._timed(2, 6.0, final=4.0, orig=4.0),
+        ]
+        report = summarize(recs, expected_segments=2)
+        self.assertEqual(report["metrics"]["dead_air_excess"], 0.0)
+        self.assertAlmostEqual(report["metrics"]["dead_air_ratio"], 2.0 / 10.0, places=3)
+
+    def test_aire_muerto_detecta_el_hueco_crecido(self):
+        recs = [
+            self._timed(1, 0.0, final=2.0, orig=4.0),
+            self._timed(2, 6.0, final=2.0, orig=4.0),
+        ]
+        report = summarize(recs, expected_segments=2)
+        # hueco final 4.0s vs 2.0s de la fuente → 2.0s añadidos sobre un span de 8.0s
+        self.assertAlmostEqual(report["metrics"]["dead_air_excess"], 0.25, places=3)
+        self.assertFalse(report["passed"])
+        self.assertIn("dead_air_excess", [f["metric"] for f in report["failures"]])
+
+    def test_desvio_ignora_slots_imposibles(self):
+        """Un slot de 0.3s no puede medirse: ninguna palabra cabe ahí."""
+        recs = [self._timed(i, i * 3.0, final=3.0, orig=3.0) for i in range(1, 10)]
+        recs.append(self._timed(10, 27.0, final=0.9, orig=0.3))
+        report = summarize(recs, expected_segments=10)
+        self.assertNotIn("length_dev_p95", [f["metric"] for f in report["failures"]])
+
+    def test_residuo_de_idioma_falla_el_gate(self):
+        recs = [self._timed(1, 0.0, final=3.0, orig=3.0, residue=["Mais"])]
+        report = summarize(recs, expected_segments=1)
+        self.assertFalse(report["passed"])
+        self.assertIn("residue", [f["metric"] for f in report["failures"]])
 
 
 if __name__ == "__main__":

@@ -77,9 +77,16 @@ def estimate_seconds(text: str, lang: str, lock_map: Optional[dict[int, str]] = 
 
 
 def budget_for(lang: str, seconds: float) -> dict[str, int]:
-    """Rango de caracteres y sílabas que cabe en `seconds` de locución."""
+    """
+    Rango y objetivo de caracteres/sílabas que caben en `seconds` de locución.
+
+    `target` existe porque un rango solo se incumple por abajo: medido sobre un
+    doblaje real, el modelo entregaba un 6% menos de lo que cabía en cada slot, y el
+    sincronizador rellenaba ese hueco estirando la voz hasta 0.85x. Un número único
+    al que apuntar corrige la tendencia mejor que dos extremos.
+    """
     if seconds <= 0:
-        return {"chars_min": 0, "chars_max": 0, "syl_min": 0, "syl_max": 0}
+        return {"chars_min": 0, "chars_max": 0, "chars_target": 0, "syl_min": 0, "syl_max": 0}
     syl_per_sec, chars_per_sec = speech_rate(lang)
     target_chars = seconds * chars_per_sec
     target_syl = seconds * syl_per_sec
@@ -88,6 +95,7 @@ def budget_for(lang: str, seconds: float) -> dict[str, int]:
     return {
         "chars_min": chars_min,
         "chars_max": max(chars_min + 4, int(round(target_chars * FIT_MAX))),
+        "chars_target": max(chars_min, int(round(target_chars))),
         "syl_min": syl_min,
         "syl_max": max(syl_min + 1, int(round(target_syl * FIT_MAX))),
     }

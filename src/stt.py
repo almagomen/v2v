@@ -277,6 +277,7 @@ def run_main(
                     internal_pause_sec=orig.get("internal_pause_sec"),
                     translation_status=orig.get("translation_status"),
                     entity_fail=orig.get("entity_fail"),
+                    untranslated=orig.get("untranslated"),
                 )
                 for i, ((s, e), txt, orig) in enumerate(zip(times, translated_texts, result))
             ]
@@ -295,6 +296,7 @@ def run_main(
                     internal_pause_sec=orig.get("internal_pause_sec"),
                     translation_status=orig.get("translation_status"),
                     entity_fail=orig.get("entity_fail"),
+                    untranslated=orig.get("untranslated"),
                 )
                 for i, ((s, e), orig) in enumerate(zip(times, result))
             ]
@@ -313,6 +315,7 @@ def run_main(
                     internal_pause_sec=r.get("internal_pause_sec"),
                     translation_status=r.get("translation_status"),
                     entity_fail=r.get("entity_fail"),
+                    untranslated=r.get("untranslated"),
                 )
                 for i, r in enumerate(result)
             ]

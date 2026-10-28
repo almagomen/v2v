@@ -21,18 +21,38 @@ except ImportError:  # google-genai vive en Colab, no en el entorno local
 
 
 class _FakeInteractions:
-    """Devuelve las respuestas preparadas en orden y registra las llamadas."""
+    """
+    Devuelve las respuestas preparadas en orden y registra las llamadas.
+
+    Los juicios (`palabras`, `fugas`) se responden aparte y no consumen la cola:
+    así las aserciones de número de llamadas de traducción siguen midiendo lo suyo.
+    """
 
     def __init__(self, responses: list[str]):
         self.responses = responses
         self.calls = 0
+        self.judge_calls = 0
         self.prompts: list[str] = []
+        self.judge_words: list[str] = []
+        self.judge_leaks: list[str] = []
 
     def create(self, **kwargs):
-        self.prompts.append(str(kwargs.get("input", "")))
+        prompt = str(kwargs.get("input", ""))
+        self.prompts.append(prompt)
+        if '"palabras"' in prompt:
+            self.judge_calls += 1
+            return SimpleNamespace(output_text=json.dumps({"palabras": self.judge_words}))
+        if '"fugas"' in prompt:
+            self.judge_calls += 1
+            return SimpleNamespace(output_text=json.dumps({"fugas": self.judge_leaks}))
         text = self.responses[min(self.calls, len(self.responses) - 1)]
         self.calls += 1
         return SimpleNamespace(output_text=text)
+
+    @property
+    def translation_prompts(self) -> list[str]:
+        """Prompts de traducción, sin los juicios de idioma."""
+        return [p for p in self.prompts if '"palabras"' not in p and '"fugas"' not in p]
 
 
 class _FakeClient:
@@ -44,10 +64,17 @@ class _FakeClient:
         _FakeClient.instances.append(self)
 
 
-def _run(responses: list[str], sentences: list[str]) -> tuple[list[str], list[dict], _FakeClient]:
+def _run(
+    responses: list[str],
+    sentences: list[str],
+    judge_leaks: list[str] | None = None,
+    judge_words: list[str] | None = None,
+) -> tuple[list[str], list[dict], _FakeClient]:
     _FakeClient.instances.clear()
     fake = _FakeClient("k")
     fake.interactions.responses = responses
+    fake.interactions.judge_leaks = list(judge_leaks or [])
+    fake.interactions.judge_words = list(judge_words or [])
     meta = [{"seg": i + 1} for i in range(len(sentences))]
     with patch("src.translation.get_google_api_keys", return_value=["test-key"]), \
          patch("src.translation.genai.Client", lambda api_key: fake):
@@ -66,7 +93,7 @@ def _run(responses: list[str], sentences: list[str]) -> tuple[list[str], list[di
 class TestEntityPipeline(unittest.TestCase):
     def test_restaura_entidades_y_no_marca_fallo(self):
         sentences = ["Instala o Ghidra 12.1 agora.", "Depois usa o REA."]
-        good = {"1": {"text": "Instala el ⟦E1⟧ ahora."}, "2": {"text": "Luego usa el ⟦E1⟧."}}
+        good = {"1": {"text": "Instala el ⟦E1⟧ ⟦E2⟧ ahora."}, "2": {"text": "Luego usa el ⟦E1⟧."}}
         texts, meta, fake = _run([json.dumps(good)], sentences)
 
         self.assertEqual(texts[0], "Instala el Ghidra 12.1 ahora.")
@@ -77,8 +104,8 @@ class TestEntityPipeline(unittest.TestCase):
 
     def test_rescate_recupera_token_perdido(self):
         sentences = ["Instala o Ghidra 12.1 agora."]
-        bad = {"1": {"text": "Instala el Ghidra 12.1 ahora."}}
-        fixed = {"1": {"text": "Instala el ⟦E1⟧ ahora."}}
+        bad = {"1": {"text": "Instala el Ghidra ahora."}}
+        fixed = {"1": {"text": "Instala el ⟦E1⟧ ⟦E2⟧ ahora."}}
         texts, meta, fake = _run([json.dumps(bad), json.dumps(fixed)], sentences)
 
         self.assertEqual(fake.interactions.calls, 2)
@@ -97,7 +124,7 @@ class TestEntityPipeline(unittest.TestCase):
 
     def test_clave_ausente_marca_fallback_y_sin_rescate(self):
         sentences = ["Instala o Ghidra 12.1 agora.", "Depois usa o REA."]
-        partial = {"1": {"text": "Instala el ⟦E1⟧ ahora."}}
+        partial = {"1": {"text": "Instala el ⟦E1⟧ ⟦E2⟧ ahora."}}
         texts, meta, fake = _run([json.dumps(partial)], sentences)
 
         self.assertEqual(meta[0].get("translation_status"), None)
@@ -107,16 +134,67 @@ class TestEntityPipeline(unittest.TestCase):
 
     def test_prompt_incluye_regla_de_tokens(self):
         sentences = ["Instala o Ghidra 12.1 agora."]
-        good = {"1": {"text": "Instala el ⟦E1⟧ ahora."}}
+        good = {"1": {"text": "Instala el ⟦E1⟧ ⟦E2⟧ ahora."}}
         _texts, _meta, fake = _run([json.dumps(good)], sentences)
-        self.assertIn("TOKENS PROTEGIDOS", fake.interactions.prompts[0])
-        self.assertIn("⟦E1⟧", fake.interactions.prompts[0])
+        self.assertIn("TOKENS PROTEGIDOS", fake.interactions.translation_prompts[0])
+        self.assertIn("⟦E1⟧", fake.interactions.translation_prompts[0])
+
+    def test_prompt_avisa_de_las_mayusculas_del_asr(self):
+        """Whisper capitaliza tras cada pausa; el modelo no debe leerlo como nombre propio."""
+        sentences = ["Instala o Ghidra 12.1 agora."]
+        good = {"1": {"text": "Instala el ⟦E1⟧ ⟦E2⟧ ahora."}}
+        _texts, _meta, fake = _run([json.dumps(good)], sentences)
+        self.assertIn("MAYÚSCULAS DEL RECONOCIMIENTO DE VOZ", fake.interactions.translation_prompts[0])
+
+    def test_residuo_de_idioma_dispara_reescritura(self):
+        """Portugués dentro del español es el fallo más audible: se detecta y se corrige."""
+        sentences = ["Ela não funciona Mais em outro lugar"]
+        malo = {"1": {"text": "No funciona Mais en otro lugar"}}
+        bueno = {"1": {"text": "No funciona más en ningún otro lado"}}
+        texts, meta, fake = _run(
+            [json.dumps(malo), json.dumps(bueno)],
+            sentences,
+            judge_leaks=["Mais"],
+            judge_words=["Mais"],
+        )
+
+        self.assertEqual(fake.interactions.calls, 2)
+        self.assertEqual(fake.interactions.judge_calls, 2)
+        self.assertEqual(texts[0], "No funciona más en ningún otro lado")
+        self.assertIn("residuo", fake.interactions.translation_prompts[1])
+        self.assertNotIn("translation_status", meta[0])
+        self.assertNotIn("untranslated", meta[0])
+
+    def test_juicio_sin_fugas_no_reescribe(self):
+        """El juicio es la única fuente de fugas: si no confirma ninguna, no se toca el texto."""
+        sentences = ["Ela não funciona Mais em outro lugar"]
+        malo = {"1": {"text": "No funciona Mais en otro lugar"}}
+        texts, _meta, fake = _run(
+            [json.dumps(malo)], sentences, judge_leaks=[], judge_words=["Mais"]
+        )
+
+        self.assertEqual(fake.interactions.calls, 1)
+        self.assertEqual(texts[0], "No funciona Mais en otro lugar")
+
+    def test_rescate_de_residuo_que_no_limpia_se_descarta(self):
+        sentences = ["Ela não funciona Mais em outro lugar"]
+        malo = {"1": {"text": "No funciona Mais en otro lugar"}}
+        texts, meta, fake = _run(
+            [json.dumps(malo), json.dumps(malo)],
+            sentences,
+            judge_leaks=["Mais"],
+            judge_words=["Mais"],
+        )
+
+        self.assertEqual(fake.interactions.calls, 2)
+        self.assertEqual(texts[0], "No funciona Mais en otro lugar")
+        self.assertEqual(meta[0]["untranslated"], ["mais"])
 
     def test_sin_entidades_no_inyecta_regla_de_tokens(self):
         sentences = ["Hoje o dia está bonito."]
         good = {"1": {"text": "Hoy el día está bonito."}}
         _texts, _meta, fake = _run([json.dumps(good)], sentences)
-        self.assertNotIn("TOKENS PROTEGIDOS", fake.interactions.prompts[0])
+        self.assertNotIn("TOKENS PROTEGIDOS", fake.interactions.translation_prompts[0])
 
 
 @unittest.skipUnless(_HAS_GENAI, "google-genai no instalado en este entorno")
@@ -126,7 +204,7 @@ class TestChunking(unittest.TestCase):
 
     def _payload(self, count: int, start: int = 0) -> str:
         return json.dumps({
-            str(i + 1): {"text": f"Frase {start + i + 1} con el ⟦E1⟧ abierto."}
+            str(i + 1): {"text": f"Frase {start + i + 1} con el ⟦E1⟧ ⟦E2⟧ abierto."}
             for i in range(count)
         })
 
@@ -157,7 +235,7 @@ class TestChunking(unittest.TestCase):
         sentences = self._sentences(6)
         with patch.dict("os.environ", {"TRANSLATION_CHUNK_SEGMENTS": "3"}):
             _texts, _meta, fake = _run([self._payload(3), self._payload(3, 3)], sentences)
-        self.assertIn("Contexto previo", fake.interactions.prompts[1])
+        self.assertIn("Contexto previo", fake.interactions.translation_prompts[1])
 
 
 @unittest.skipUnless(_HAS_GENAI, "google-genai no instalado en este entorno")
@@ -192,7 +270,7 @@ class TestFitBudget(unittest.TestCase):
         sentences = ["Hoje o dia está bonito."]
         good = {"1": {"text": "a" * 160}}
         _texts, _meta, fake = self._run_timed([json.dumps(good)], sentences)
-        prompt = fake.interactions.prompts[0]
+        prompt = fake.interactions.translation_prompts[0]
         self.assertIn(f"~{b['chars_min']}-{b['chars_max']} chars", prompt)
         self.assertIn(f"~{b['syl_min']}-{b['syl_max']} sílabas", prompt)
         self.assertIn("16 caracteres por segundo", prompt)
@@ -208,7 +286,7 @@ class TestFitBudget(unittest.TestCase):
 
         self.assertEqual(fake.interactions.calls, 2)
         self.assertEqual(texts[0], ajustado["1"]["text"])
-        self.assertIn("ajustador de duración", fake.interactions.prompts[1])
+        self.assertIn("ajustador de duración", fake.interactions.translation_prompts[1])
 
     def test_texto_encajado_no_gasta_una_llamada_extra(self):
         sentences = ["Hoje o dia está bonito."]
@@ -218,7 +296,7 @@ class TestFitBudget(unittest.TestCase):
 
     def test_ajuste_que_rompe_entidad_se_descarta(self):
         sentences = ["Instala o Ghidra 12.1 agora no servidor."]
-        corto = {"1": {"text": "Instala ⟦E1⟧ ya"}}
+        corto = {"1": {"text": "Instala ⟦E1⟧ ⟦E2⟧ ya"}}
         roto = {"1": {"text": "Instala la herramienta ya en el servidor de pruebas ahora"}}
         texts, _meta, fake = self._run_timed([json.dumps(corto), json.dumps(roto)], sentences)
 
@@ -245,7 +323,7 @@ class TestFitBudget(unittest.TestCase):
         corto = {"1": {"text": "Ahora vamos allá"}}
         _texts, _meta, fake = _run([json.dumps(corto)], sentences)
         self.assertEqual(fake.interactions.calls, 1)
-        self.assertNotIn("slot |", fake.interactions.prompts[0])
+        self.assertNotIn("slot |", fake.interactions.translation_prompts[0])
 
 
 if __name__ == "__main__":

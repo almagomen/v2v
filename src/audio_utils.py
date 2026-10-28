@@ -872,6 +872,7 @@ def clone_voice_segments(
 
         qa_records.append(evaluate_segment(
             seg=seq_num,
+            start=start_time,
             orig_duration=dur_en,
             raw_duration=raw_dur_es,
             final_duration=final_dur,
@@ -879,6 +880,7 @@ def clone_voice_segments(
             translation_status=text_dict.get("translation_status"),
             entity_problems=text_dict.get("entity_fail"),
             chars=len(visible_text(text)),
+            residue=text_dict.get("untranslated"),
         ))
 
     if qa_records:

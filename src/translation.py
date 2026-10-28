@@ -4,12 +4,20 @@ import os
 import json
 import re
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from google import genai
 
 from src.config import get_google_api_keys, rotate_google_api_key
-from src.entities import check_entities, collect_known_terms, lock_text, restore_text
+from src.entities import (
+    ambiguous_terms,
+    check_entities,
+    collect_known_terms,
+    lock_text,
+    normalize_asr_casing,
+    restore_text,
+)
+from src.lang_utils import shared_tokens
 from src.pacing import budget_for, build_fit_prompt, fit_deviation, needs_rewrite, speech_rate
 
 LANGUAGE_NAMES = {
@@ -69,6 +77,26 @@ def _chunk_size() -> int:
         return 80
 
 
+def _call_model(client, model: str, is_gemma: bool, prompt_text: str) -> str:
+    """Una llamada al modelo con JSON estricto y reintento en texto si no lo soporta."""
+    call_kwargs = {"model": model, "input": prompt_text}
+    if not is_gemma:
+        call_kwargs["response_format"] = [{"type": "text", "mime_type": "application/json"}]
+    try:
+        interaction = client.interactions.create(**call_kwargs)
+    except Exception as e_rf:
+        err_text = str(e_rf).lower()
+        if ("response_format" in err_text or "schema" in err_text) and not any(
+            c in err_text for c in ("503", "429", "high demand")
+        ):
+            print(f"⚠️ [Fallback Traducción] '{model}' no soporta response_format JSON estricto, reintentando en modo texto...", flush=True)
+            call_kwargs.pop("response_format", None)
+            interaction = client.interactions.create(**call_kwargs)
+        else:
+            raise
+    return getattr(interaction, "output_text", None) or ""
+
+
 def translate_text_list(
     list_sentences: list[str],
     target_lang: str,
@@ -110,11 +138,38 @@ def translate_text_list(
     fit_enabled = os.environ.get("TRANSLATION_FIT_BUDGET", "1").strip().lower() not in ("0", "false", "no")
 
     # ─── Entity lock: congelar términos técnicos antes de tocar el prompt ───
-    known_terms = collect_known_terms([(s or "") for s in list_sentences])
+    # Las mayúsculas del ASR no distinguen nombres propios de ortografía de pausa:
+    # se normalizan antes de bloquear, o el modelo las lee como marcas y no las traduce.
+    source_texts = [(s or "") for s in list_sentences]
+    known_terms = collect_known_terms(source_texts)
+    if not is_same_lang:
+        # La estadística deja un grupo dudoso: palabras en mayúscula que nunca aparecen
+        # en minúscula. Congelar una palabra corriente mete idioma origen en la salida;
+        # no congelar un nombre propio solo lo expone a una mala transcripción. Ante la
+        # duda, que decida el modelo, que sí conoce el idioma.
+        doubtful = ambiguous_terms(source_texts) & known_terms
+        if doubtful:
+            try:
+                judge_client = genai.Client(api_key=available_keys[0])
+                judge_model = (model_name or DEFAULT_TRANSLATION_MODEL).strip()
+                judge_gemma = "gemma" in judge_model.lower()
+                dropped = _judge_common_words(
+                    lambda prompt: _call_model(judge_client, judge_model, judge_gemma, prompt),
+                    sorted(doubtful),
+                    source_lang_name,
+                )
+            except Exception as e_judge:
+                print(f"⚠️ [Entidades] juicio de palabras omitido ({e_judge})", flush=True)
+                dropped = set()
+            if dropped:
+                known_terms -= dropped
+                print(f"🔍 [Entidades] {len(dropped)} palabra(s) corriente(s) descartada(s): {', '.join(sorted(dropped))}", flush=True)
+
+    source_sentences = [normalize_asr_casing(s.strip(), keep=known_terms) for s in source_texts]
     locked_sentences: list[str] = []
     lock_maps: list[dict[int, str]] = []
-    for s in list_sentences:
-        locked, mapping = lock_text((s or "").strip(), known=known_terms)
+    for s in source_sentences:
+        locked, mapping = lock_text(s, known=known_terms)
         locked_sentences.append(locked)
         lock_maps.append(mapping)
     entity_total = sum(len(m) for m in lock_maps)
@@ -141,17 +196,16 @@ def translate_text_list(
         b = budget_for(target_lang, speech_target_sec)
         entry_lines.append(
             f"[{total_dur:.1f}s slot | ~{b['syl_min']}-{b['syl_max']} sílabas | "
-            f"~{b['chars_min']}-{b['chars_max']} chars]: {locked_s}"
+            f"~{b['chars_min']}-{b['chars_max']} chars, apunta a {b['chars_target']}]: {locked_s}"
         )
 
     chars_per_sec = speech_rate(target_lang)[1]
 
     pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO (CONTROL DE TIEMPO Y EXTENSIÓN):
-   Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars]: texto original`.
+   Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars, apunta a T]: texto original`.
    El ritmo medido en doblaje profesional de {target_lang_name} es ~{chars_per_sec:.0f} caracteres por segundo, y ese valor ya está aplicado en el rango.
-   - ENCAJE: tu traducción debe caer DENTRO del rango de ~M-Z chars (proporcional al tiempo del video).
-   - QUEDARSE CORTO ES EL ERROR MÁS CARO: si el texto no llena el slot, queda silencio muerto entre frases. Antes de recortar de más, agregá matices naturales del habla.
-   - PASARSE TAMBIÉN CUESTA: un texto por encima del rango obliga a acelerar la voz y suena artificial.
+   - ENCAJE: apunta al valor `apunta a T`; nunca por debajo del mínimo `M`. Por encima de `Z` obliga a acelerar la voz y suena artificial.
+   - QUEDARSE CORTO ES EL ERROR MÁS CARO: si el texto no llena el slot, queda silencio muerto entre frases y el sincronizador tiene que arrastrar la voz. Al quedarte corto, agrega matices naturales del habla antes que recortar.
    - RITMO ORAL: Entrega un texto hablado directo, fluido y creíble.
    - SEGMENTOS BREVES (< 2.0s): Respeta la concisión temporal manteniendo la traducción breve y directa sin adiciones innecesarias.
    - En tu JSON de salida entrega ÚNICAMENTE el texto adaptado dentro de cada objeto, SIN repetir el prefijo de metadatos (prohibido poner `[Xs slot | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
@@ -228,6 +282,9 @@ Directrices obligatorias:
    - Como valor: su transcripción fonética legible e intuitiva para un hablante de {target_lang_name}, marcando con tilde la sílaba con mayor fuerza de entonación (acento prosódico) para guiar con precisión la pronunciación de la voz sintética.
    - En tu salida, asocia el diccionario al campo "phonemes": {{"Palabra": "Pronunciación"}}. Si una frase contiene únicamente vocabulario cotidiano estándar de {target_lang_name}, deja "phonemes": {empty_dict_str}.
 {entity_rule}
+10. MAYÚSCULAS DEL RECONOCIMIENTO DE VOZ (NO SON NOMBRES PROPIOS):
+   El texto de entrada viene de un ASR que capitaliza la primera palabra de cada trozo separado por una pausa, aunque sea una palabra corriente. Una mayúscula a mitad de frase NO indica nombre propio: solo los marcadores ⟦E1⟧, ⟦E2⟧... son términos protegidos.
+   Traduce TODAS las palabras, incluidas las que aparecen en mayúscula, salvo los marcadores protegidos. Dejar una palabra del {source_lang_name} sin traducir porque venía capitalizada es un error grave.
 {contexto}
 Texto original ({source_lang_name}) indexado por segmento:
 ---
@@ -238,24 +295,6 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
 {{
 {example_json}
 }}"""
-
-    def _call_model(client, model: str, is_gemma: bool, prompt_text: str) -> str:
-        call_kwargs = {"model": model, "input": prompt_text}
-        if not is_gemma:
-            call_kwargs["response_format"] = [{"type": "text", "mime_type": "application/json"}]
-        try:
-            interaction = client.interactions.create(**call_kwargs)
-        except Exception as e_rf:
-            err_text = str(e_rf).lower()
-            if ("response_format" in err_text or "schema" in err_text) and not any(
-                c in err_text for c in ("503", "429", "high demand")
-            ):
-                print(f"⚠️ [Fallback Traducción] '{model}' no soporta response_format JSON estricto, reintentando en modo texto...", flush=True)
-                call_kwargs.pop("response_format", None)
-                interaction = client.interactions.create(**call_kwargs)
-            else:
-                raise
-        return getattr(interaction, "output_text", None) or ""
 
     def _normalize_response(
         parsed,
@@ -361,6 +400,101 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     texts[n] = new_text.strip()
                     problems.pop(n, None)
 
+        # ─── Idioma de salida: palabras que viajaron sin traducir ───
+        # Se detecta por solapamiento léxico con el origen, sin diccionarios: los tokens
+        # idénticos en ambos lados son o nombres propios o palabras sin traducir, y solo
+        # el modelo sabe cuál de las dos cosas es. La aceptación sí es mecánica: la
+        # reescritura solo entra si baja el número de coincidencias.
+        untranslated: dict[int, list[str]] = {}
+        if not is_same_lang:
+            candidates: dict[int, list[str]] = {}
+            for n in range(len(indices)):
+                if n in missing_local:
+                    continue
+                g = indices[n]
+                shared = shared_tokens(
+                    source_sentences[g],
+                    restore_text(texts[n], lock_maps[g]),
+                    lock_maps[g].values(),
+                )
+                if shared:
+                    candidates[n] = shared
+
+            if candidates:
+                vocabulary = sorted({t for shared in candidates.values() for t in shared})
+                try:
+                    leaks = _judge_leaks(
+                        lambda prompt: _call_model(client, model, is_gemma, prompt),
+                        vocabulary,
+                        source_lang_name,
+                        target_lang_name,
+                    )
+                except Exception as e_leak:
+                    print(f"⚠️ [Idioma] bloque {chunk_no}: juicio omitido ({e_leak})", flush=True)
+                    leaks = set()
+
+                affected = {
+                    n: [t for t in shared if t in leaks]
+                    for n, shared in candidates.items()
+                    if any(t in leaks for t in shared)
+                }
+                if affected:
+                    print(
+                        f"🗣️ [Idioma] bloque {chunk_no}: {len(affected)} segmento(s) con palabras sin traducir; reescribiendo...",
+                        flush=True,
+                    )
+                    payload = {
+                        str(n + 1): {
+                            "source": locked_sentences[indices[n]],
+                            "text": texts[n],
+                            "residuo": ", ".join(shared),
+                        }
+                        for n, shared in affected.items()
+                    }
+                    try:
+                        fixed = _translate_residue_retry(client, model, is_gemma, payload, target_lang_name)
+                    except Exception as e_res:
+                        print(f"⚠️ [Idioma] bloque {chunk_no}: rescate omitido ({e_res})", flush=True)
+                        fixed = {}
+
+                    cleaned = 0
+                    for key_str, new_text in fixed.items():
+                        n = int(key_str) - 1
+                        if not (0 <= n < len(indices)) or not new_text.strip():
+                            continue
+                        g = indices[n]
+                        before = sum(1 for t in candidates[n] if t in leaks)
+                        after = sum(
+                            1
+                            for t in shared_tokens(
+                                source_sentences[g],
+                                restore_text(new_text, lock_maps[g]),
+                                lock_maps[g].values(),
+                            )
+                            if t in leaks
+                        )
+                        if after >= before:
+                            continue
+                        if not check_entities(locked_sentences[g], new_text)["ok"]:
+                            continue
+                        texts[n] = new_text.strip()
+                        problems.pop(n, None)
+                        cleaned += 1
+                    print(f"🗣️ [Idioma] bloque {chunk_no}: {cleaned}/{len(affected)} limpio(s)", flush=True)
+                    for n in affected:
+                        g = indices[n]
+                        left = [
+                            t
+                            for t in shared_tokens(
+                                source_sentences[g],
+                                restore_text(texts[n], lock_maps[g]),
+                                lock_maps[g].values(),
+                            )
+                            if t in leaks
+                        ]
+                        if left:
+                            untranslated[n] = left
+
         # ─── Encaje temporal: una pasada acotada solo sobre los que no caben ───
         # El prompt ya pide el rango, pero el modelo no lo cumple siempre. Aquí se mide
         # la duración estimada y se reescribe únicamente lo que queda fuera del slot.
@@ -409,6 +543,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 "phonemes": phonemes.get(n, {}),
                 "missing": n in missing_local,
                 "problems": problems.get(n, []),
+                "untranslated": untranslated.get(n, []),
             }
         return out
 
@@ -508,6 +643,11 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         else:
                             meta_item.pop("translation_status", None)
                             meta_item.pop("entity_fail", None)
+
+                        if info["untranslated"]:
+                            meta_item["untranslated"] = info["untranslated"]
+                        else:
+                            meta_item.pop("untranslated", None)
 
                 if entity_total:
                     failed = sum(1 for i in range(total_count) if resolved[i]["problems"])
@@ -649,6 +789,115 @@ Devuelve únicamente un JSON con las mismas claves:
 {{"1": {{"text": "frase corregida con ⟦E1⟧ intacto"}}}}"""
 
     return _call_json_map(client, model, is_gemma, prompt, "[Rescate entidades]")
+
+
+def _judge_common_words(
+    call: Callable[[str], str],
+    words: list[str],
+    source_lang_name: str,
+) -> set[str]:
+    """
+    De una lista de palabras capitalizadas, devuelve las que son habla corriente.
+
+    La estadística del lote no separa un nombre propio de una palabra que el ASR
+    capitalizó tras una pausa cuando aparece una sola vez. El modelo sí lo separa,
+    porque conoce el idioma. La respuesta se acota a la lista de entrada: cualquier
+    palabra inventada se descarta, así que un juicio errático no puede romper el lock.
+    """
+    if not words:
+        return set()
+
+    prompt = f"""Recibes palabras que aparecen en mayúscula en la transcripción automática de un audio en {source_lang_name}.
+
+El reconocimiento de voz capitaliza el inicio de cada trozo separado por una pausa, así que muchas de esas mayúsculas son palabras normales, no nombres propios.
+
+Devuelve SOLO las que son palabras comunes de {source_lang_name} escritas en mayúscula por esa razón: verbos, adverbios, conectores, pronombres, adjetivos y expresiones corrientes.
+
+NO incluyas nombres de personas, marcas, productos, empresas, siglas ni términos técnicos.
+
+Responde únicamente con este JSON:
+{{"palabras": ["palabra en minúscula"]}}
+
+Palabras: {", ".join(words)}"""
+
+    raw_text = call(prompt)
+    parsed = _loads_loose(raw_text, "[Entidades] juicio de palabras")
+    found = parsed.get("palabras") if isinstance(parsed, dict) else None
+    if not isinstance(found, list):
+        return set()
+
+    reported = {str(item).strip().lower() for item in found}
+    return {word for word in words if word.lower() in reported}
+
+
+def _judge_leaks(
+    call: Callable[[str], str],
+    words: list[str],
+    source_lang_name: str,
+    target_lang_name: str,
+) -> set[str]:
+    """
+    De las palabras idénticas en origen y traducción, devuelve las que quedaron sin traducir.
+
+    Es la única forma sin diccionarios de separar una fuga de un cognado: el par
+    pt/es comparte tantas formas que ninguna regla mecánica las distingue. El modelo
+    juzga y la respuesta se acota a los tokens observados.
+    """
+    if not words:
+        return set()
+
+    prompt = f"""Estas palabras aparecen escritas exactamente igual en el original en {source_lang_name} y en su traducción al {target_lang_name}.
+
+Devuelve SOLO las que siguen escritas en {source_lang_name} y deberían estar traducidas al {target_lang_name}.
+
+NO incluyas las que ya son palabras correctas del {target_lang_name} aunque se escriban igual, ni nombres propios, marcas ni términos técnicos.
+
+Responde únicamente con este JSON:
+{{"fugas": ["palabra"]}}
+
+Palabras: {", ".join(words)}"""
+
+    raw_text = call(prompt)
+    parsed = _loads_loose(raw_text, "[Idioma] juicio de fugas")
+    found = parsed.get("fugas") if isinstance(parsed, dict) else None
+    if not isinstance(found, list):
+        return set()
+
+    reported = {str(item).strip().lower() for item in found}
+    return {word for word in words if word.lower() in reported}
+
+
+def _translate_residue_retry(
+    client,
+    model: str,
+    is_gemma: bool,
+    payload: dict[str, dict[str, str]],
+    target_lang_name: str,
+) -> dict[str, str]:
+    """
+    Segunda pasada acotada: solo los segmentos con palabras del idioma origen que el
+    modelo confirmó como no traducidas. Es el fallo más audible del pipeline
+    (portugués dentro del español) y la entrada ya viene filtrada por `_judge_leaks`.
+    """
+    prompt = f"""Eres un revisor de doblaje al {target_lang_name}.
+
+Cada entrada trae `source` (frase original), `text` (su traducción) y `residuo` (las
+palabras que quedaron SIN traducir). El texto debe quedar íntegramente en {target_lang_name}.
+
+Corrige el campo `text` cumpliendo, sin excepciones:
+1. Ninguna palabra de `residuo` puede aparecer: sustitúyela por su equivalente real en {target_lang_name}.
+2. No es una traducción literal palabra por palabra: reescribe la frase completa para que suene natural.
+3. Conserva exactamente los marcadores ⟦E1⟧, ⟦E2⟧... de `source`, con su número y posición.
+4. Conserva todos los números, versiones y nombres de archivo.
+5. Mantén una longitud similar: no agregues ni quites información.
+
+Entrada:
+{json.dumps(payload, indent=2, ensure_ascii=False)}
+
+Devuelve únicamente un JSON con las mismas claves:
+{{"1": {{"text": "frase corregida, sin residuo"}}}}"""
+
+    return _call_json_map(client, model, is_gemma, prompt, "[Rescate idioma]")
 
 
 def generate_tiktok_title(

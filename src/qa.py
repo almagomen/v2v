@@ -16,10 +16,15 @@ import math
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-QA_VERSION = 1
+QA_VERSION = 2
 
 # Silencio digital: por debajo de esto el clip no tiene señal audible.
 SILENT_RMS_DBFS = -50.0
+
+# Por debajo de este slot el desvío relativo no mide nada: un "Cursor" de una palabra
+# no puede durar 0.24s por mucho que el original lo ocupe. Medido en un build real,
+# esos slots de 0.2-0.5s empujaban el p95 al 51% sin que hubiera ningún defecto.
+MIN_SLOT_FOR_LENGTH_DEV = 0.8
 
 QA_THRESHOLDS: dict[str, float] = {
     "entity_fail_max": 0,
@@ -29,6 +34,11 @@ QA_THRESHOLDS: dict[str, float] = {
     "tempo_p95_max": 1.12,
     "length_dev_p95_max": 0.20,
     "rms_std_max": 1.5,
+    # El doblaje automático de YouTube deja 25.0% de silencio y el original 18.0%.
+    # El listón es no empeorar al doblaje que se reemplaza y no añadir más de 3 puntos
+    # de aire muerto sobre las pausas que ya existían en la fuente.
+    "dead_air_ratio_max": 0.25,
+    "dead_air_excess_max": 0.03,
 }
 
 
@@ -72,6 +82,8 @@ def evaluate_segment(
     translation_status: Optional[str] = None,
     entity_problems: Optional[Sequence[str]] = None,
     chars: int = 0,
+    start: float = 0.0,
+    residue: Optional[Sequence[str]] = None,
 ) -> dict[str, Any]:
     """Métricas de un segmento ya sintetizado y sincronizado."""
     tempo = round(raw_duration / final_duration, 3) if final_duration > 0 else None
@@ -79,9 +91,11 @@ def evaluate_segment(
     peak_dbfs, rms_dbfs = levels_from_pcm(arr)
     problems = [str(p) for p in (entity_problems or [])]
     status = translation_status or "ok"
+    leftover = [str(w) for w in (residue or [])]
 
     return {
         "seg": int(seg),
+        "start": round(float(start), 3),
         "orig_duration": round(float(orig_duration), 3),
         "raw_duration": round(float(raw_duration), 3),
         "final_duration": round(float(final_duration), 3),
@@ -95,6 +109,7 @@ def evaluate_segment(
         "fallback": status == "fallback",
         "entity_problems": problems,
         "entity_fail": bool(problems),
+        "residue": leftover,
     }
 
 
@@ -140,6 +155,45 @@ def _chars_per_sec(records: Sequence[dict[str, Any]]) -> Optional[float]:
     return round(chars / secs, 2)
 
 
+def _gaps(records: Sequence[dict[str, Any]], key: str) -> list[float]:
+    """Huecos entre el final de un segmento y el arranque del siguiente."""
+    ordered = sorted(records, key=lambda r: float(r.get("start") or 0.0))
+    gaps: list[float] = []
+    for prev, cur in zip(ordered, ordered[1:]):
+        gap = float(cur["start"]) - (float(prev["start"]) + float(prev[key]))
+        gaps.append(gap)
+    return gaps
+
+
+def _timeline_span(records: Sequence[dict[str, Any]]) -> float:
+    ordered = sorted(records, key=lambda r: float(r.get("start") or 0.0))
+    if not ordered:
+        return 0.0
+    first, last = ordered[0], ordered[-1]
+    return float(last["start"]) + float(last["final_duration"]) - float(first["start"])
+
+
+def _dead_air(records: Sequence[dict[str, Any]]) -> tuple[Optional[float], Optional[float]]:
+    """
+    (aire muerto total, exceso atribuible al doblaje).
+
+    `length_dev` compara contra un slot que ya incluye las pausas del original, así que
+    un segmento 'corto' puede estar respetando una pausa que existía en la fuente. Lo
+    que importa es cuánto creció el hueco respecto del original: eso es lo que el
+    espectador percibe como aire muerto añadido.
+    """
+    if not records:
+        return None, None
+    span = _timeline_span(records)
+    if span <= 0:
+        return None, None
+    final_gaps = _gaps(records, "final_duration")
+    source_gaps = _gaps(records, "orig_duration")
+    total = sum(g for g in final_gaps if g > 0) / span
+    excess = sum(max(0.0, f - s) for f, s in zip(final_gaps, source_gaps)) / span
+    return round(total, 3), round(excess, 3)
+
+
 def summarize(
     records: Sequence[dict[str, Any]],
     *,
@@ -149,10 +203,16 @@ def summarize(
     """Agrega las métricas por segmento y evalúa los umbrales."""
     recs = list(records)
     tempos = [r["tempo"] for r in recs if r.get("tempo") is not None]
-    devs = [abs(r["length_dev"]) for r in recs if r.get("length_dev") is not None]
+    devs = [
+        abs(r["length_dev"]) for r in recs
+        if r.get("length_dev") is not None
+        and float(r.get("orig_duration") or 0.0) >= MIN_SLOT_FOR_LENGTH_DEV
+    ]
     levels = [r["rms_dbfs"] for r in recs if r.get("rms_dbfs") is not None and not r.get("silent")]
+    dead_air, dead_air_excess = _dead_air(recs)
 
     entity_fail_segs = [r["seg"] for r in recs if r.get("entity_fail")]
+    residue_segs = [r["seg"] for r in recs if r.get("residue")]
     fallback_segs = [r["seg"] for r in recs if r.get("fallback")]
     silent_segs = [r["seg"] for r in recs if r.get("silent")]
     missing = (
@@ -167,6 +227,9 @@ def summarize(
         "rms_std": _std(levels),
         "rms_median": _median(levels),
         "chars_per_sec": _chars_per_sec(recs),
+        "dead_air_ratio": dead_air,
+        "dead_air_excess": dead_air_excess,
+        "residue": len(residue_segs),
     }
 
     failures: list[dict[str, Any]] = []
@@ -193,6 +256,12 @@ def summarize(
         _fail("length_dev_p95", metrics["length_dev_p95"], QA_THRESHOLDS["length_dev_p95_max"])
     if metrics["rms_std"] is not None and metrics["rms_std"] > QA_THRESHOLDS["rms_std_max"]:
         _fail("rms_std", metrics["rms_std"], QA_THRESHOLDS["rms_std_max"])
+    if len(residue_segs) > QA_THRESHOLDS["entity_fail_max"]:
+        _fail("residue", len(residue_segs), QA_THRESHOLDS["entity_fail_max"], residue_segs)
+    if metrics["dead_air_ratio"] is not None and metrics["dead_air_ratio"] > QA_THRESHOLDS["dead_air_ratio_max"]:
+        _fail("dead_air_ratio", metrics["dead_air_ratio"], QA_THRESHOLDS["dead_air_ratio_max"])
+    if metrics["dead_air_excess"] is not None and metrics["dead_air_excess"] > QA_THRESHOLDS["dead_air_excess_max"]:
+        _fail("dead_air_excess", metrics["dead_air_excess"], QA_THRESHOLDS["dead_air_excess_max"])
 
     return {
         "version": QA_VERSION,
@@ -225,6 +294,13 @@ def format_report(report: dict[str, Any]) -> list[str]:
     ]
     if rate:
         lines.append(f"   ritmo medido: {rate:.1f} chars/s a 1.0x (tabla de presupuesto: ajustar si difiere >10%)")
+    dead = m.get("dead_air_ratio")
+    excess = m.get("dead_air_excess")
+    if dead is not None:
+        lines.append(
+            f"   aire muerto: {dead * 100:.1f}% del timeline | añadido sobre el original "
+            f"{(excess or 0) * 100:.1f}% | referencia: YouTube 25.0%, original 18.0%"
+        )
     if report.get("passed"):
         lines.append("✅ [QA] pasa los umbrales")
         return lines

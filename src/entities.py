@@ -1,22 +1,18 @@
+"""Detección y bloqueo de entidades para la traducción, sin diccionarios.
+
+Qué es un nombre propio se decide por dos señales que no dependen del idioma:
+
+- **Estructura del token**: rutas, URLs, nombres de archivo, versiones, camelCase,
+  PascalCase y siglas. Esas formas no existen en el habla corriente de ningún idioma.
+- **Estadística del propio lote**: un término que el ASR escribe alguna vez en
+  minúscula es una palabra corriente capitalizada por la pausa, no una marca.
+
+Una lista de excepciones nunca cubriría todos los idiomas de origen ni todas las
+palabras que el ASR capitaliza, así que aquí no hay ninguna.
 """
-Entity lock para traducción audiovisual.
-
-Problema que resuelve: los LLM de traducción normalizan lo que debería quedar
-congelado. `Rea Agent` -> `reagente`, `install ghidra.ps1` -> `InstallGhidra.ps 1`,
-`12.1` -> `2.1`. En un tutorial técnico eso rompe el contenido.
-
-Estrategia (análoga a un glosario protegido en CAT tools):
-  1. `lock_text` sustituye cada entidad por un placeholder opaco `⟦E1⟧`.
-  2. El MT traduce el texto con placeholders; el prompt prohíbe tocarlos.
-  3. `check_entities` verifica placeholders y números contra el original bloqueado.
-  4. `restore_text` devuelve las entidades originales.
-
-El placeholder usa ⟦⟧ (U+27E6/27E7) y no [] para no colisionar con las etiquetas
-de emoción ([excited]) ni con los prefijos de presupuesto ([2.1s slot | ...]).
-"""
-from __future__ import annotations
 
 import re
+from collections import Counter
 from typing import Iterable, Sequence
 
 PLACEHOLDER_TMPL = "⟦E{}⟧"
@@ -43,34 +39,18 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}\b"), "proper"),
 ]
 
-# Palabras que pueden aparecer en mayúsculas en pt/es sin ser entidades.
-_STOPWORDS = {
-    "EU", "E", "ELE", "ELA", "ELES", "ELAS", "A", "O", "OS", "AS", "UM", "UMA",
-    "DE", "DO", "DA", "DOS", "DAS", "EM", "NO", "NA", "NOS", "NAS", "QUE", "NAO",
-    "SIM", "SE", "JA", "AI", "MAS", "POR", "PARA", "COM", "SEM", "ATE", "OU",
-    "ISSO", "ISTO", "AQUI", "ASSIM", "TUDO", "NADA", "AGORA", "DEPOIS", "SO",
-    "EL", "LA", "LOS", "LAS", "UN", "UNA", "Y", "ES", "EN", "LO", "LE", "LES",
-    "SU", "MI", "TU", "SI", "NO",
-}
+# Categorías que se bloquean siempre: su forma no existe en el habla corriente.
+_STRUCTURAL_KINDS = frozenset({"code", "url", "path", "file", "version", "pascal", "camel"})
 
-# Palabras corrientes de pt/es que el ASR capitaliza a mitad de frase (tras coma o
-# guion de diálogo). Bloquearlas congelaría una función gramatical en el otro idioma.
-_COMMON_CAPS = {
-    "MAS", "PARA", "QUE", "TEM", "BEM", "ELE", "ELA", "ELES", "ELAS", "ESSE",
-    "ESSA", "ISSO", "ISTO", "AQUI", "AQUI", "AGORA", "VAMOS", "GALERA",
-    "ESPERO", "SEMPRE", "MESMO", "BELEZA", "MAPEANDO", "ADORO", "ENTENDI",
-    "ENTENDIDO", "CERTO", "BOM", "BOA", "GENTE", "CARA", "OLHA", "VEJA",
-    "BORA", "TUDO", "NADA", "DEPOIS", "ENTAO", "HOJE", "ASSIM", "TAMBEM",
-    "SO", "AINDA", "CLARO", "QUANDO", "COMO", "ONDE", "PORQUE", "ENTAO",
-    "PERO", "CUANDO", "CON", "SIN", "POR", "ESTE", "ESTA", "ESTO", "ESO",
-    "ESA", "AHORA", "BUENO", "ENTONCES", "DESPUES", "TAMBIEN", "SOLO",
-    "TODO", "MAS", "MUY", "ESTA", "ESTOY", "TENGO", "TIENE", "HOLA",
-    "SEGUNDO", "PRIMEIRO", "PRIMERO", "VEZ", "VECES", "AH", "EH", "OH",
-}
-
-_STOPWORDS |= _COMMON_CAPS
+# Categorías que dependen de que la mayúscula signifique algo en el idioma de origen.
+_CASE_KINDS = frozenset({"caps", "proper"})
 
 _SENTENCE_END_CHARS = ".!?:;\n\"'«»-—"
+_WORD_RE = re.compile(r"[^\W\d_][\w'-]*", re.UNICODE)
+
+# Una palabra de menos de 3 letras coincide demasiadas veces con artículos y
+# preposiciones como para que la estadística diga algo.
+_MIN_TOKEN_LEN = 3
 
 
 def _is_sentence_start(text: str, pos: int) -> bool:
@@ -96,20 +76,10 @@ def _find_spans(text: str, lock_sentence_start: bool) -> list[tuple[int, int, st
         for m in pattern.finditer(text):
             s, e = m.span()
             token = m.group(0)
-            if kind == "caps":
-                if token in _STOPWORDS or not token.isupper():
-                    continue
-            elif kind == "proper":
-                if token.upper() in _STOPWORDS:
-                    continue
-                if not lock_sentence_start and _is_sentence_start(text, s):
-                    continue
-            elif kind == "camel":
-                if token in _STOPWORDS:
-                    continue
-            elif kind == "pascal":
-                if token.upper() in _STOPWORDS:
-                    continue
+            if kind == "caps" and not token.isupper():
+                continue
+            if kind == "proper" and not lock_sentence_start and _is_sentence_start(text, s):
+                continue
             found.append((s, e, kind))
 
     found.sort(key=lambda x: (x[0], -(x[1] - x[0])))
@@ -121,45 +91,109 @@ def _find_spans(text: str, lock_sentence_start: bool) -> list[tuple[int, int, st
         accepted.append((s, e, kind))
         last_end = e
 
-    return _merge_adjacent(text, accepted)
+    return accepted
 
 
-def _merge_adjacent(text: str, spans: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
+def _lowercase_counts(sentences: Sequence[str]) -> Counter[str]:
+    """Cuántas veces aparece cada palabra escrita en minúscula en todo el lote."""
+    counts: Counter[str] = Counter()
+    for text in sentences:
+        for m in _WORD_RE.finditer(text or ""):
+            word = m.group(0)
+            if word == word.lower():
+                counts[word] += 1
+    return counts
+
+
+def normalize_asr_casing(text: str, keep: Iterable[str] = ()) -> str:
     """
-    Une tokens consecutivos separados por un solo espacio (`Open Code`, `REA Agent`).
-    Así el nombre de producto viaja como una sola unidad y el MT no puede partirlo.
+    Baja a minúscula las mayúsculas que el ASR pone a mitad de oración.
+
+    Whisper capitaliza el inicio de cada trozo separado por pausa, así que aparecen
+    'funciona Mais em outro lugar' o 'Utilizar no Hermes Porém'. El modelo de
+    traducción lee una mayúscula a mitad de frase como nombre propio y no la traduce;
+    medido sobre un doblaje real, eso dejó 26 segmentos con portugués sin traducir.
+
+    Se conservan intactos los términos de `keep` (las entidades ya detectadas), las
+    siglas en mayúscula sostenida y los tokens de una sola letra.
     """
-    if len(spans) < 2:
-        return spans
-    merged: list[tuple[int, int, str]] = [spans[0]]
-    for s, e, kind in spans[1:]:
-        ps, pe, pk = merged[-1]
-        if s == pe + 1 and text[pe:s] == " " and pk != "known":
-            merged[-1] = (ps, e, pk)
-        else:
-            merged.append((s, e, kind))
-    return merged
+    if not text:
+        return text
+
+    keep_lower = {k.lower() for k in keep if k}
+    out: list[str] = []
+    cursor = 0
+    for m in _WORD_RE.finditer(text):
+        word = m.group(0)
+        if (
+            len(word) < 2
+            or word.isupper()
+            or word.lower() in keep_lower
+            or not word[0].isupper()
+            or _is_sentence_start(text, m.start())
+        ):
+            continue
+        out.append(text[cursor:m.start()])
+        out.append(word[0].lower() + word[1:])
+        cursor = m.end()
+    if not out:
+        return text
+    out.append(text[cursor:])
+    return "".join(out)
+
+
+def _split_terms(sentences: Sequence[str]) -> tuple[set[str], set[str]]:
+    """
+    Separa las entidades en (estructurales, dudosas).
+
+    Las estructurales se bloquean sin preguntar. Las dudosas son palabras en
+    mayúscula que nunca aparecen en minúscula: pueden ser un nombre propio o una
+    palabra corriente capitalizada por la pausa del reconocimiento de voz. La
+    estadística del lote no las distingue cuando aparecen una sola vez, así que
+    quedan marcadas para que el modelo las juzgue.
+    """
+    texts = [t or "" for t in sentences]
+    lowercase = _lowercase_counts(texts)
+
+    structural: set[str] = set()
+    ambiguous: set[str] = set()
+    for text in texts:
+        for s, e, kind in _find_spans(text, lock_sentence_start=False):
+            token = text[s:e].strip()
+            if not token:
+                continue
+            if kind in _STRUCTURAL_KINDS:
+                structural.add(token)
+            elif kind in _CASE_KINDS and len(token) >= _MIN_TOKEN_LEN:
+                if lowercase.get(token.lower(), 0) == 0:
+                    ambiguous.add(token)
+    return structural, ambiguous
 
 
 def collect_known_terms(sentences: Sequence[str]) -> set[str]:
     """
-    Reúne las entidades que aparecen fuera de inicio de oración en todo el lote.
-    Permite bloquear después esas mismas palabras aunque abran una frase.
+    Reúne las entidades del lote: formas estructurales y palabras que nunca
+    aparecen en minúscula en todo el texto.
+
+    Una palabra que el ASR escribe alguna vez en minúscula es habla corriente, y
+    bloquearla congelaría una función gramatical del idioma de origen dentro de la
+    traducción. Por eso el criterio es la estadística del propio lote y no una lista.
     """
-    known: set[str] = set()
-    for text in sentences:
-        if not text:
-            continue
-        for s, e, _kind in _find_spans(text, lock_sentence_start=False):
-            token = text[s:e].strip()
-            if token:
-                known.add(token)
-    return known
+    structural, ambiguous = _split_terms(sentences)
+    return structural | ambiguous
+
+
+def ambiguous_terms(sentences: Sequence[str]) -> set[str]:
+    """Subconjunto de `collect_known_terms` que necesita el juicio del modelo."""
+    return _split_terms(sentences)[1]
 
 
 def lock_text(text: str, known: Iterable[str] = ()) -> tuple[str, dict[int, str]]:
     """
     Sustituye entidades por placeholders numerados desde 1.
+
+    `known` viene de `collect_known_terms` sobre el lote completo, de modo que una
+    entidad se bloquea también cuando abre oración en este segmento concreto.
 
     Returns:
         (texto_bloqueado, {1: "Ghidra", 2: "12.1", ...})
@@ -167,18 +201,18 @@ def lock_text(text: str, known: Iterable[str] = ()) -> tuple[str, dict[int, str]
     if not text:
         return "", {}
 
-    known_sorted = sorted({k for k in known if k}, key=len, reverse=True)
-    known_spans: list[tuple[int, int, str]] = []
-    if known_sorted:
-        for term in known_sorted:
-            for m in re.finditer(re.escape(term), text):
-                known_spans.append((m.start(), m.end(), "known"))
-        known_spans.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+    terms = {k for k in known if k}
+    if not terms:
+        terms = collect_known_terms([text])
 
-    spans = _find_spans(text, lock_sentence_start=False)
+    spans: list[tuple[int, int, str]] = []
+    for term in sorted(terms, key=len, reverse=True):
+        for m in re.finditer(re.escape(term), text):
+            spans.append((m.start(), m.end(), "known"))
+
     merged: list[tuple[int, int, str]] = []
     last_end = -1
-    for s, e, kind in sorted(spans + known_spans, key=lambda x: (x[0], -(x[1] - x[0]))):
+    for s, e, kind in sorted(spans, key=lambda x: (x[0], -(x[1] - x[0]))):
         if s < last_end:
             continue
         merged.append((s, e, kind))
@@ -238,10 +272,7 @@ def check_entities(locked_source: str, translated: str) -> dict[str, object]:
 
     nums_src = _numbers(locked_source)
     nums_dst = _numbers(translated)
-    if sorted(nums_src) != sorted(nums_dst):
-        number_mismatch = True
-    else:
-        number_mismatch = False
+    number_mismatch = sorted(nums_src) != sorted(nums_dst)
 
     reasons: list[str] = []
     if missing:
