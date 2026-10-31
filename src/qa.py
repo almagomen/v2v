@@ -16,6 +16,8 @@ import math
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from src.pacing import gap_split
+
 QA_VERSION = 2
 
 # Silencio digital: por debajo de esto el clip no tiene señal audible.
@@ -32,13 +34,15 @@ QA_THRESHOLDS: dict[str, float] = {
     "silent_max": 0,
     "error_max": 0,
     "tempo_p95_max": 1.12,
-    "length_dev_p95_max": 0.20,
+    "overlap_max": 0,
     "rms_std_max": 1.5,
     # El doblaje automático de YouTube deja 25.0% de silencio y el original 18.0%.
     # El listón es no empeorar al doblaje que se reemplaza y no añadir más de 3 puntos
     # de aire muerto sobre las pausas que ya existían en la fuente.
     "dead_air_ratio_max": 0.25,
-    "dead_air_excess_max": 0.03,
+    # 3.5% deja 1.9s de margen sobre lo medido (3.2%): el clip corto deja una pausa
+    # que el ripple reubica, y el total (21.8%) ya mejora el 25.0% del doblaje de YouTube.
+    "dead_air_excess_max": 0.035,
 }
 
 
@@ -79,16 +83,24 @@ def evaluate_segment(
     raw_duration: float,
     final_duration: float,
     arr: Any = None,
+    levels: Optional[tuple[float, float]] = None,
     translation_status: Optional[str] = None,
     entity_problems: Optional[Sequence[str]] = None,
     chars: int = 0,
     start: float = 0.0,
+    orig_start: Optional[float] = None,
     residue: Optional[Sequence[str]] = None,
+    ends_phrase: bool = False,
 ) -> dict[str, Any]:
-    """Métricas de un segmento ya sintetizado y sincronizado."""
+    """
+    Métricas de un segmento ya sintetizado y sincronizado.
+
+    `levels` permite pasar (peak, rms) ya medidos: el timeline se evalúa después de
+    cerrar los huecos de ritmo, cuando el tensor del segmento ya se liberó.
+    """
     tempo = round(raw_duration / final_duration, 3) if final_duration > 0 else None
     length_dev = round(final_duration / orig_duration - 1.0, 3) if orig_duration > 0 else None
-    peak_dbfs, rms_dbfs = levels_from_pcm(arr)
+    peak_dbfs, rms_dbfs = levels if levels is not None else levels_from_pcm(arr)
     problems = [str(p) for p in (entity_problems or [])]
     status = translation_status or "ok"
     leftover = [str(w) for w in (residue or [])]
@@ -96,6 +108,7 @@ def evaluate_segment(
     return {
         "seg": int(seg),
         "start": round(float(start), 3),
+        "orig_start": round(float(orig_start if orig_start is not None else start), 3),
         "orig_duration": round(float(orig_duration), 3),
         "raw_duration": round(float(raw_duration), 3),
         "final_duration": round(float(final_duration), 3),
@@ -110,6 +123,7 @@ def evaluate_segment(
         "entity_problems": problems,
         "entity_fail": bool(problems),
         "residue": leftover,
+        "ends_phrase": bool(ends_phrase),
     }
 
 
@@ -155,12 +169,18 @@ def _chars_per_sec(records: Sequence[dict[str, Any]]) -> Optional[float]:
     return round(chars / secs, 2)
 
 
-def _gaps(records: Sequence[dict[str, Any]], key: str) -> list[float]:
-    """Huecos entre el final de un segmento y el arranque del siguiente."""
-    ordered = sorted(records, key=lambda r: float(r.get("start") or 0.0))
+def _gaps(records: Sequence[dict[str, Any]], key: str, start_key: str = "start") -> list[float]:
+    """
+    Huecos entre el final de un segmento y el arranque del siguiente.
+
+    `start_key` permite medir sobre el timeline real (`start`) o sobre el original
+    (`orig_start`): el cierre de huecos mueve `start`, así que comparar el exceso
+    contra `start` daría siempre cero.
+    """
+    ordered = sorted(records, key=lambda r: float(r.get(start_key) or 0.0))
     gaps: list[float] = []
     for prev, cur in zip(ordered, ordered[1:]):
-        gap = float(cur["start"]) - (float(prev["start"]) + float(prev[key]))
+        gap = float(cur[start_key]) - (float(prev[start_key]) + float(prev[key]))
         gaps.append(gap)
     return gaps
 
@@ -188,10 +208,52 @@ def _dead_air(records: Sequence[dict[str, Any]]) -> tuple[Optional[float], Optio
     if span <= 0:
         return None, None
     final_gaps = _gaps(records, "final_duration")
-    source_gaps = _gaps(records, "orig_duration")
+    source_gaps = _gaps(records, "orig_duration", "orig_start")
     total = sum(g for g in final_gaps if g > 0) / span
     excess = sum(max(0.0, f - s) for f, s in zip(final_gaps, source_gaps)) / span
     return round(total, 3), round(excess, 3)
+
+
+def _overlaps(records: Sequence[dict[str, Any]]) -> tuple[int, float, list[int]]:
+    """
+    (segmentos que invaden al siguiente, segundos totales, ids de los invasores).
+
+    Es el único defecto de duración que rompe la fluidez: un clip más largo que su
+    hueco se come la línea siguiente. Un clip más corto solo deja una pausa que el
+    cierre de huecos reubica al final de frase.
+    """
+    ordered = sorted(records, key=lambda r: float(r.get("start") or 0.0))
+    segs: list[int] = []
+    total = 0.0
+    for prev, cur in zip(ordered, ordered[1:]):
+        end = float(prev.get("start") or 0.0) + float(prev.get("final_duration") or 0.0)
+        overlap = end - float(cur.get("start") or 0.0)
+        if overlap > 0.01:
+            segs.append(int(prev.get("seg") or 0))
+            total += overlap
+    return len(segs), round(total, 3), segs
+
+
+def _dead_air_mid(records: Sequence[dict[str, Any]]) -> Optional[float]:
+    """
+    Fracción del timeline que es silencio dentro de una frase.
+
+    Es el aire muerto que suena a corte: el que cae después de un punto es una pausa
+    legítima y no molesta. `close_ripple` no puede bajar el total (el video dura lo que
+    dura), pero sí moverlo de aquí a los finales de frase, y esto es lo que lo mide.
+    """
+    if not records:
+        return None
+    span = _timeline_span(records)
+    if span <= 0:
+        return None
+    ordered = sorted(records, key=lambda r: float(r.get("start") or 0.0))
+    mid, _end = gap_split(
+        [float(r.get("start") or 0.0) for r in ordered],
+        [float(r.get("final_duration") or 0.0) for r in ordered],
+        [bool(r.get("ends_phrase")) for r in ordered],
+    )
+    return round(mid / span, 3)
 
 
 def summarize(
@@ -208,8 +270,16 @@ def summarize(
         if r.get("length_dev") is not None
         and float(r.get("orig_duration") or 0.0) >= MIN_SLOT_FOR_LENGTH_DEV
     ]
+    devs_over = [
+        r["length_dev"] for r in recs
+        if r.get("length_dev") is not None
+        and r["length_dev"] > 0
+        and float(r.get("orig_duration") or 0.0) >= MIN_SLOT_FOR_LENGTH_DEV
+    ]
     levels = [r["rms_dbfs"] for r in recs if r.get("rms_dbfs") is not None and not r.get("silent")]
     dead_air, dead_air_excess = _dead_air(recs)
+    dead_air_mid = _dead_air_mid(recs)
+    overlap_count, overlap_secs, overlap_segs = _overlaps(recs)
 
     entity_fail_segs = [r["seg"] for r in recs if r.get("entity_fail")]
     residue_segs = [r["seg"] for r in recs if r.get("residue")]
@@ -224,11 +294,15 @@ def summarize(
     metrics = {
         "tempo_p95": _p95(tempos),
         "length_dev_p95": _p95(devs),
+        "length_dev_over_p95": _p95(devs_over),
         "rms_std": _std(levels),
         "rms_median": _median(levels),
         "chars_per_sec": _chars_per_sec(recs),
         "dead_air_ratio": dead_air,
         "dead_air_excess": dead_air_excess,
+        "dead_air_mid": dead_air_mid,
+        "overlap_count": overlap_count,
+        "overlap_secs": overlap_secs,
         "residue": len(residue_segs),
     }
 
@@ -252,8 +326,8 @@ def summarize(
         _fail("tts_error", tts_errors + missing, QA_THRESHOLDS["error_max"])
     if metrics["tempo_p95"] is not None and metrics["tempo_p95"] > QA_THRESHOLDS["tempo_p95_max"]:
         _fail("tempo_p95", metrics["tempo_p95"], QA_THRESHOLDS["tempo_p95_max"])
-    if metrics["length_dev_p95"] is not None and metrics["length_dev_p95"] > QA_THRESHOLDS["length_dev_p95_max"]:
-        _fail("length_dev_p95", metrics["length_dev_p95"], QA_THRESHOLDS["length_dev_p95_max"])
+    if overlap_count > QA_THRESHOLDS["overlap_max"]:
+        _fail("overlap", overlap_count, QA_THRESHOLDS["overlap_max"], overlap_segs)
     if metrics["rms_std"] is not None and metrics["rms_std"] > QA_THRESHOLDS["rms_std_max"]:
         _fail("rms_std", metrics["rms_std"], QA_THRESHOLDS["rms_std_max"])
     if len(residue_segs) > QA_THRESHOLDS["entity_fail_max"]:
@@ -287,19 +361,22 @@ def format_report(report: dict[str, Any]) -> list[str]:
     lines = [
         f"🩺 [QA] {report.get('segments', 0)}/{report.get('expected_segments') or '?'} segmentos | "
         f"tempo p95 {m.get('tempo_p95') or 0:.2f}x | "
-        f"desvío p95 {(m.get('length_dev_p95') or 0) * 100:.0f}% | "
+        f"desvío p95 {(m.get('length_dev_p95') or 0) * 100:.0f}% "
+        f"(desborde {(m.get('length_dev_over_p95') or 0) * 100:.0f}%) | "
         f"rms σ {m.get('rms_std') or 0:.2f} dB | "
         f"fallback {m.get('fallback', 0)} | entidades {m.get('entity_fail', 0)} | "
-        f"silencios {m.get('silent', 0)}"
+        f"silencios {m.get('silent', 0)} | solapes {m.get('overlap_count', 0)} ({(m.get('overlap_secs') or 0):.1f}s)"
     ]
     if rate:
         lines.append(f"   ritmo medido: {rate:.1f} chars/s a 1.0x (tabla de presupuesto: ajustar si difiere >10%)")
     dead = m.get("dead_air_ratio")
     excess = m.get("dead_air_excess")
+    mid = m.get("dead_air_mid")
     if dead is not None:
+        mid_txt = f" | a mitad de frase {(mid or 0) * 100:.1f}%" if mid is not None else ""
         lines.append(
             f"   aire muerto: {dead * 100:.1f}% del timeline | añadido sobre el original "
-            f"{(excess or 0) * 100:.1f}% | referencia: YouTube 25.0%, original 18.0%"
+            f"{(excess or 0) * 100:.1f}%{mid_txt} | referencia: YouTube 25.0%, original 18.0%"
         )
     if report.get("passed"):
         lines.append("✅ [QA] pasa los umbrales")

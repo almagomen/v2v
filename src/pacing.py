@@ -36,6 +36,21 @@ REWRITE_SHORT = 0.15
 REWRITE_LONG = 0.25
 MIN_WORDS_TO_REWRITE = 3
 
+# ─── Cierre de ripple ────────────────────────────────────────────────────────────
+# Un hueco a mitad de frase se oye como un corte de audio; el mismo hueco tras un
+# punto es una pausa legítima. Se adelanta el arranque del clip siguiente para
+# comerse el silencio añadido, se conserva un respiro mínimo para que las palabras no
+# se peguen y el corrimiento acumulado tiene tope para no despegar la voz de la
+# imagen. En cada punto se devuelve solo una parte del corrimiento: devolverlo entero
+# convertiría una pausa natural en un silencio de más de un segundo.
+RIPPLE_GAP = 0.30
+RIPPLE_KEEP = 0.12
+RIPPLE_STEP_MAX = 0.45
+RIPPLE_SHIFT_MAX = 1.20
+RIPPLE_PAYBACK_MAX = 0.35
+
+_TERMINAL_RE = re.compile(r"[.!?…]+[\"'»)\]]*\s*$")
+
 _TAG_RE = re.compile(r"\[[^\]]*\]")
 _MARKER_RE = re.compile(r"⟦E\d+⟧")
 _SPACE_RE = re.compile(r"\s+")
@@ -125,6 +140,89 @@ def needs_rewrite(text: str, lang: str, seconds: float, lock_map: Optional[dict[
         return False
     dev = fit_deviation(text, lang, seconds, lock_map)
     return dev < -REWRITE_SHORT or dev > REWRITE_LONG
+
+
+def ends_sentence(text: str) -> bool:
+    """True si el texto cierra frase: tras un punto la pausa es intencional."""
+    return bool(_TERMINAL_RE.search(visible_text(text)))
+
+
+def close_ripple(
+    starts: list[float],
+    durations: list[float],
+    texts: list[str],
+    source_ends: list[float],
+) -> list[float]:
+    """
+    Quita el silencio que añadió el doblaje y lo devuelve a las pausas legítimas.
+
+    El silencio total no se puede eliminar: el video dura lo que dura. Lo que sí se
+    puede es reubicarlo. Un hueco dentro de una idea suena a corte de audio; el mismo
+    silencio después de un punto suena a pausa. Por eso el corrimiento se acumula
+    solo mientras la frase sigue abierta y se paga en el siguiente punto: ahí el
+    segmento vuelve a su sitio y la pausa absorbe el desplazamiento.
+
+    Solo se cierra el silencio que no existía en el original (`source_ends`): si la
+    fuente ya tenía una pausa de dos segundos, cerrarla dejaría el doblaje más rápido
+    que el habla original, que es un defecto distinto.
+
+    El tope `RIPPLE_SHIFT_MAX` acota cuánto puede adelantarse la voz dentro de una
+    cadena, para no despegarla de la imagen más de lo tolerable.
+
+    Args:
+        starts: arranque original de cada segmento, en segundos.
+        durations: duración final del audio sintetizado de cada segmento.
+        texts: texto hablado de cada segmento (decide si la pausa es legítima).
+        source_ends: fin del habla original de cada segmento, en segundos.
+
+    Returns:
+        Nuevos arranques, en el mismo orden que la entrada.
+    """
+    n = len(starts)
+    if not (len(durations) == n and len(texts) == n and len(source_ends) == n):
+        raise ValueError("starts, durations, texts y source_ends deben tener la misma longitud")
+
+    new = [float(s) for s in starts]
+    order = sorted(range(n), key=lambda i: new[i])
+    shift = 0.0
+    for prev, cur in zip(order, order[1:]):
+        if ends_sentence(texts[prev]):
+            shift = max(0.0, shift - RIPPLE_PAYBACK_MAX)
+        else:
+            gap_i = float(starts[cur]) - (float(starts[prev]) + float(durations[prev]))
+            if gap_i > RIPPLE_GAP:
+                source_gap = float(starts[cur]) - float(source_ends[prev])
+                closable = gap_i - max(source_gap, RIPPLE_KEEP)
+                if closable > 0:
+                    shift = min(shift + min(closable, RIPPLE_STEP_MAX), RIPPLE_SHIFT_MAX)
+        new[cur] = round(float(starts[cur]) - shift, 3)
+    return new
+
+
+def gap_split(
+    starts: list[float],
+    durations: list[float],
+    closed: list[bool],
+) -> tuple[float, float]:
+    """
+    (silencio dentro de frase, silencio en pausas de fin de frase), en segundos.
+
+    Es la medida que importa para el ritmo: el total no cambia al mover clips, pero
+    el reparto sí. El silencio interno suena a corte; el de fin de frase, a pausa.
+    """
+    if not (len(durations) == len(starts) and len(closed) == len(starts)):
+        raise ValueError("starts, durations y closed deben tener la misma longitud")
+    mid = 0.0
+    end = 0.0
+    for i in range(len(starts) - 1):
+        gap = float(starts[i + 1]) - (float(starts[i]) + float(durations[i]))
+        if gap <= 0:
+            continue
+        if closed[i]:
+            end += gap
+        else:
+            mid += gap
+    return round(mid, 3), round(end, 3)
 
 
 def build_fit_prompt(items: dict[str, dict[str, str]], lang_name: str) -> str:

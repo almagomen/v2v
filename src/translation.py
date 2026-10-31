@@ -19,6 +19,15 @@ from src.entities import (
 )
 from src.lang_utils import shared_tokens
 from src.pacing import budget_for, build_fit_prompt, fit_deviation, needs_rewrite, speech_rate
+from src.pronunciation import (
+    MAX_TERMS_PER_CALL,
+    apply_table,
+    build_respelling_prompt,
+    consolidate,
+    missing_terms,
+    norm_key,
+    validate_rule,
+)
 
 LANGUAGE_NAMES = {
     "es": "Español",
@@ -619,6 +628,18 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 phonemes_map = {i: resolved[i]["phonemes"] for i in range(total_count)}
                 duration = time.perf_counter() - t_start
 
+                # ─── Pronunciación: una regla por palabra y cobertura de las bloqueadas ───
+                # Corre antes de la etiqueta de emoción para que la clave case con el
+                # texto tal como lo dirá la voz, sin prefijos de control.
+                phonemes_map = _finalize_pronunciations(
+                    phonemes_map,
+                    aligned_list,
+                    lock_maps,
+                    target_lang,
+                    target_lang_name,
+                    lambda prompt: _call_model(client, model, is_gemma, prompt),
+                )
+
                 # Etiqueta de emoción al frente (después del rescate: el modelo no debe verla)
                 if initial_emotion_per_sentence and aligned_list:
                     tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
@@ -679,6 +700,72 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
     if return_details:
         return None, None
     return None
+
+
+def _finalize_pronunciations(
+    phonemes_map: dict[int, dict[str, str]],
+    texts: list[str],
+    lock_maps: list[dict[int, str]],
+    target_lang: str,
+    target_lang_name: str,
+    call: Callable[[str], str],
+) -> dict[int, dict[str, str]]:
+    """
+    Consolida las reglas del lote y cubre los términos que el traductor no pudo ver.
+
+    El modelo escribe la pronunciación segmento a segmento, sin memoria entre bloques:
+    la misma palabra puede salir con dos respellings y el video suena inconsistente.
+    Además las entidades bloqueadas viajan como marcadores opacos, así que el
+    traductor nunca las ve y no puede escribir su pronunciación — son justo las
+    palabras anglosajonas que suenan mal.
+
+    Returns:
+        {índice: {clave: respelling}} listo para `pronunciation_dictionary`.
+    """
+    tables = [phonemes_map.get(i) or {} for i in range(len(texts))]
+    chosen, display, conflicts = consolidate(tables, target_lang)
+
+    entity_terms = [term for mapping in lock_maps for term in mapping.values()]
+    pending = missing_terms(texts, entity_terms, chosen)
+    extra: dict[str, dict] = {}
+    for start in range(0, len(pending), MAX_TERMS_PER_CALL):
+        batch = pending[start : start + MAX_TERMS_PER_CALL]
+        try:
+            parsed = _loads_loose(
+                call(build_respelling_prompt(batch, target_lang_name)),
+                "[Pronunciación] respelling",
+            )
+        except Exception as exc:
+            print(f"⚠️ [Pronunciación] respelling omitido ({exc})", flush=True)
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        for term, value in parsed.items():
+            if value is None:
+                continue
+            rule = validate_rule(str(term), str(value), target_lang)
+            if rule:
+                extra[norm_key(rule["key"])] = rule
+
+    final = {
+        i: apply_table(texts[i], tables[i], chosen, display, extra)
+        for i in range(len(texts))
+    }
+
+    applied = {(key, value) for table in final.values() for key, value in table.items()}
+    if applied:
+        segments = sum(1 for table in final.values() if table)
+        print(
+            f"🔤 [Pronunciación] {len(applied)} regla(s) en {segments} segmento(s)",
+            flush=True,
+        )
+        for key, value in sorted(applied):
+            print(f"   {key} → {value}", flush=True)
+    if conflicts:
+        print(f"⚠️ [Pronunciación] {len(conflicts)} palabra(s) con dos respellings; gana el más frecuente:", flush=True)
+        for line in conflicts[:10]:
+            print(f"   {line}", flush=True)
+    return final
 
 
 def _loads_loose(raw_text: str, log_tag: str = "[JSON]") -> Any:

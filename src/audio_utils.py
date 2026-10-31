@@ -7,8 +7,8 @@ from typing import Optional, Tuple, Any
 
 import numpy as np
 
-from src.qa import evaluate_segment, format_report, save_report, summarize
-from src.pacing import visible_text
+from src.qa import evaluate_segment, format_report, levels_from_pcm, save_report, summarize
+from src.pacing import close_ripple, ends_sentence, gap_split, visible_text
 
 # Estrategia de sincronía del doblaje (no configurables por API: describen el criterio).
 SYNC_TOLERANCE = 0.94   # por debajo de este ratio se rellena con pausas internas
@@ -706,6 +706,7 @@ def clone_voice_segments(
     times: list[int] = []
     path_es: list[Path] = []
     qa_records: list[dict] = []
+    prepared: list[dict] = []
     tts_errors = 0
 
     # Obtener duración total del video de forma exhaustiva y precisa
@@ -838,12 +839,10 @@ def clone_voice_segments(
             tts_errors += 1
             continue
 
-        # Actualizar metadatos del segmento: preservando las coordenadas del audio original intactas
+        # Coordenadas del original intactas: el arranque final se decide al cerrar huecos
         text_dict["orig_start"] = round(float(text_dict.get("orig_start", start_time)), 3)
         text_dict["orig_end"] = round(float(text_dict.get("orig_end", start_time + dur_en)), 3)
         text_dict["orig_duration"] = round(float(text_dict.get("orig_duration", dur_en)), 3)
-        text_dict["start"] = round(start_time, 3)
-        text_dict["end"] = round(start_time + final_dur, 3)
         text_dict["duration"] = round(final_dur, 3)
 
         # Línea métrica
@@ -866,21 +865,71 @@ def clone_voice_segments(
             print(line)
         print()
 
-        path_es.append(audio_es_path)
-        start_samples = int(start_time * rate)
-        times.append(start_samples)
+        prepared.append({
+            "text_dict": text_dict,
+            "seq_num": seq_num,
+            "text": text,
+            "start": start_time,
+            "dur_en": dur_en,
+            "orig_end": float(text_dict["orig_end"]),
+            "raw_dur_es": raw_dur_es,
+            "final_dur": final_dur,
+            "levels": levels_from_pcm(arr),
+            "audio_path": audio_es_path,
+            "rate": rate,
+            "chars": len(visible_text(text)),
+        })
 
+    # ─── Cierre de ripple: el silencio de mitad de frase se mueve a las pausas ───
+    starts = close_ripple(
+        [item["start"] for item in prepared],
+        [item["final_dur"] for item in prepared],
+        [item["text"] for item in prepared],
+        [item["orig_end"] for item in prepared],
+    )
+    before_mid, _before_end = gap_split(
+        [item["start"] for item in prepared],
+        [item["final_dur"] for item in prepared],
+        [ends_sentence(item["text"]) for item in prepared],
+    )
+    moved = 0
+    for item, new_start in zip(prepared, starts):
+        if item["start"] - new_start > 0.001:
+            moved += 1
+        item["start"] = new_start
+    if moved:
+        after_mid, _after_end = gap_split(
+            [item["start"] for item in prepared],
+            [item["final_dur"] for item in prepared],
+            [ends_sentence(item["text"]) for item in prepared],
+        )
+        print(
+            f"🔗 [Ritmo] {moved} segmento(s) adelantado(s): silencio interno "
+            f"{before_mid:.1f}s → {after_mid:.1f}s (el resto pasa a pausas de fin de frase)",
+            flush=True,
+        )
+
+    for item in prepared:
+        text_dict = item["text_dict"]
+        start_time = item["start"]
+        final_dur = item["final_dur"]
+        text_dict["start"] = round(start_time, 3)
+        text_dict["end"] = round(start_time + final_dur, 3)
+        path_es.append(item["audio_path"])
+        times.append(int(start_time * item["rate"]))
         qa_records.append(evaluate_segment(
-            seg=seq_num,
+            seg=item["seq_num"],
             start=start_time,
-            orig_duration=dur_en,
-            raw_duration=raw_dur_es,
+            orig_start=float(text_dict["orig_start"]),
+            orig_duration=item["dur_en"],
+            raw_duration=item["raw_dur_es"],
             final_duration=final_dur,
-            arr=arr,
+            levels=item["levels"],
             translation_status=text_dict.get("translation_status"),
             entity_problems=text_dict.get("entity_fail"),
-            chars=len(visible_text(text)),
+            chars=item["chars"],
             residue=text_dict.get("untranslated"),
+            ends_phrase=ends_sentence(item["text"]),
         ))
 
     if qa_records:
@@ -894,4 +943,4 @@ def clone_voice_segments(
             print(line)
         print()
 
-    return path_es, times, rate
+    return path_es, times, (prepared[-1]["rate"] if prepared else 0)

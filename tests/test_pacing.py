@@ -7,13 +7,21 @@ from src.pacing import (
     DEFAULT_RATE,
     FIT_MAX,
     FIT_MIN,
+    RIPPLE_GAP,
+    RIPPLE_PAYBACK_MAX,
+    RIPPLE_KEEP,
+    RIPPLE_SHIFT_MAX,
+    RIPPLE_STEP_MAX,
     REWRITE_LONG,
     REWRITE_SHORT,
     SPEECH_RATES,
     budget_for,
     build_fit_prompt,
+    close_ripple,
+    ends_sentence,
     estimate_seconds,
     fit_deviation,
+    gap_split,
     needs_rewrite,
     primary_lang,
     speech_rate,
@@ -134,6 +142,118 @@ class TestPromptDeEncaje(unittest.TestCase):
         prompt = build_fit_prompt(items, "español")
         bloque = prompt.split("Entrada:\n", 1)[1].split("\n\nDevuelve", 1)[0]
         self.assertEqual(json.loads(bloque), items)
+
+
+class TestFinDeFrase(unittest.TestCase):
+    def test_puntuacion_terminal_cierra_frase(self):
+        for texto in ("Ya está.", "¿Vamos?", "¡Claro!", "Bueno…", "Dijo: «sí.»"):
+            with self.subTest(texto=texto):
+                self.assertTrue(ends_sentence(texto))
+
+    def test_coma_y_dos_puntos_no_cierran(self):
+        for texto in ("Primero, abre el panel", "Haz esto:", "y después"):
+            with self.subTest(texto=texto):
+                self.assertFalse(ends_sentence(texto))
+
+    def test_etiqueta_de_emocion_no_tapa_el_punto(self):
+        self.assertTrue(ends_sentence("[excited] Listo."))
+        self.assertFalse(ends_sentence("[excited] Listo"))
+
+
+class TestCierreDeRipple(unittest.TestCase):
+    def test_hueco_anadido_por_el_doblaje_se_cierra(self):
+        """El clip salió corto: la fuente habló hasta 2.2s y el TTS acabó en 1.0s."""
+        nuevos = close_ripple(
+            [0.0, 3.0], [1.0, 1.0], ["Abre el panel", "y pulsa enter"], [2.2, 4.0]
+        )
+        self.assertAlmostEqual(nuevos[1], 3.0 - RIPPLE_STEP_MAX, places=3)
+
+    def test_pausa_del_original_se_respeta(self):
+        """Si la fuente ya callaba 0.8s, no hay silencio añadido que quitar."""
+        nuevos = close_ripple(
+            [0.0, 3.0], [2.2, 1.0], ["Abre el panel", "y pulsa enter"], [2.2, 4.0]
+        )
+        self.assertEqual(nuevos[1], 3.0)
+
+    def test_respiro_minimo_conservado(self):
+        """Con 0.5s de exceso se conserva el respiro de 0.12s entre palabras."""
+        nuevos = close_ripple(
+            [0.0, 3.0], [2.5, 1.0], ["Abre el panel", "y pulsa enter"], [2.95, 4.0]
+        )
+        self.assertAlmostEqual(nuevos[1] - 2.5, RIPPLE_KEEP, places=3)
+
+    def test_frase_cerrada_conserva_la_pausa(self):
+        nuevos = close_ripple(
+            [0.0, 3.0], [1.0, 1.0], ["Abre el panel.", "Otra idea"], [2.2, 4.0]
+        )
+        self.assertEqual(nuevos[1], 3.0)
+
+    def test_hueco_pequeno_no_se_toca(self):
+        nuevos = close_ripple(
+            [0.0, 2.3], [2.2, 1.0], ["Abre el panel", "y pulsa enter"], [2.0, 3.0]
+        )
+        self.assertEqual(nuevos[1], 2.3)
+
+    def test_solape_no_se_toca(self):
+        nuevos = close_ripple(
+            [0.0, 2.0], [2.4, 1.0], ["Abre el panel", "y pulsa enter"], [2.2, 3.0]
+        )
+        self.assertEqual(nuevos[1], 2.0)
+
+    def test_corrimiento_acumulado_tiene_tope(self):
+        """Diez segmentos cortos en cadena no pueden desincronizar la voz 4 segundos."""
+        starts = [i * 2.0 for i in range(11)]
+        durations = [0.5] * 11
+        texts = ["sigue hablando"] * 10 + ["fin"]
+        source_ends = [i * 2.0 + 1.8 for i in range(11)]
+        nuevos = close_ripple(starts, durations, texts, source_ends)
+        for original, nuevo in zip(starts, nuevos):
+            self.assertLessEqual(original - nuevo, RIPPLE_SHIFT_MAX + 1e-6)
+
+    def test_el_drift_se_arrastra_hasta_el_punto(self):
+        """Cerrar un hueco mueve también el resto: el silencio no reaparece al lado."""
+        starts = [0.0, 3.0, 6.0]
+        durations = [1.0, 1.0, 1.0]
+        texts = ["Abre el panel", "y pulsa enter", "ahora"]
+        source_ends = [2.2, 5.2, 7.0]
+        nuevos = close_ripple(starts, durations, texts, source_ends)
+        self.assertAlmostEqual(nuevos[1], 3.0 - RIPPLE_STEP_MAX, places=3)
+        self.assertAlmostEqual(nuevos[2], 5.1, places=3)
+
+    def test_el_punto_devuelve_parte_del_corrimiento(self):
+        """En un punto se paga solo una parte: devolverlo entero alarga la pausa 1.2s."""
+        starts = [0.0, 3.0, 6.0]
+        durations = [1.0, 1.0, 1.0]
+        texts = ["Abre el panel", "y pulsa enter.", "Otra idea"]
+        source_ends = [2.2, 5.2, 7.0]
+        nuevos = close_ripple(starts, durations, texts, source_ends)
+        self.assertAlmostEqual(nuevos[1], 3.0 - RIPPLE_STEP_MAX, places=3)
+        self.assertAlmostEqual(nuevos[2], 6.0 - (RIPPLE_STEP_MAX - RIPPLE_PAYBACK_MAX), places=3)
+
+    def test_la_pausa_crece_como_mucho_el_pago(self):
+        starts = [0.0, 3.0, 6.0, 9.0]
+        durations = [1.0] * 4
+        texts = ["Uno", "Dos.", "Tres", "Cuatro"]
+        source_ends = [2.2, 5.2, 8.2, 10.0]
+        nuevos = close_ripple(starts, durations, texts, source_ends)
+        for i in (1, 2):
+            antes = starts[i + 1] - (starts[i] + durations[i])
+            despues = nuevos[i + 1] - (nuevos[i] + durations[i])
+            self.assertLessEqual(despues - antes, RIPPLE_PAYBACK_MAX + 1e-6)
+
+
+class TestRepartoDeSilencio(unittest.TestCase):
+    def test_separa_interno_de_fin_de_frase(self):
+        mid, end = gap_split([0.0, 3.0, 7.0], [2.2, 2.2, 1.0], [False, True, False])
+        self.assertAlmostEqual(mid, 0.8, places=3)
+        self.assertAlmostEqual(end, 1.8, places=3)
+
+    def test_solape_no_cuenta_como_silencio(self):
+        self.assertEqual(gap_split([0.0, 1.0], [2.0, 1.0], [False, False]), (0.0, 0.0))
+
+    def test_longitudes_incoherentes_fallan(self):
+        with self.assertRaises(ValueError):
+            gap_split([0.0, 1.0], [1.0], [False, False])
 
 
 if __name__ == "__main__":

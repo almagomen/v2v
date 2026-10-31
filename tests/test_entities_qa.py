@@ -150,6 +150,7 @@ class TestQaGate(unittest.TestCase):
         arr = [0.0] * 100 if silent else [0.3, -0.3] * 50
         rec = evaluate_segment(
             seg=seg,
+            start=float(seg - 1) * 2.4,
             orig_duration=2.0,
             raw_duration=2.0 * tempo,
             final_duration=2.0,
@@ -196,9 +197,9 @@ class TestQaGate(unittest.TestCase):
     def test_ritmo_medido_calibra_la_tabla(self):
         """chars/raw_duration: la señal para corregir SPEECH_RATES tras un render real."""
         recs = [
-            evaluate_segment(seg=1, orig_duration=5.0, raw_duration=5.0,
+            evaluate_segment(seg=1, start=0.0, orig_duration=5.0, raw_duration=5.0,
                              final_duration=5.0, arr=[0.3, -0.3] * 50, chars=80),
-            evaluate_segment(seg=2, orig_duration=5.0, raw_duration=5.0,
+            evaluate_segment(seg=2, start=6.0, orig_duration=5.0, raw_duration=5.0,
                              final_duration=5.0, arr=[0.3, -0.3] * 50, chars=80),
         ]
         report = summarize(recs, expected_segments=2)
@@ -214,10 +215,11 @@ class TestQaGate(unittest.TestCase):
         report = summarize(recs, expected_segments=5)
         self.assertTrue(report["passed"], report["failures"])
 
-    def _timed(self, seg, start, final, orig, residue=None):
+    def _timed(self, seg, start, final, orig, residue=None, ends_phrase=False):
         return evaluate_segment(
             seg=seg, start=start, orig_duration=orig, raw_duration=final,
             final_duration=final, arr=[0.3, -0.3] * 50, chars=40, residue=residue,
+            ends_phrase=ends_phrase,
         )
 
     def test_aire_muerto_no_cuenta_las_pausas_del_original(self):
@@ -253,6 +255,66 @@ class TestQaGate(unittest.TestCase):
         report = summarize(recs, expected_segments=1)
         self.assertFalse(report["passed"])
         self.assertIn("residue", [f["metric"] for f in report["failures"]])
+
+    def test_aire_muerto_interno_ignora_las_pausas_de_fin_de_frase(self):
+        """Tras un punto el silencio es pausa; dentro de la frase es un corte."""
+        recs = [
+            self._timed(1, 0.0, final=2.0, orig=2.0, ends_phrase=False),
+            self._timed(2, 4.0, final=2.0, orig=2.0, ends_phrase=True),
+            self._timed(3, 10.0, final=2.0, orig=2.0, ends_phrase=False),
+        ]
+        report = summarize(recs, expected_segments=3)
+        # span 12s: 2s internos (seg 1→2) + 4s de pausa legítima (seg 2→3)
+        self.assertAlmostEqual(report["metrics"]["dead_air_mid"], 2.0 / 12.0, places=3)
+        self.assertAlmostEqual(report["metrics"]["dead_air_ratio"], 6.0 / 12.0, places=3)
+
+    def test_aire_muerto_interno_es_informativo(self):
+        """Un build con silencio interno alto no debe fallar el gate por esta métrica."""
+        recs = [
+            self._timed(1, 0.0, final=1.0, orig=1.0, ends_phrase=False),
+            self._timed(2, 5.0, final=1.0, orig=1.0, ends_phrase=False),
+        ]
+        report = summarize(recs, expected_segments=2)
+        self.assertIn("dead_air_mid", report["metrics"])
+        self.assertNotIn("dead_air_mid", [f["metric"] for f in report["failures"]])
+
+
+    def test_exceso_se_mide_contra_el_arranque_original(self):
+        """Adelantar un clip no puede falsear el hueco que añadió el doblaje."""
+        recs = [
+            evaluate_segment(seg=1, start=0.0, orig_start=0.0, orig_duration=2.0,
+                             raw_duration=1.0, final_duration=1.0, arr=[0.3, -0.3] * 50),
+            evaluate_segment(seg=2, start=2.55, orig_start=3.0, orig_duration=1.0,
+                             raw_duration=1.0, final_duration=1.0, arr=[0.3, -0.3] * 50),
+        ]
+        report = summarize(recs, expected_segments=2)
+        # hueco final 1.55s contra 1.0s de la fuente, sobre un span de 3.55s
+        self.assertAlmostEqual(report["metrics"]["dead_air_excess"], 0.55 / 3.55, places=3)
+
+    def test_solape_con_el_siguiente_bloquea(self):
+        """Un clip que invade la línea siguiente rompe la fluidez; eso sí bloquea."""
+        recs = [
+            evaluate_segment(seg=1, start=0.0, orig_duration=2.0, raw_duration=2.5,
+                             final_duration=2.5, arr=[0.3, -0.3] * 50),
+            evaluate_segment(seg=2, start=2.0, orig_duration=2.0, raw_duration=2.0,
+                             final_duration=2.0, arr=[0.3, -0.3] * 50),
+        ]
+        report = summarize(recs, expected_segments=2)
+        self.assertEqual(report["metrics"]["overlap_count"], 1)
+        self.assertAlmostEqual(report["metrics"]["overlap_secs"], 0.5, places=3)
+        self.assertIn("overlap", [f["metric"] for f in report["failures"]])
+        self.assertFalse(report["passed"])
+
+    def test_desborde_absorbido_por_la_pausa_no_bloquea(self):
+        recs = [
+            evaluate_segment(seg=1, start=0.0, orig_duration=1.0, raw_duration=1.4,
+                             final_duration=1.4, arr=[0.3, -0.3] * 50),
+            evaluate_segment(seg=2, start=2.0, orig_duration=1.0, raw_duration=1.0,
+                             final_duration=1.0, arr=[0.3, -0.3] * 50),
+        ]
+        report = summarize(recs, expected_segments=2)
+        self.assertEqual(report["metrics"]["overlap_count"], 0)
+        self.assertNotIn("overlap", [f["metric"] for f in report["failures"]])
 
 
 if __name__ == "__main__":

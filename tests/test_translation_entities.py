@@ -35,6 +35,7 @@ class _FakeInteractions:
         self.prompts: list[str] = []
         self.judge_words: list[str] = []
         self.judge_leaks: list[str] = []
+        self.respellings: dict[str, str | None] = {}
 
     def create(self, **kwargs):
         prompt = str(kwargs.get("input", ""))
@@ -45,14 +46,21 @@ class _FakeInteractions:
         if '"fugas"' in prompt:
             self.judge_calls += 1
             return SimpleNamespace(output_text=json.dumps({"fugas": self.judge_leaks}))
+        if '"respelling"' in prompt:
+            self.judge_calls += 1
+            return SimpleNamespace(output_text=json.dumps(self.respellings))
         text = self.responses[min(self.calls, len(self.responses) - 1)]
         self.calls += 1
         return SimpleNamespace(output_text=text)
 
     @property
     def translation_prompts(self) -> list[str]:
-        """Prompts de traducción, sin los juicios de idioma."""
-        return [p for p in self.prompts if '"palabras"' not in p and '"fugas"' not in p]
+        """Prompts de traducción, sin los juicios ni el respelling."""
+        return [
+            p
+            for p in self.prompts
+            if '"palabras"' not in p and '"fugas"' not in p and '"respelling"' not in p
+        ]
 
 
 class _FakeClient:
@@ -69,12 +77,14 @@ def _run(
     sentences: list[str],
     judge_leaks: list[str] | None = None,
     judge_words: list[str] | None = None,
+    respellings: dict[str, str | None] | None = None,
 ) -> tuple[list[str], list[dict], _FakeClient]:
     _FakeClient.instances.clear()
     fake = _FakeClient("k")
     fake.interactions.responses = responses
     fake.interactions.judge_leaks = list(judge_leaks or [])
     fake.interactions.judge_words = list(judge_words or [])
+    fake.interactions.respellings = dict(respellings or {})
     meta = [{"seg": i + 1} for i in range(len(sentences))]
     with patch("src.translation.get_google_api_keys", return_value=["test-key"]), \
          patch("src.translation.genai.Client", lambda api_key: fake):
@@ -85,7 +95,8 @@ def _run(
             segments_meta=meta,
             return_details=True,
         )
-    texts, _phonemes = result
+    texts, phonemes = result
+    fake.phonemes = phonemes
     return texts, meta, fake
 
 
@@ -175,6 +186,33 @@ class TestEntityPipeline(unittest.TestCase):
 
         self.assertEqual(fake.interactions.calls, 1)
         self.assertEqual(texts[0], "No funciona Mais en otro lugar")
+
+    def test_pronunciacion_se_consolida_y_cubre_la_entidad_bloqueada(self):
+        """Misma palabra en dos bloques: una sola regla; y la entidad bloqueada recibe la suya."""
+        sentences = ["Abre o Ghidra e usa o npm.", "Instala com npm no desktop."]
+        part1 = {
+            "1": {"text": "Abre el ⟦E1⟧ y usa el npm.", "phonemes": {"npm": "ene-pe-eme"}},
+            "2": {"text": "Instala con npm en el desktop.", "phonemes": {"npm": "ene-pe-emee", "desktop": "désk-top"}},
+        }
+        texts, meta, fake = _run(
+            [json.dumps(part1)],
+            sentences,
+            respellings={"Ghidra": "guidra", "npm": "ene-pe-eme", "Desktop": "désk-top"},
+        )
+
+        self.assertEqual(meta[0]["phonemes"], {"npm": "ene-pe-eme", "Ghidra": "guidra"})
+        self.assertEqual(meta[1]["phonemes"], {"npm": "ene-pe-eme", "desktop": "désk-top"})
+        self.assertEqual(texts[0], "Abre el Ghidra y usa el npm.")
+
+    def test_respelling_invalido_no_llega_al_diccionario(self):
+        """Un valor con dígrafos ingleses sonaría peor que el original: se descarta."""
+        sentences = ["Abre o Ghidra agora."]
+        good = {"1": {"text": "Abre el ⟦E1⟧ ahora."}}
+        _texts, meta, _fake = _run(
+            [json.dumps(good)], sentences, respellings={"Ghidra": "ghidra-th"}
+        )
+
+        self.assertEqual(meta[0]["phonemes"], {})
 
     def test_rescate_de_residuo_que_no_limpia_se_descarta(self):
         sentences = ["Ela não funciona Mais em outro lugar"]
