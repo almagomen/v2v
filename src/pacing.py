@@ -11,7 +11,8 @@ El módulo es puro: sin red, sin torch, sin genai. Se testea con `unittest` solo
 
 import json
 import re
-from typing import Optional
+from collections import Counter
+from typing import Mapping, Optional
 
 # (sílabas por segundo, caracteres por segundo) en locución de doblaje.
 SPEECH_RATES: dict[str, tuple[float, float]] = {
@@ -35,6 +36,10 @@ FIT_MAX = 1.10
 REWRITE_SHORT = 0.15
 REWRITE_LONG = 0.25
 MIN_WORDS_TO_REWRITE = 3
+
+# Mejora mínima de desviación para aceptar un texto reescrito. Sin este margen, un
+# ajuste de 0.01 contaba como avance y dejaba pasar textos que seguían sin caber.
+FIT_MIN_GAIN = 0.02
 
 # ─── Cierre de ripple ────────────────────────────────────────────────────────────
 # Un hueco a mitad de frase se oye como un corte de audio; el mismo hueco tras un
@@ -229,6 +234,18 @@ def gap_split(
     return round(mid, 3), round(end, 3)
 
 
+def echoed_texts(fitted: Mapping[str, str]) -> set[str]:
+    """
+    Valores que la pasada de encaje repitió para claves distintas.
+
+    El modelo devuelve a veces la misma cadena en todas las entradas (eco de la
+    plantilla del prompt). Un texto idéntico para originales distintos no es una
+    traducción, así que se descarta antes de llegar al TTS.
+    """
+    counts = Counter(v.strip() for v in fitted.values())
+    return {text for text, n in counts.items() if n > 1 and text}
+
+
 def build_fit_prompt(items: dict[str, dict[str, str]], lang_name: str) -> str:
     """
     Prompt de la pasada de encaje. `items` = {"1": {"texto": ..., "objetivo": ...}}.
@@ -253,6 +270,6 @@ de su rango, sin excepciones:
 Entrada:
 {json.dumps(items, indent=2, ensure_ascii=False)}
 
-Devuelve únicamente un JSON con las mismas claves:
-{{"1": "texto ajustado", "2": "texto ajustado"}}"""
+Devuelve únicamente un objeto JSON con las mismas claves de entrada y, como valor,
+el texto final ya ajustado en {lang_name}. No repitas esta instrucción como valor."""
 

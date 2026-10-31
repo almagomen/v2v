@@ -18,6 +18,7 @@ from src.pacing import (
     budget_for,
     build_fit_prompt,
     close_ripple,
+    echoed_texts,
     ends_sentence,
     estimate_seconds,
     fit_deviation,
@@ -130,6 +131,20 @@ class TestNecesitaReescritura(unittest.TestCase):
 
 
 class TestPromptDeEncaje(unittest.TestCase):
+    def test_no_ofrece_un_ejemplo_literal(self):
+        """Un ejemplo literal en el prompt se colaba como texto en el TTS."""
+        prompt = build_fit_prompt({"1": {"texto": "Hola", "objetivo": "10-12 caracteres"}}, "español")
+        self.assertNotIn("texto ajustado", prompt)
+
+    def test_descarta_el_texto_repetido_entre_segmentos(self):
+        """Misma cadena para claves distintas = eco de la plantilla, no traducción."""
+        fitted = {"1": "texto ajustado", "2": "texto ajustado", "3": "Otra cosa distinta."}
+        self.assertEqual(echoed_texts(fitted), {"texto ajustado"})
+
+    def test_no_descarta_textos_distintos(self):
+        self.assertEqual(echoed_texts({"1": "Uno.", "2": "Dos."}), set())
+
+
     def test_incluye_objetivo_y_reglas(self):
         items = {"1": {"texto": "Hola", "objetivo": "150-176 caracteres", "estado": "corto"}}
         prompt = build_fit_prompt(items, "español")

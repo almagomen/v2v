@@ -18,7 +18,7 @@ from src.entities import (
     restore_text,
 )
 from src.lang_utils import shared_tokens
-from src.pacing import budget_for, build_fit_prompt, fit_deviation, needs_rewrite, speech_rate
+from src.pacing import FIT_MIN_GAIN, budget_for, build_fit_prompt, echoed_texts, fit_deviation, needs_rewrite, speech_rate
 from src.pronunciation import (
     MAX_TERMS_PER_CALL,
     apply_table,
@@ -546,17 +546,23 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 if offenders:
                     print(f"⏱️ [Encaje] bloque {chunk_no}: {len(offenders)} segmento(s) fuera de rango; ajustando...", flush=True)
                     fitted = _fit_retry(client, model, is_gemma, offenders, target_lang_name)
+                    # El modelo devuelve a veces la misma cadena para entradas distintas
+                    # (eco de la plantilla del prompt). Un texto idéntico para originales
+                    # distintos no es una traducción: se descarta antes de aplicarlo.
+                    repetidos = echoed_texts(fitted)
                     adjusted = 0
                     for key_str, new_text in fitted.items():
                         n = int(key_str) - 1
                         if not (0 <= n < len(indices)) or not new_text.strip():
+                            continue
+                        if new_text.strip() in repetidos:
                             continue
                         g = indices[n]
                         if not check_entities(locked_sentences[g], new_text)["ok"]:
                             continue
                         old_dev = abs(fit_deviation(texts[n], target_lang, speech_seconds[g], lock_maps[g]))
                         new_dev = abs(fit_deviation(new_text, target_lang, speech_seconds[g], lock_maps[g]))
-                        if new_dev < old_dev:
+                        if new_dev < old_dev - FIT_MIN_GAIN:
                             texts[n] = new_text.strip()
                             adjusted += 1
                     print(f"⏱️ [Encaje] bloque {chunk_no}: {adjusted}/{len(offenders)} ajustado(s)", flush=True)
