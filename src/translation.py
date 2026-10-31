@@ -394,13 +394,22 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         # ─── Verificación de entidades + rescate dentro del bloque ───
         problems: dict[int, list[str]] = {}
         rescue: dict[str, dict[str, str]] = {}
+        number_warn = 0
         for n, g in enumerate(indices):
             if n in missing_local or not locked_sentences[g]:
                 continue
             verdict = check_entities(locked_sentences[g], texts[n])
+            if verdict["numbers_mismatch"]:
+                number_warn += 1
             if not verdict["ok"]:
                 problems[n] = [str(r) for r in verdict["reasons"]]
                 rescue[str(n + 1)] = {"source": locked_sentences[g], "text": texts[n]}
+
+        if number_warn:
+            print(
+                f"🔢 [Entidades] bloque {chunk_no}: {number_warn} segmento(s) con cifras escritas en palabras (aviso)",
+                flush=True,
+            )
 
         if rescue:
             print(f"🔁 [Entidades] bloque {chunk_no}: {len(rescue)} segmento(s) con tokens alterados; rescate...", flush=True)

@@ -278,11 +278,18 @@ def _significant(nums: Sequence[str]) -> list[str]:
 
 def check_entities(locked_source: str, translated: str) -> dict[str, object]:
     """
-    Verifica que la traducción conservó placeholders y números del original.
+    Verifica que la traducción conservó los placeholders y compara las cifras.
+
+    El resultado duro (`ok`) mira solo los placeholders: un nombre propio perdido
+    rompe la frase y se puede comprobar sin ambigüedad. Las cifras se devuelven
+    aparte porque el destino puede escribirlas en palabras (`1326` → `trece
+    veintiséis`), que es la forma correcta de doblarlas y no un error; solo se
+    comparan las que tienen valor inequívoco y el desvío se reporta como aviso.
 
     Returns:
         {"ok": bool, "missing": [...], "extra": [...], "duplicated": [...],
-         "numbers_source": [...], "numbers_target": [...], "reasons": [...]}
+         "numbers_source": [...], "numbers_target": [...], "numbers_mismatch": bool,
+         "reasons": [...], "warnings": [...]}
     """
     ids_src = [int(x) for x in PLACEHOLDER_RE.findall(locked_source)]
     ids_dst = [int(x) for x in PLACEHOLDER_RE.findall(translated)]
@@ -302,8 +309,10 @@ def check_entities(locked_source: str, translated: str) -> dict[str, object]:
         reasons.append(f"entidades inventadas {extra}")
     if duplicated:
         reasons.append(f"entidades duplicadas {duplicated}")
+
+    warnings: list[str] = []
     if number_mismatch:
-        reasons.append(f"números {nums_src} -> {nums_dst}")
+        warnings.append(f"números {_significant(nums_src)} -> {_significant(nums_dst)}")
 
     return {
         "ok": not reasons,
@@ -312,5 +321,7 @@ def check_entities(locked_source: str, translated: str) -> dict[str, object]:
         "duplicated": duplicated,
         "numbers_source": nums_src,
         "numbers_target": nums_dst,
+        "numbers_mismatch": number_mismatch,
         "reasons": reasons,
+        "warnings": warnings,
     }

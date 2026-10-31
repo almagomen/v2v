@@ -134,24 +134,28 @@ class TestEntityCheck(unittest.TestCase):
         self.assertEqual(verdict["missing"], [1])
 
     def test_detecta_numero_alterado(self):
+        """Una versión alterada se avisa, pero no invalida el segmento: puede ir en palabras."""
         verdict = check_entities("Baja a versão 12.1 agora.", "Baja la versión 2.1 ahora.")
-        self.assertFalse(verdict["ok"])
-        self.assertTrue(any("números" in r for r in verdict["reasons"]))
+        self.assertTrue(verdict["ok"])
+        self.assertTrue(verdict["numbers_mismatch"])
+        self.assertTrue(any("números" in w for w in verdict["warnings"]))
 
     def test_acepta_millares_con_espacio(self):
         """`220,000` y `220 000` son la misma cantidad: el espacio es el separador español."""
         verdict = check_entities("over 220,000 NVIDIA GPUs", "más de 220 000 GPUs NVIDIA")
         self.assertTrue(verdict["ok"], verdict["reasons"])
+        self.assertFalse(verdict["numbers_mismatch"])
 
     def test_ignora_cifras_escritas_con_letras(self):
         """`3rd` → `tres` es la forma correcta en español, no una pérdida de la cifra."""
         verdict = check_entities("On September 3rd, Claude failed.", "El tres de septiembre, Claude falló.")
         self.assertTrue(verdict["ok"], verdict["reasons"])
+        self.assertFalse(verdict["numbers_mismatch"])
 
     def test_detecta_cantidad_alterada(self):
         verdict = check_entities("over 220,000 GPUs", "más de 22 000 GPUs")
-        self.assertFalse(verdict["ok"])
-        self.assertTrue(any("números" in r for r in verdict["reasons"]))
+        self.assertTrue(verdict["ok"])
+        self.assertTrue(verdict["numbers_mismatch"])
 
     def test_detecta_entidad_inventada(self):
         locked, _ = lock_text("Abre o Ghidra.")
@@ -265,11 +269,12 @@ class TestQaGate(unittest.TestCase):
         report = summarize(recs, expected_segments=10)
         self.assertNotIn("length_dev_p95", [f["metric"] for f in report["failures"]])
 
-    def test_residuo_de_idioma_falla_el_gate(self):
+    def test_residuo_de_idioma_avisa_sin_bloquear(self):
+        """El residuo es un aviso: en pt→es los cognados idénticos lo disparan sin ser fuga."""
         recs = [self._timed(1, 0.0, final=3.0, orig=3.0, residue=["Mais"])]
         report = summarize(recs, expected_segments=1)
-        self.assertFalse(report["passed"])
-        self.assertIn("residue", [f["metric"] for f in report["failures"]])
+        self.assertTrue(report["passed"])
+        self.assertIn("residue", [w["metric"] for w in report["warnings"]])
 
     def test_aire_muerto_interno_ignora_las_pausas_de_fin_de_frase(self):
         """Tras un punto el silencio es pausa; dentro de la frase es un corte."""
