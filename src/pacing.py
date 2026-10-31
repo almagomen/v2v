@@ -48,6 +48,9 @@ RIPPLE_KEEP = 0.12
 RIPPLE_STEP_MAX = 0.45
 RIPPLE_SHIFT_MAX = 1.20
 RIPPLE_PAYBACK_MAX = 0.35
+# Pausa de la fuente a partir de la cual el corrimiento se devuelve: por debajo de
+# esto el hueco es del corte de segmentos, no del habla, y cerrarlo no se nota.
+RIPPLE_PAUSE_MIN = 0.60
 
 _TERMINAL_RE = re.compile(r"[.!?…]+[\"'»)\]]*\s*$")
 
@@ -150,7 +153,6 @@ def ends_sentence(text: str) -> bool:
 def close_ripple(
     starts: list[float],
     durations: list[float],
-    texts: list[str],
     source_ends: list[float],
 ) -> list[float]:
     """
@@ -158,13 +160,17 @@ def close_ripple(
 
     El silencio total no se puede eliminar: el video dura lo que dura. Lo que sí se
     puede es reubicarlo. Un hueco dentro de una idea suena a corte de audio; el mismo
-    silencio después de un punto suena a pausa. Por eso el corrimiento se acumula
-    solo mientras la frase sigue abierta y se paga en el siguiente punto: ahí el
-    segmento vuelve a su sitio y la pausa absorbe el desplazamiento.
+    silencio dentro de una pausa del original suena natural. Por eso el corrimiento se
+    acumula mientras la fuente no pausaba y se devuelve cuando la fuente sí pausaba.
 
-    Solo se cierra el silencio que no existía en el original (`source_ends`): si la
-    fuente ya tenía una pausa de dos segundos, cerrarla dejaría el doblaje más rápido
-    que el habla original, que es un defecto distinto.
+    La pausa legítima se decide con `source_ends`, no con la puntuación del texto: el
+    traductor pone punto final en casi todos los segmentos (el corte de STT no respeta
+    frases), así que mirar el punto devolvía el corrimiento en cada frontera y el cierre
+    no llegaba a actuar.
+
+    Solo se cierra el silencio que no existía en el original: si la fuente ya tenía una
+    pausa de dos segundos, cerrarla dejaría el doblaje más rápido que el habla original,
+    que es un defecto distinto.
 
     El tope `RIPPLE_SHIFT_MAX` acota cuánto puede adelantarse la voz dentro de una
     cadena, para no despegarla de la imagen más de lo tolerable.
@@ -172,29 +178,27 @@ def close_ripple(
     Args:
         starts: arranque original de cada segmento, en segundos.
         durations: duración final del audio sintetizado de cada segmento.
-        texts: texto hablado de cada segmento (decide si la pausa es legítima).
         source_ends: fin del habla original de cada segmento, en segundos.
 
     Returns:
         Nuevos arranques, en el mismo orden que la entrada.
     """
     n = len(starts)
-    if not (len(durations) == n and len(texts) == n and len(source_ends) == n):
-        raise ValueError("starts, durations, texts y source_ends deben tener la misma longitud")
+    if not (len(durations) == n and len(source_ends) == n):
+        raise ValueError("starts, durations y source_ends deben tener la misma longitud")
 
     new = [float(s) for s in starts]
     order = sorted(range(n), key=lambda i: new[i])
     shift = 0.0
     for prev, cur in zip(order, order[1:]):
-        if ends_sentence(texts[prev]):
+        gap_i = float(starts[cur]) - (float(starts[prev]) + float(durations[prev]))
+        source_gap = float(starts[cur]) - float(source_ends[prev])
+        if source_gap >= RIPPLE_PAUSE_MIN:
             shift = max(0.0, shift - RIPPLE_PAYBACK_MAX)
-        else:
-            gap_i = float(starts[cur]) - (float(starts[prev]) + float(durations[prev]))
-            if gap_i > RIPPLE_GAP:
-                source_gap = float(starts[cur]) - float(source_ends[prev])
-                closable = gap_i - max(source_gap, RIPPLE_KEEP)
-                if closable > 0:
-                    shift = min(shift + min(closable, RIPPLE_STEP_MAX), RIPPLE_SHIFT_MAX)
+        if gap_i > RIPPLE_GAP:
+            closable = gap_i - max(source_gap, RIPPLE_KEEP)
+            if closable > 0:
+                shift = min(shift + min(closable, RIPPLE_STEP_MAX), RIPPLE_SHIFT_MAX)
         new[cur] = round(float(starts[cur]) - shift, 3)
     return new
 

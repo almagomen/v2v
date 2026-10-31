@@ -138,6 +138,21 @@ class TestEntityCheck(unittest.TestCase):
         self.assertFalse(verdict["ok"])
         self.assertTrue(any("números" in r for r in verdict["reasons"]))
 
+    def test_acepta_millares_con_espacio(self):
+        """`220,000` y `220 000` son la misma cantidad: el espacio es el separador español."""
+        verdict = check_entities("over 220,000 NVIDIA GPUs", "más de 220 000 GPUs NVIDIA")
+        self.assertTrue(verdict["ok"], verdict["reasons"])
+
+    def test_ignora_cifras_escritas_con_letras(self):
+        """`3rd` → `tres` es la forma correcta en español, no una pérdida de la cifra."""
+        verdict = check_entities("On September 3rd, Claude failed.", "El tres de septiembre, Claude falló.")
+        self.assertTrue(verdict["ok"], verdict["reasons"])
+
+    def test_detecta_cantidad_alterada(self):
+        verdict = check_entities("over 220,000 GPUs", "más de 22 000 GPUs")
+        self.assertFalse(verdict["ok"])
+        self.assertTrue(any("números" in r for r in verdict["reasons"]))
+
     def test_detecta_entidad_inventada(self):
         locked, _ = lock_text("Abre o Ghidra.")
         verdict = check_entities(locked, "Abre el ⟦E1⟧ y el ⟦E2⟧.")

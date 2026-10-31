@@ -12,7 +12,7 @@ from src.pacing import close_ripple, ends_sentence, gap_split, visible_text
 
 # Estrategia de sincronía del doblaje (no configurables por API: describen el criterio).
 SYNC_TOLERANCE = 0.94   # por debajo de este ratio se rellena con pausas internas
-STRETCH_FLOOR = 0.85    # estiramiento máximo al alargar un clip (nunca por debajo)
+STRETCH_FLOOR = 0.80    # estiramiento máximo al alargar un clip (nunca por debajo)
 
 try:
     import torch
@@ -884,7 +884,6 @@ def clone_voice_segments(
     starts = close_ripple(
         [item["start"] for item in prepared],
         [item["final_dur"] for item in prepared],
-        [item["text"] for item in prepared],
         [item["orig_end"] for item in prepared],
     )
     before_mid, _before_end = gap_split(
@@ -921,7 +920,7 @@ def clone_voice_segments(
             seg=item["seq_num"],
             start=start_time,
             orig_start=float(text_dict["orig_start"]),
-            orig_duration=item["dur_en"],
+            orig_duration=item["orig_end"] - float(text_dict["orig_start"]),
             raw_duration=item["raw_dur_es"],
             final_duration=final_dur,
             levels=item["levels"],

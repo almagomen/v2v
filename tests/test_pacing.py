@@ -163,83 +163,67 @@ class TestFinDeFrase(unittest.TestCase):
 class TestCierreDeRipple(unittest.TestCase):
     def test_hueco_anadido_por_el_doblaje_se_cierra(self):
         """El clip salió corto: la fuente habló hasta 2.2s y el TTS acabó en 1.0s."""
-        nuevos = close_ripple(
-            [0.0, 3.0], [1.0, 1.0], ["Abre el panel", "y pulsa enter"], [2.2, 4.0]
-        )
+        nuevos = close_ripple([0.0, 3.0], [1.0, 1.0], [2.2, 4.0])
         self.assertAlmostEqual(nuevos[1], 3.0 - RIPPLE_STEP_MAX, places=3)
 
     def test_pausa_del_original_se_respeta(self):
         """Si la fuente ya callaba 0.8s, no hay silencio añadido que quitar."""
-        nuevos = close_ripple(
-            [0.0, 3.0], [2.2, 1.0], ["Abre el panel", "y pulsa enter"], [2.2, 4.0]
-        )
+        nuevos = close_ripple([0.0, 3.0], [2.2, 1.0], [2.2, 4.0])
         self.assertEqual(nuevos[1], 3.0)
 
     def test_respiro_minimo_conservado(self):
         """Con 0.5s de exceso se conserva el respiro de 0.12s entre palabras."""
-        nuevos = close_ripple(
-            [0.0, 3.0], [2.5, 1.0], ["Abre el panel", "y pulsa enter"], [2.95, 4.0]
-        )
+        nuevos = close_ripple([0.0, 3.0], [2.5, 1.0], [2.95, 4.0])
         self.assertAlmostEqual(nuevos[1] - 2.5, RIPPLE_KEEP, places=3)
 
-    def test_frase_cerrada_conserva_la_pausa(self):
-        nuevos = close_ripple(
-            [0.0, 3.0], [1.0, 1.0], ["Abre el panel.", "Otra idea"], [2.2, 4.0]
-        )
-        self.assertEqual(nuevos[1], 3.0)
-
     def test_hueco_pequeno_no_se_toca(self):
-        nuevos = close_ripple(
-            [0.0, 2.3], [2.2, 1.0], ["Abre el panel", "y pulsa enter"], [2.0, 3.0]
-        )
+        nuevos = close_ripple([0.0, 2.3], [2.2, 1.0], [2.0, 3.0])
         self.assertEqual(nuevos[1], 2.3)
 
     def test_solape_no_se_toca(self):
-        nuevos = close_ripple(
-            [0.0, 2.0], [2.4, 1.0], ["Abre el panel", "y pulsa enter"], [2.2, 3.0]
-        )
+        nuevos = close_ripple([0.0, 2.0], [2.4, 1.0], [2.2, 3.0])
         self.assertEqual(nuevos[1], 2.0)
 
     def test_corrimiento_acumulado_tiene_tope(self):
         """Diez segmentos cortos en cadena no pueden desincronizar la voz 4 segundos."""
         starts = [i * 2.0 for i in range(11)]
         durations = [0.5] * 11
-        texts = ["sigue hablando"] * 10 + ["fin"]
         source_ends = [i * 2.0 + 1.8 for i in range(11)]
-        nuevos = close_ripple(starts, durations, texts, source_ends)
+        nuevos = close_ripple(starts, durations, source_ends)
         for original, nuevo in zip(starts, nuevos):
             self.assertLessEqual(original - nuevo, RIPPLE_SHIFT_MAX + 1e-6)
 
-    def test_el_drift_se_arrastra_hasta_el_punto(self):
+    def test_el_corrimiento_se_arrastra_al_siguiente_hueco(self):
         """Cerrar un hueco mueve también el resto: el silencio no reaparece al lado."""
         starts = [0.0, 3.0, 6.0]
         durations = [1.0, 1.0, 1.0]
-        texts = ["Abre el panel", "y pulsa enter", "ahora"]
         source_ends = [2.2, 5.2, 7.0]
-        nuevos = close_ripple(starts, durations, texts, source_ends)
+        nuevos = close_ripple(starts, durations, source_ends)
         self.assertAlmostEqual(nuevos[1], 3.0 - RIPPLE_STEP_MAX, places=3)
-        self.assertAlmostEqual(nuevos[2], 5.1, places=3)
+        self.assertAlmostEqual(nuevos[2], 6.0 - 0.55, places=3)
 
-    def test_el_punto_devuelve_parte_del_corrimiento(self):
-        """En un punto se paga solo una parte: devolverlo entero alarga la pausa 1.2s."""
+    def test_pausa_de_la_fuente_devuelve_parte_del_corrimiento(self):
+        """Donde la fuente sí pausaba, parte del corrimiento vuelve: la pausa es real."""
         starts = [0.0, 3.0, 6.0]
-        durations = [1.0, 1.0, 1.0]
-        texts = ["Abre el panel", "y pulsa enter.", "Otra idea"]
-        source_ends = [2.2, 5.2, 7.0]
-        nuevos = close_ripple(starts, durations, texts, source_ends)
+        durations = [1.0, 2.6, 1.0]
+        source_ends = [2.2, 5.3, 7.0]
+        nuevos = close_ripple(starts, durations, source_ends)
         self.assertAlmostEqual(nuevos[1], 3.0 - RIPPLE_STEP_MAX, places=3)
         self.assertAlmostEqual(nuevos[2], 6.0 - (RIPPLE_STEP_MAX - RIPPLE_PAYBACK_MAX), places=3)
 
     def test_la_pausa_crece_como_mucho_el_pago(self):
         starts = [0.0, 3.0, 6.0, 9.0]
         durations = [1.0] * 4
-        texts = ["Uno", "Dos.", "Tres", "Cuatro"]
         source_ends = [2.2, 5.2, 8.2, 10.0]
-        nuevos = close_ripple(starts, durations, texts, source_ends)
+        nuevos = close_ripple(starts, durations, source_ends)
         for i in (1, 2):
             antes = starts[i + 1] - (starts[i] + durations[i])
             despues = nuevos[i + 1] - (nuevos[i] + durations[i])
             self.assertLessEqual(despues - antes, RIPPLE_PAYBACK_MAX + 1e-6)
+
+    def test_longitudes_incoherentes_fallan(self):
+        with self.assertRaises(ValueError):
+            close_ripple([0.0, 3.0], [1.0], [2.2, 4.0])
 
 
 class TestRepartoDeSilencio(unittest.TestCase):

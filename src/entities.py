@@ -250,9 +250,30 @@ def restore_text(text: str, mapping: dict[int, str]) -> str:
     return PLACEHOLDER_RE.sub(_sub, text)
 
 
+_NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
+
+# Separador de millares escrito con espacio, apóstrofo o coma/punto: `220 000`,
+# `1'200`, `1,200`. Solo cuenta si agrupa exactamente tres dígitos y no hay un
+# cuarto detrás, para no comerse el decimal de `12.1` ni el punto de una frase.
+_THOUSANDS_RE = re.compile(r"(?<=\d)[.,'\u00a0\u202f ](?=\d{3}(?!\d))")
+
+
 def _numbers(text: str) -> list[str]:
-    """Números fuera de placeholder, con `1.200` normalizado a `1200`."""
-    return [n.replace(".", "") for n in re.findall(r"\d+(?:[.,]\d+)*", PLACEHOLDER_RE.sub(" ", text))]
+    """Números fuera de placeholder, con los separadores de millares unificados."""
+    clean = _THOUSANDS_RE.sub("", PLACEHOLDER_RE.sub(" ", text))
+    return _NUM_RE.findall(clean)
+
+
+def _significant(nums: Sequence[str]) -> list[str]:
+    """
+    Números cuyo valor hay que comparar: cantidades, versiones y fechas con dígitos.
+
+    Los de una o dos cifras se ignoran a propósito. El traductor escribe `3` como
+    `tres` y `1st` como `primero`, que es la forma correcta en el idioma destino;
+    compararlos dígito a dígito marcaba fallos donde la traducción era buena. Una
+    versión (`12.1`) o una cantidad (`220000`) sí se comparan siempre.
+    """
+    return [n for n in nums if sum(c.isdigit() for c in n) >= 3 or "." in n or "," in n]
 
 
 def check_entities(locked_source: str, translated: str) -> dict[str, object]:
@@ -272,7 +293,7 @@ def check_entities(locked_source: str, translated: str) -> dict[str, object]:
 
     nums_src = _numbers(locked_source)
     nums_dst = _numbers(translated)
-    number_mismatch = sorted(nums_src) != sorted(nums_dst)
+    number_mismatch = sorted(_significant(nums_src)) != sorted(_significant(nums_dst))
 
     reasons: list[str] = []
     if missing:

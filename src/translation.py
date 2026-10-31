@@ -4,7 +4,7 @@ import os
 import json
 import re
 import time
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Sequence, Tuple
 
 from google import genai
 
@@ -48,6 +48,10 @@ POPULAR_GEMINI_MODELS = [
     "gemini-flash-lite-latest",
     "gemma-4-26b-a4b-it",
 ]
+
+# Frases de contexto que se envían al juicio de fugas. Con más, el prompt crece sin
+# mejorar el veredicto: los cognados se reconocen en las primeras apariciones.
+MAX_CONTEXT_PAIRS = 12
 
 
 def get_default_title_model() -> str:
@@ -431,12 +435,17 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
 
             if candidates:
                 vocabulary = sorted({t for shared in candidates.values() for t in shared})
+                pairs = [
+                    (source_sentences[indices[n]], restore_text(texts[n], lock_maps[indices[n]]))
+                    for n in sorted(candidates)
+                ]
                 try:
                     leaks = _judge_leaks(
                         lambda prompt: _call_model(client, model, is_gemma, prompt),
                         vocabulary,
                         source_lang_name,
                         target_lang_name,
+                        pairs,
                     )
                 except Exception as e_leak:
                     print(f"⚠️ [Idioma] bloque {chunk_no}: juicio omitido ({e_leak})", flush=True)
@@ -922,6 +931,7 @@ def _judge_leaks(
     words: list[str],
     source_lang_name: str,
     target_lang_name: str,
+    pairs: Sequence[tuple[str, str]] = (),
 ) -> set[str]:
     """
     De las palabras idénticas en origen y traducción, devuelve las que quedaron sin traducir.
@@ -929,11 +939,29 @@ def _judge_leaks(
     Es la única forma sin diccionarios de separar una fuga de un cognado: el par
     pt/es comparte tantas formas que ninguna regla mecánica las distingue. El modelo
     juzga y la respuesta se acota a los tokens observados.
+
+    Las frases viajan con la lista porque una palabra aislada no basta: `vertical`,
+    `crisis` o `central` se escriben igual en los dos idiomas y son traducción
+    correcta, pero sin contexto el modelo las marcaba como fuga y bloqueaba el
+    segmento. Se envían como mucho `MAX_CONTEXT_PAIRS` para no inflar el prompt.
     """
     if not words:
         return set()
 
-    prompt = f"""Estas palabras aparecen escritas exactamente igual en el original en {source_lang_name} y en su traducción al {target_lang_name}.
+    contexto = ""
+    if pairs:
+        lineas = [
+            f"- {src} → {dst}" for src, dst in list(pairs)[:MAX_CONTEXT_PAIRS] if src and dst
+        ]
+        if lineas:
+            contexto = (
+                "\n\nFrases donde aparecen (original → traducción):\n"
+                + "\n".join(lineas)
+                + "\n\nUna palabra es fuga solo si en esa frase queda en "
+                + f"{source_lang_name} y el resto ya está en {target_lang_name}."
+            )
+
+    prompt = f"""Estas palabras aparecen escritas exactamente igual en el original en {source_lang_name} y en su traducción al {target_lang_name}.{contexto}
 
 Devuelve SOLO las que siguen escritas en {source_lang_name} y deberían estar traducidas al {target_lang_name}.
 
