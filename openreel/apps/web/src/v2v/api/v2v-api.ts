@@ -89,6 +89,8 @@ export interface Segment {
   orig_start?: number;
   orig_end?: number;
   orig_duration?: number;
+  src_start?: number;
+  src_end?: number;
   text: string;
   speaker?: string;
   original_speaker?: string;
@@ -139,6 +141,8 @@ export interface AudioSegmentItem {
   orig_start?: number;
   orig_end?: number;
   orig_duration?: number;
+  src_start?: number;
+  src_end?: number;
   speaker: string;
   filename: string;
 }

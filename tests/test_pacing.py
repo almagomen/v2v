@@ -15,6 +15,8 @@ from src.pacing import (
     REWRITE_LONG,
     REWRITE_SHORT,
     SPEECH_RATES,
+    SOURCE_LEAD_MAX,
+    SOURCE_TAIL_MAX,
     budget_for,
     build_fit_prompt,
     close_ripple,
@@ -25,6 +27,7 @@ from src.pacing import (
     gap_split,
     needs_rewrite,
     primary_lang,
+    source_margins,
     speech_rate,
     visible_text,
 )
@@ -253,6 +256,28 @@ class TestRepartoDeSilencio(unittest.TestCase):
     def test_longitudes_incoherentes_fallan(self):
         with self.assertRaises(ValueError):
             gap_split([0.0, 1.0], [1.0], [False, False])
+
+
+class TestMargenDelOrigen(unittest.TestCase):
+    def test_hueco_grande_usa_los_topes(self):
+        self.assertEqual(source_margins(2.0, 2.0), (SOURCE_LEAD_MAX, SOURCE_TAIL_MAX))
+
+    def test_hueco_pequeno_reparte_proporcional(self):
+        lead, tail = source_margins(0.2, 0.2)
+        self.assertAlmostEqual(lead, 0.08, places=3)
+        self.assertAlmostEqual(tail, 0.08, places=3)
+
+    def test_sin_hueco_no_hay_margen(self):
+        self.assertEqual(source_margins(0.0, 0.0), (0.0, 0.0))
+
+    def test_nunca_se_invade_al_vecino(self):
+        """Los dos márgenes salen del mismo hueco: entre ambos toman como mucho el 80%."""
+        for gap in (0.05, 0.1, 0.3, 0.6, 1.0, 2.5):
+            lead, tail = source_margins(gap, gap)
+            self.assertLessEqual(lead + tail, gap * 0.8 + 1e-9)
+
+    def test_hueco_negativo_se_trata_como_solape(self):
+        self.assertEqual(source_margins(-0.4, -0.4), (0.0, 0.0))
 
 
 if __name__ == "__main__":

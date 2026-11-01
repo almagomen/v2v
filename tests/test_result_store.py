@@ -97,5 +97,23 @@ class TestSegmentEntryEstados(unittest.TestCase):
         self.assertEqual(entry["entity_fail"], ["Ghidra"])
 
 
+class TestBordesDelClip(unittest.TestCase):
+    def test_sin_bordes_no_inventa_campos(self):
+        entry = create_segment_entry(1, 0.0, 1.0, "texto")
+        self.assertNotIn("src_start", entry)
+        self.assertNotIn("src_end", entry)
+
+    def test_bordes_del_clip_se_persisten(self):
+        """El timeline coloca el clip de origen en src_start, no en la última palabra."""
+        entry = create_segment_entry(1, 0.15, 1.0, "texto", src_start=0.05, src_end=1.35)
+        self.assertEqual(entry["src_start"], 0.05)
+        self.assertEqual(entry["src_end"], 1.35)
+
+    def test_origen_intacto_aunque_haya_margen(self):
+        """orig_* sigue siendo el tramo transcrito: de ahí se recalculan los márgenes."""
+        entry = create_segment_entry(1, 0.15, 1.0, "texto", orig_start=0.15, orig_end=1.0, src_start=0.05, src_end=1.35)
+        self.assertEqual((entry["orig_start"], entry["orig_end"]), (0.15, 1.0))
+
+
 if __name__ == "__main__":
     unittest.main()

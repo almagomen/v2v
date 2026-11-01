@@ -213,6 +213,8 @@ def list_audio_segments(job_id: str, video_index: int):
                 "orig_start": o_start,
                 "orig_end": o_end,
                 "orig_duration": o_dur,
+                "src_start": s.get("src_start"),
+                "src_end": s.get("src_end"),
                 "speaker": s.get("speaker") or "",
                 "original_speaker": s.get("original_speaker", s.get("speaker", "")),
                 "filename": filename,
@@ -398,6 +400,8 @@ def list_src_audio_segments(job_id: str, video_index: int):
                 "orig_start": o_start,
                 "orig_end": o_end,
                 "orig_duration": o_dur,
+                "src_start": s.get("src_start"),
+                "src_end": s.get("src_end"),
                 "speaker": s.get("original_speaker", s.get("speaker", "")),
                 "filename": filename,
             }

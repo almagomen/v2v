@@ -74,7 +74,7 @@ def _run_pipeline(
     **kwargs,
 ) -> None:
     """Run pipeline with stdout redirected to job log."""
-    from src.pipeline import process_video_queue, split_all_sequences
+    from src.pipeline import process_video_queue, split_audio_sequences
     from src.audio_utils import clone_voice_segments
     from src.tts import model_tts
 
@@ -170,6 +170,8 @@ def _run_pipeline(
                         orig_start=t.get("orig_start"),
                         orig_end=t.get("orig_end"),
                         orig_duration=t.get("orig_duration"),
+                        src_start=t.get("src_start"),
+                        src_end=t.get("src_end"),
                         translation_status=t.get("translation_status"),
                         entity_fail=t.get("entity_fail"),
                     )
@@ -212,7 +214,9 @@ def _run_pipeline(
             update_job(job_id, status="tts", message=f"Clonando voz: {path.stem} [{idx + 1}/{len(urls)}]")
             
             t0_split = time.perf_counter()
-            split_all_sequences([path])
+            # Se corta sobre la misma lista que consume el TTS: split_audio_sequences
+            # escribe ahí los bordes reales del clip (src_start/src_end).
+            split_audio_sequences(path.with_name("vocals.wav"), texts, output_dir=path.parent / "Seqs_src")
             t_split = time.perf_counter() - t0_split
             print(f"⏱️ [Corte de Secuencias] Completado en {t_split:.1f}s")
 

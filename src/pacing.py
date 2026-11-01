@@ -57,6 +57,30 @@ RIPPLE_PAYBACK_MAX = 0.35
 # esto el hueco es del corte de segmentos, no del habla, y cerrarlo no se nota.
 RIPPLE_PAUSE_MIN = 0.60
 
+# ─── Margen del clip de origen ───────────────────────────────────────────────────
+# Whisper no escribe muletillas, respiraciones ni titubeos: el segmento termina en la
+# última palabra transcrita y el resto de habla quedaba como aire muerto al final del
+# clip. El margen recupera ese tramo del silencio vecino sin invadir al segmento de al
+# lado: entre ataque y cola nunca se toma más del 80% del hueco disponible.
+SOURCE_LEAD_MAX = 0.150
+SOURCE_TAIL_MAX = 0.400
+SOURCE_MARGIN_SHARE = 0.40
+
+
+def source_margins(gap_before: float, gap_after: float) -> tuple[float, float]:
+    """
+    Segundos que el clip de origen toma del silencio anterior y posterior.
+
+    Los dos márgenes salen del mismo hueco y cada uno se queda con el 40%, así que
+    nunca se cruzan aunque el segmento vecino también esté recortado.
+    """
+    gb = max(0.0, float(gap_before))
+    ga = max(0.0, float(gap_after))
+    return (
+        min(SOURCE_LEAD_MAX, gb * SOURCE_MARGIN_SHARE),
+        min(SOURCE_TAIL_MAX, ga * SOURCE_MARGIN_SHARE),
+    )
+
 _TERMINAL_RE = re.compile(r"[.!?…]+[\"'»)\]]*\s*$")
 
 _TAG_RE = re.compile(r"\[[^\]]*\]")

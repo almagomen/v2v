@@ -790,6 +790,12 @@ def clone_voice_segments(
         arr_en, rate_en = torchaudio.load(str(audio_en_path))
         dur_en = arr_en.shape[-1] / rate_en
 
+        # Bordes reales del clip de origen. Incluyen el margen que recupera el habla no
+        # transcrita, así que el QA y el ripple miden contra el audio que existe y no
+        # contra la última palabra que Whisper escribió.
+        src_start = float(text_dict.get("src_start", text_dict.get("orig_start", start_time)))
+        src_end = float(text_dict.get("src_end", text_dict.get("orig_end", start_time + dur_en)))
+
         # ─── BÚSQUEDA DEL PRÓXIMO SEGMENTO CRONOLÓGICO Y ESPACIO DISPONIBLE ───
         next_starts = [
             float(t["start"])
@@ -871,7 +877,8 @@ def clone_voice_segments(
             "text": text,
             "start": start_time,
             "dur_en": dur_en,
-            "orig_end": float(text_dict["orig_end"]),
+            "src_start": src_start,
+            "src_end": src_end,
             "raw_dur_es": raw_dur_es,
             "final_dur": final_dur,
             "levels": levels_from_pcm(arr),
@@ -884,7 +891,7 @@ def clone_voice_segments(
     starts = close_ripple(
         [item["start"] for item in prepared],
         [item["final_dur"] for item in prepared],
-        [item["orig_end"] for item in prepared],
+        [item["src_end"] for item in prepared],
     )
     before_mid, _before_end = gap_split(
         [item["start"] for item in prepared],
@@ -919,8 +926,8 @@ def clone_voice_segments(
         qa_records.append(evaluate_segment(
             seg=item["seq_num"],
             start=start_time,
-            orig_start=float(text_dict["orig_start"]),
-            orig_duration=item["orig_end"] - float(text_dict["orig_start"]),
+            orig_start=item["src_start"],
+            orig_duration=item["src_end"] - item["src_start"],
             raw_duration=item["raw_dur_es"],
             final_duration=final_dur,
             levels=item["levels"],

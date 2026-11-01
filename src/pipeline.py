@@ -18,6 +18,7 @@ except ImportError:
 from src.download import yt
 from src.stt import run_main
 from src.config import QUEUE_DIR
+from src.pacing import source_margins
 from src.result_store import (
     load_result,
     save_result,
@@ -286,15 +287,19 @@ def split_audio_sequences(
         gap_before = max(0.0, s_sec - prev_end_sec)
         gap_after = max(0.0, next_start_sec - e_sec)
 
-        # Extensión acústica suave: hasta 50ms de ataque y 150ms de release hacia el silencio natural
-        # sin invadir el segmento adyacente (máximo 40% del gap disponible)
-        lead_margin = min(0.050, gap_before * 0.40)
-        tail_margin = min(0.150, gap_after * 0.40)
+        # Extensión acústica: recupera el habla que Whisper no transcribió (muletillas,
+        # respiraciones, titubeos) que de otro modo queda como aire muerto al final del
+        # clip. Entre los dos lados nunca se toma más del 80% del hueco.
+        lead_margin, tail_margin = source_margins(gap_before, gap_after)
 
         start = max(0, int(round((s_sec - lead_margin) * org_sr)))
         end = min(total_samples, int(round((e_sec + tail_margin) * org_sr)))
         if end <= start:
             continue
+        # Bordes reales del archivo escrito: son los que miden el hueco disponible, el
+        # ripple y el QA. Sin ellos, el tramo recuperado se contaba otra vez como silencio.
+        text_dict["src_start"] = round(start / float(org_sr), 3)
+        text_dict["src_end"] = round(end / float(org_sr), 3)
         arr_split = read_frames(start, end - start)
 
         # Aplicar micro-fade in (5ms) y micro-fade out (15ms) para evitar clicks o cortes bruscos de resonancias
@@ -318,18 +323,3 @@ def split_audio_sequences(
         generated_files.append(audio_path_out)
 
     return generated_files
-
-
-def split_all_sequences(video_paths: list[Path]) -> None:
-    """Divide el audio de todos los videos en secuencias."""
-    for path in video_paths:
-        result_data = load_result(path.parent)
-        if not result_data:
-            print(f"⚠️ Saltando {path.stem}: no hay archivo de resultados")
-            continue
-        texts = result_data.get("original_segments") or result_data.get("segments", [])
-        split_audio_sequences(
-            audio_path=path.with_name("vocals.wav"),
-            texts=texts,
-            output_dir=path.parent / "Seqs_src",
-        )

@@ -540,9 +540,13 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                   // Si el backend no devolvió segmentos o falló, construir la lista fiel desde v.segments (result.json)
                   if (srcAudioSegs.length === 0 && v.segments && v.segments.length > 0) {
                     srcAudioSegs = v.segments.map((s) => {
-                      const oStart = s.orig_start !== undefined ? s.orig_start : s.start;
-                      const oEnd = s.orig_end !== undefined ? s.orig_end : s.end;
-                      const oDur = s.orig_duration !== undefined ? s.orig_duration : Math.max(oEnd - oStart, 0.05);
+                      const oStart = s.src_start !== undefined
+                        ? s.src_start
+                        : (s.orig_start !== undefined ? s.orig_start : s.start);
+                      const oEnd = s.src_end !== undefined
+                        ? s.src_end
+                        : (s.orig_end !== undefined ? s.orig_end : s.end);
+                      const oDur = Math.max(oEnd - oStart, 0.05);
                       return {
                         seg: s.seg,
                         start: oStart,
@@ -551,6 +555,8 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                         orig_start: oStart,
                         orig_end: oEnd,
                         orig_duration: oDur,
+                        src_start: s.src_start,
+                        src_end: s.src_end,
                         speaker: s.original_speaker || s.speaker || "SPEAKER_00",
                         filename: `vocals_${String(s.seg).padStart(3, "0")}.wav`,
                       };
@@ -1069,9 +1075,13 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                             );
                             if (media) {
                               const segOrigMeta = v.segments?.find(s => s.seg === seg.seg);
-                              const origStart = downloadedSrc.seg.orig_start !== undefined
-                                ? downloadedSrc.seg.orig_start
-                                : (segOrigMeta?.orig_start !== undefined ? segOrigMeta.orig_start : seg.start);
+                              const origStart = downloadedSrc.seg.src_start !== undefined
+                                ? downloadedSrc.seg.src_start
+                                : (downloadedSrc.seg.orig_start !== undefined
+                                  ? downloadedSrc.seg.orig_start
+                                  : (segOrigMeta?.src_start !== undefined
+                                    ? segOrigMeta.src_start
+                                    : (segOrigMeta?.orig_start !== undefined ? segOrigMeta.orig_start : seg.start)));
                               const origDuration = media.metadata.duration;
                               allClipsToBatchAdd.push({
                                 trackId: origTrackId,
