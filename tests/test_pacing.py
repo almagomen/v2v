@@ -44,13 +44,14 @@ class TestTasas(unittest.TestCase):
         self.assertEqual(speech_rate(""), DEFAULT_RATE)
 
     def test_tasas_calibradas_en_rango_plausible(self):
-        """Regresión: se calibraron con audio real (16.0 chars/s en es y pt)."""
+        """Regresión: `es` usa la tasa medida del TTS (17.2 chars/s), no la humana."""
         for lang, (syl, chars) in SPEECH_RATES.items():
             with self.subTest(lang=lang):
                 self.assertGreater(chars, 12.0, "tasa absurda: el doblaje quedaría corto")
                 self.assertLess(chars, 22.0, "tasa absurda: el doblaje se aceleraría")
                 self.assertGreater(syl, 3.0)
                 self.assertLess(syl, 8.0)
+        self.assertEqual(SPEECH_RATES["es"][1], 17.2)
 
 
 class TestTextoVisible(unittest.TestCase):
@@ -69,9 +70,10 @@ class TestTextoVisible(unittest.TestCase):
 
 
 class TestEstimacion(unittest.TestCase):
-    def test_160_chars_en_es_son_10_segundos(self):
-        texto = "a" * 160
-        self.assertAlmostEqual(estimate_seconds(texto, "es"), 10.0, places=3)
+    def test_estimacion_usa_la_tasa_del_idioma(self):
+        chars_per_sec = SPEECH_RATES["es"][1]
+        texto = "a" * int(chars_per_sec * 10)
+        self.assertAlmostEqual(estimate_seconds(texto, "es"), 10.0, delta=0.2)
 
     def test_duracion_crece_con_el_texto(self):
         corto = estimate_seconds("hola mundo", "es")

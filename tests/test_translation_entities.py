@@ -280,7 +280,7 @@ class TestChunking(unittest.TestCase):
 class TestFitBudget(unittest.TestCase):
     """Encaje temporal: el presupuesto entra en el prompt y la pasada de ajuste se acota."""
 
-    SLOT = 10.0  # 10 s de habla en es -> 150-176 chars
+    SLOT = 10.0  # 10 s en es a 17.2 chars/s -> 162-189 chars
 
     def _run_timed(self, responses: list[str], sentences: list[str], slot: float = SLOT):
         _FakeClient.instances.clear()
@@ -302,16 +302,16 @@ class TestFitBudget(unittest.TestCase):
         return texts, meta, fake
 
     def test_prompt_lleva_el_rango_calibrado(self):
-        from src.pacing import budget_for
+        from src.pacing import budget_for, speech_rate
 
         b = budget_for("es", self.SLOT)
         sentences = ["Hoje o dia está bonito."]
-        good = {"1": {"text": "a" * 160}}
+        good = {"1": {"text": "a" * b["chars_target"]}}
         _texts, _meta, fake = self._run_timed([json.dumps(good)], sentences)
         prompt = fake.interactions.translation_prompts[0]
         self.assertIn(f"~{b['chars_min']}-{b['chars_max']} chars", prompt)
         self.assertIn(f"~{b['syl_min']}-{b['syl_max']} sílabas", prompt)
-        self.assertIn("16 caracteres por segundo", prompt)
+        self.assertIn(f"{speech_rate('es')[1]:.0f} caracteres por segundo", prompt)
         # El ejemplo de salida no repite la última clave (bloque de 1 segmento).
         self.assertEqual(prompt.count('"1": {'), 1)
 
@@ -322,13 +322,32 @@ class TestFitBudget(unittest.TestCase):
         ajustado = {"1": {"text": "Ahora vamos a ver cómo funciona esto en la práctica"}}
         texts, meta, fake = self._run_timed([json.dumps(corto), json.dumps(ajustado)], sentences)
 
-        self.assertEqual(fake.interactions.calls, 2)
+        # Traducción + primera pasada de encaje + segunda pasada (sin mejora, corta).
+        self.assertEqual(fake.interactions.calls, 3)
         self.assertEqual(texts[0], ajustado["1"]["text"])
         self.assertIn("ajustador de duración", fake.interactions.translation_prompts[1])
 
-    def test_texto_encajado_no_gasta_una_llamada_extra(self):
+    def test_encaje_repite_pasadas_hasta_entrar_en_rango(self):
+        """Una sola pasada dejaba el clip corto y el sincronizador lo estiraba a 0.80x."""
+        from src.pacing import budget_for
+
         sentences = ["Hoje o dia está bonito."]
-        justo = {"1": {"text": "a" * 160}}
+        corto = {"1": {"text": "Ahora vamos allá"}}
+        medio = {"1": {"text": "Ahora vamos a ver cómo funciona esto en la práctica"}}
+        largo = {"1": {"text": "a" * (budget_for("es", self.SLOT)["chars_target"] + 2)}}
+        texts, _meta, fake = self._run_timed(
+            [json.dumps(corto), json.dumps(medio), json.dumps(largo)], sentences
+        )
+
+        self.assertEqual(fake.interactions.calls, 3)
+        self.assertEqual(texts[0], largo["1"]["text"])
+        self.assertIn('"faltan"', fake.interactions.translation_prompts[1])
+
+    def test_texto_encajado_no_gasta_una_llamada_extra(self):
+        from src.pacing import budget_for
+
+        sentences = ["Hoje o dia está bonito."]
+        justo = {"1": {"text": "a" * budget_for("es", self.SLOT)["chars_target"]}}
         _texts, _meta, fake = self._run_timed([json.dumps(justo)], sentences)
         self.assertEqual(fake.interactions.calls, 1)
 

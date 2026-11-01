@@ -1,10 +1,12 @@
 """
 Presupuesto de duración para doblaje (isocronía).
 
-Las tasas están calibradas con audio real, no con intuición: se midió el doblaje
-español de YouTube y su original portugués separando voz de silencio con ffmpeg.
-Ambos rondan 16.0 chars/s y ~5.35 sílabas/s, y el doblaje deja 25% de silencio
-frente al 18% del original — ese excedente es el aire muerto que hay que evitar.
+Las tasas están calibradas con audio real, no con intuición. La referencia humana se
+midió sobre el doblaje español de YouTube y su original portugués separando voz de
+silencio con ffmpeg: ambos rondan 16.0 chars/s y ~5.35 sílabas/s. El TTS no habla a esa
+velocidad: la QA de un render real (Fish Audio, 144 segmentos) midió 17.2 chars/s a
+1.0x. El presupuesto usa la tasa del TTS porque es la que decide si el clip llena su
+slot o si el sincronizador tiene que estirarlo.
 
 El módulo es puro: sin red, sin torch, sin genai. Se testea con `unittest` solo.
 """
@@ -14,9 +16,11 @@ import re
 from collections import Counter
 from typing import Mapping, Optional
 
-# (sílabas por segundo, caracteres por segundo) en locución de doblaje.
+# (sílabas por segundo, caracteres por segundo) en locución.
+# `es` sale de la QA de un render real con Fish Audio (17.2 chars/s a 1.0x); el resto
+# conserva la referencia de doblaje humano (16.0) hasta tener medición propia.
 SPEECH_RATES: dict[str, tuple[float, float]] = {
-    "es": (5.35, 16.0),
+    "es": (5.35, 17.2),
     "pt": (5.33, 16.0),
     "en": (5.50, 15.0),
     "it": (5.40, 15.8),
@@ -31,9 +35,11 @@ FIT_MIN = 0.94
 FIT_MAX = 1.10
 
 # Desviación que dispara la reescritura acotada del texto. Asimétrica a propósito:
-# quedarse corto deja silencio muerto (el defecto que el espectador nota), mientras que
-# pasarse solo obliga a comprimir un poco, que es mucho menos audible.
-REWRITE_SHORT = 0.15
+# quedarse corto deja silencio muerto (el defecto que el espectador nota) mientras que
+# pasarse solo obliga a comprimir un poco, que es mucho menos audible. El umbral corto
+# se ajusta a `SYNC_TOLERANCE` de audio_utils (0.94): por debajo de -10% el clip ya se
+# estira de forma audible, así que merece otra pasada de texto.
+REWRITE_SHORT = 0.10
 REWRITE_LONG = 0.25
 MIN_WORDS_TO_REWRITE = 3
 
@@ -272,24 +278,33 @@ def echoed_texts(fitted: Mapping[str, str]) -> set[str]:
 
 def build_fit_prompt(items: dict[str, dict[str, str]], lang_name: str) -> str:
     """
-    Prompt de la pasada de encaje. `items` = {"1": {"texto": ..., "objetivo": ...}}.
+    Prompt de la pasada de encaje.
+
+    `items` = {"1": {"texto": ..., "actual": ..., "objetivo": ..., "estado": ...}}.
     El objetivo se expresa en caracteres porque es lo que el modelo puede contar sin
-    alucinar; las sílabas se reservan para el prompt principal.
+    alucinar; las sílabas se reservan para el prompt principal. Los textos cortos
+    llevan además `faltan`, el déficit exacto que hay que cubrir: sin ese número el
+    modelo devolvía una mejora mínima y el clip seguía quedando corto.
     """
     return f"""Eres un ajustador de duración para doblaje al {lang_name}.
 
-Cada entrada trae `texto` (la traducción actual) y `objetivo` (rango de caracteres que
-cabe en el tiempo disponible del video). Reescribe cada `texto` para que caiga dentro
-de su rango, sin excepciones:
+Cada entrada trae `texto` (la traducción actual), `actual` (sus caracteres),
+`objetivo` (rango de caracteres que cabe en el tiempo disponible del video) y, cuando
+está corta, `faltan` (los caracteres que le faltan para llegar al mínimo). Reescribe
+cada `texto` para que quede dentro de su rango, sin excepciones:
 
 1. Conserva el significado, el tono y la persona gramatical. No agregues datos nuevos
    ni elimines información del original.
 2. Si el texto es LARGO: quita redundancias, contrae perífrasis, usa sinónimos más
    cortos. No recortes el final de la idea.
-3. Si el texto es CORTO: agrega matices naturales del habla (conectores, refuerzos,
-   vocativos) sin inventar contenido.
-4. Los marcadores ⟦E1⟧, ⟦E2⟧... son intocables: mismos, una sola vez, mismo orden.
-5. No incluyas el rango ni comentarios en la salida. Solo el texto final.
+3. Si el texto es CORTO: no resumas ni recortes nada; desarrolla la MISMA idea con más
+   palabras hasta cubrir `faltan`. Alarga con recursos del habla natural (conectores
+   como «es decir», «la verdad es que», «mira», «en realidad», «justo», «además»;
+   refuerzos y vocativos), nunca con relleno vacío ni contenido inventado.
+4. Cuenta los caracteres de tu resultado antes de responder: debe quedar dentro de
+   `objetivo`. Quedarse por debajo del mínimo deja silencio muerto en el video.
+5. Los marcadores ⟦E1⟧, ⟦E2⟧... son intocables: mismos, una sola vez, mismo orden.
+6. No incluyas el rango ni comentarios en la salida. Solo el texto final.
 
 Entrada:
 {json.dumps(items, indent=2, ensure_ascii=False)}

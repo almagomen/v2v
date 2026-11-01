@@ -18,7 +18,16 @@ from src.entities import (
     restore_text,
 )
 from src.lang_utils import shared_tokens
-from src.pacing import FIT_MIN_GAIN, budget_for, build_fit_prompt, echoed_texts, fit_deviation, needs_rewrite, speech_rate
+from src.pacing import (
+    FIT_MIN_GAIN,
+    budget_for,
+    build_fit_prompt,
+    echoed_texts,
+    fit_deviation,
+    needs_rewrite,
+    speech_rate,
+    visible_text,
+)
 from src.pronunciation import (
     MAX_TERMS_PER_CALL,
     apply_table,
@@ -88,6 +97,21 @@ def _chunk_size() -> int:
         return max(2, int(os.environ.get("TRANSLATION_CHUNK_SEGMENTS", "80")))
     except ValueError:
         return 80
+
+
+def _fit_passes() -> int:
+    """
+    Pasadas máximas de encaje por bloque.
+
+    Una sola pasada dejaba los textos a medio camino: el modelo devolvía una mejora
+    mínima, se aceptaba por ser mejor que la anterior y el clip seguía corto, así que
+    el sincronizador lo estiraba hasta 0.80x. Con dos pasadas la segunda solo reescribe
+    lo que todavía no encaja, y el bucle se corta antes si ya no hay mejora.
+    """
+    try:
+        return max(1, int(os.environ.get("TRANSLATION_FIT_PASSES", "2")))
+    except ValueError:
+        return 2
 
 
 def _call_model(client, model: str, is_gemma: bool, prompt_text: str) -> str:
@@ -200,13 +224,13 @@ def translate_text_list(
             continue
 
         start_t, end_t = times[i]
-        meta = segments_meta[i] if (segments_meta and i < len(segments_meta)) else {}
         total_dur = max(0.4, round(end_t - start_t, 2))
-        internal_pause = float(meta.get("internal_pause_sec", 0.0) or 0.0)
-        speech_target_sec = max(0.4, round(total_dur - internal_pause, 2))
-        speech_seconds[i] = speech_target_sec
+        # El clip de origen ocupa el slot entero, pausas internas incluidas. Si el
+        # presupuesto descuenta esas pausas, el texto sale corto por definición y el
+        # sincronizador tiene que estirar el audio (hasta 0.80x) para rellenar.
+        speech_seconds[i] = total_dur
 
-        b = budget_for(target_lang, speech_target_sec)
+        b = budget_for(target_lang, total_dur)
         entry_lines.append(
             f"[{total_dur:.1f}s slot | ~{b['syl_min']}-{b['syl_max']} sílabas | "
             f"~{b['chars_min']}-{b['chars_max']} chars, apunta a {b['chars_target']}]: {locked_s}"
@@ -218,7 +242,9 @@ def translate_text_list(
    Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars, apunta a T]: texto original`.
    El ritmo medido en doblaje profesional de {target_lang_name} es ~{chars_per_sec:.0f} caracteres por segundo, y ese valor ya está aplicado en el rango.
    - ENCAJE: apunta al valor `apunta a T`; nunca por debajo del mínimo `M`. Por encima de `Z` obliga a acelerar la voz y suena artificial.
+   - NO RESUMAS: traduce toda la información de la frase. A igual contenido el español suele ocupar igual o más espacio que el original; si el original llena el slot, tu versión también debe llenarlo.
    - QUEDARSE CORTO ES EL ERROR MÁS CARO: si el texto no llena el slot, queda silencio muerto entre frases y el sincronizador tiene que arrastrar la voz. Al quedarte corto, agrega matices naturales del habla antes que recortar.
+   - VERIFICA ANTES DE RESPONDER: cuenta los caracteres de cada frase y comprueba que caen entre `M` y `Z`.
    - RITMO ORAL: Entrega un texto hablado directo, fluido y creíble.
    - SEGMENTOS BREVES (< 2.0s): Respeta la concisión temporal manteniendo la traducción breve y directa sin adiciones innecesarias.
    - En tu JSON de salida entrega ÚNICAMENTE el texto adaptado dentro de cada objeto, SIN repetir el prefijo de metadatos (prohibido poner `[Xs slot | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
@@ -522,29 +548,43 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         if left:
                             untranslated[n] = left
 
-        # ─── Encaje temporal: una pasada acotada solo sobre los que no caben ───
+        # ─── Encaje temporal: pasadas acotadas solo sobre los que no caben ───
         # El prompt ya pide el rango, pero el modelo no lo cumple siempre. Aquí se mide
-        # la duración estimada y se reescribe únicamente lo que queda fuera del slot.
+        # la duración estimada y se reescribe únicamente lo que queda fuera del slot,
+        # repitiendo mientras queden textos fuera y la pasada anterior haya mejorado.
         # Un fallo de esta pasada nunca descarta el bloque: el ajuste es mejora, no requisito.
         if fit_enabled and has_times:
             try:
-                offenders: dict[str, dict[str, str]] = {}
-                for n, g in enumerate(indices):
-                    sec = speech_seconds[g]
-                    if sec <= 0 or n in missing_local:
-                        continue
-                    if not needs_rewrite(texts[n], target_lang, sec, lock_maps[g]):
-                        continue
-                    b = budget_for(target_lang, sec)
-                    dev = fit_deviation(texts[n], target_lang, sec, lock_maps[g])
-                    offenders[str(n + 1)] = {
-                        "texto": texts[n],
-                        "objetivo": f"{b['chars_min']}-{b['chars_max']} caracteres",
-                        "estado": "largo" if dev > 0 else "corto",
-                    }
+                passes = _fit_passes()
+                for round_no in range(1, passes + 1):
+                    offenders: dict[str, dict[str, str]] = {}
+                    for n, g in enumerate(indices):
+                        sec = speech_seconds[g]
+                        if sec <= 0 or n in missing_local:
+                            continue
+                        if not needs_rewrite(texts[n], target_lang, sec, lock_maps[g]):
+                            continue
+                        b = budget_for(target_lang, sec)
+                        current = len(visible_text(texts[n], lock_maps[g]))
+                        dev = fit_deviation(texts[n], target_lang, sec, lock_maps[g])
+                        item = {
+                            "texto": texts[n],
+                            "actual": current,
+                            "objetivo": f"{b['chars_min']}-{b['chars_max']} caracteres",
+                            "estado": "largo" if dev > 0 else "corto",
+                        }
+                        if dev < 0:
+                            item["faltan"] = max(0, b["chars_min"] - current)
+                        offenders[str(n + 1)] = item
 
-                if offenders:
-                    print(f"⏱️ [Encaje] bloque {chunk_no}: {len(offenders)} segmento(s) fuera de rango; ajustando...", flush=True)
+                    if not offenders:
+                        break
+
+                    print(
+                        f"⏱️ [Encaje] bloque {chunk_no}: {len(offenders)} segmento(s) fuera de rango; "
+                        f"ajustando (pasada {round_no}/{passes})...",
+                        flush=True,
+                    )
                     fitted = _fit_retry(client, model, is_gemma, offenders, target_lang_name)
                     # El modelo devuelve a veces la misma cadena para entradas distintas
                     # (eco de la plantilla del prompt). Un texto idéntico para originales
@@ -566,6 +606,8 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                             texts[n] = new_text.strip()
                             adjusted += 1
                     print(f"⏱️ [Encaje] bloque {chunk_no}: {adjusted}/{len(offenders)} ajustado(s)", flush=True)
+                    if adjusted == 0:
+                        break
             except Exception as e_fit:
                 print(f"⚠️ [Encaje] bloque {chunk_no}: ajuste omitido ({e_fit})", flush=True)
 
