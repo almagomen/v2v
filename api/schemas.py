@@ -28,6 +28,9 @@ class ProcessUrlsRequest(BaseModel):
     initial_emotion_tag: Optional[str] = Field(
         "[excited]", description="Tag de emoción específica a incluir al inicio de cada frase (ej: [excited], [confident])"
     )
+    phonemes_disabled: Optional[bool] = Field(
+        False, description="Desactiva la inferencia y el diccionario de fonemas en la primera pasada"
+    )
 
 
 class ProcessUrlsResponse(BaseModel):

@@ -71,6 +71,7 @@ def _run_pipeline(
     speaker_map: dict[str, str] | None = None,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
+    phonemes_disabled: bool = False,
     **kwargs,
 ) -> None:
     """Run pipeline with stdout redirected to job log."""
@@ -138,6 +139,7 @@ def _run_pipeline(
                 force_reprocess=force_reprocess,
                 initial_emotion_per_sentence=initial_emotion_per_sentence,
                 initial_emotion_tag=initial_emotion_tag,
+                phonemes_disabled=phonemes_disabled,
             )
 
             if not res_list:
@@ -369,6 +371,7 @@ def start_process(
     speaker_map: dict[str, str] | None = None,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
+    phonemes_disabled: bool = False,
     **kwargs,
 ) -> str:
     """Start pipeline in background, return job_id."""
@@ -385,6 +388,7 @@ def start_process(
             speaker_map,
             initial_emotion_per_sentence,
             initial_emotion_tag,
+            phonemes_disabled,
         ),
     )
     thread.start()

@@ -357,6 +357,7 @@ export const v2vApi = {
       speakerMap?: Record<string, string>;
       initialEmotionPerSentence?: boolean;
       initialEmotionTag?: string;
+      phonemesDisabled?: boolean;
     },
     signal?: AbortSignal,
   ): Promise<ProcessUrlsResponse> {
@@ -373,6 +374,7 @@ export const v2vApi = {
         speaker_map: options?.speakerMap,
         initial_emotion_per_sentence: options?.initialEmotionPerSentence ?? false,
         initial_emotion_tag: options?.initialEmotionTag ?? "auto",
+        phonemes_disabled: options?.phonemesDisabled ?? false,
       }),
     });
     if (!res.ok) {

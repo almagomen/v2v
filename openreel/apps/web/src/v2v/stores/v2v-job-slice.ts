@@ -140,6 +140,7 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
     initialEmotionPerSentence: loadV2VPreferences().initialEmotionPerSentence,
     initialEmotionTag: loadV2VPreferences().initialEmotionTag,
+    phonemesDisabled: loadV2VPreferences().phonemesDisabled,
     importTTSSegments: loadV2VPreferences().importTTSSegments,
     importVideoOnly: loadV2VPreferences().importVideoOnly ?? true,
     importMergedVideo: loadV2VPreferences().importMergedVideo,
@@ -155,6 +156,10 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
     setInitialEmotionTag: (initialEmotionTag) => {
       saveV2VPreferences({ initialEmotionTag });
       set({ initialEmotionTag });
+    },
+    setPhonemesDisabled: (phonemesDisabled) => {
+      saveV2VPreferences({ phonemesDisabled });
+      set({ phonemesDisabled });
     },
     setImportTTSSegments: (importTTSSegments) => {
       saveV2VPreferences({ importTTSSegments });

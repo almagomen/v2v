@@ -219,6 +219,7 @@ def run_main(
     title: Optional[str] = None,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
+    phonemes_disabled: bool = False,
     **kwargs,
 ) -> Tuple[list[dict], str, list[dict], str, dict]:
     """
@@ -234,6 +235,11 @@ def run_main(
         raise FileNotFoundError(f"No se encontró el archivo de voces: {vocals_path}")
 
     result, detected_language, step_timings = transcribe_and_process(vocals_path)
+    if phonemes_disabled:
+        # El interruptor global de la primera pasada marca cada segmento antes
+        # de traducir: el prompt no pide fonemas y la entrada los persiste.
+        for segment in result:
+            segment["phonemes_disabled"] = True
     t_whisper = step_timings.get("whisper", 0.0)
     t_diarize = step_timings.get("diarization", 0.0)
 

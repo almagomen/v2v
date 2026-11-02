@@ -16,6 +16,7 @@ import {
   Layers,
   FolderInput,
   Smile,
+  Languages,
 } from "lucide-react";
 import { Button } from "@openreel/ui";
 import { v2vApi } from "../api/v2v-api";
@@ -73,6 +74,8 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
     setInitialEmotionPerSentence,
     initialEmotionTag,
     setInitialEmotionTag,
+    phonemesDisabled,
+    setPhonemesDisabled,
     importTTSSegments,
     setImportTTSSegments,
     importVideoOnly,
@@ -384,6 +387,27 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                   </select>
                 </div>
               )}
+            </div>
+
+            {/* Fonemas en la inferencia inicial */}
+            <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
+              <div className="flex items-center gap-2">
+                <Languages size={13} className="text-sky-400" />
+                <div>
+                  <span className="text-[10px] font-medium text-text-primary block">
+                    Inferir fonemas automáticamente
+                  </span>
+                  <span className="text-[9px] text-text-muted block">
+                    Gemini → Fish en la primera pasada. Desactivado: sin diccionario.
+                  </span>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={!phonemesDisabled}
+                onChange={(e) => setPhonemesDisabled(!e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+              />
             </div>
           </div>
         </div>
