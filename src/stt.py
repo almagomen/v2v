@@ -251,11 +251,17 @@ def run_main(
 
     if should_translate:
         t0_trans = time.perf_counter()
+        # Duración real del audio de voces: el slot de traducción es el clip de origen
+        # completo (márgenes incluidos), no el habla que Whisper transcribió.
+        from src.audio_utils import get_audio_file_duration
+
+        total_duration = get_audio_file_duration(vocals_path) or 0.0
         translated_texts, phonemes_list = translate_text_list(
             texts,
             target_lang=target_language,
             source_lang=detected_language,
             times=times,
+            total_duration=total_duration,
             segments_meta=result,
             initial_emotion_per_sentence=initial_emotion_per_sentence,
             initial_emotion_tag=initial_emotion_tag,
@@ -278,6 +284,7 @@ def run_main(
                     translation_status=orig.get("translation_status"),
                     entity_fail=orig.get("entity_fail"),
                     untranslated=orig.get("untranslated"),
+                    phonemes_disabled=orig.get("phonemes_disabled"),
                 )
                 for i, ((s, e), txt, orig) in enumerate(zip(times, translated_texts, result))
             ]
@@ -297,6 +304,7 @@ def run_main(
                     translation_status=orig.get("translation_status"),
                     entity_fail=orig.get("entity_fail"),
                     untranslated=orig.get("untranslated"),
+                    phonemes_disabled=orig.get("phonemes_disabled"),
                 )
                 for i, ((s, e), orig) in enumerate(zip(times, result))
             ]
@@ -316,6 +324,7 @@ def run_main(
                     translation_status=r.get("translation_status"),
                     entity_fail=r.get("entity_fail"),
                     untranslated=r.get("untranslated"),
+                    phonemes_disabled=r.get("phonemes_disabled"),
                 )
                 for i, r in enumerate(result)
             ]
@@ -338,6 +347,7 @@ def run_main(
                 original_speaker=r.get("original_speaker") or r.get("speaker"),
                 phonemes=r.get("phonemes"),
                 internal_pause_sec=r.get("internal_pause_sec"),
+                phonemes_disabled=r.get("phonemes_disabled"),
             )
             for i, r in enumerate(result)
         ]

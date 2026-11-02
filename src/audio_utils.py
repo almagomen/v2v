@@ -8,7 +8,7 @@ from typing import Optional, Tuple, Any
 import numpy as np
 
 from src.qa import evaluate_segment, format_report, levels_from_pcm, save_report, summarize
-from src.pacing import close_ripple, ends_sentence, gap_split, visible_text
+from src.pacing import ends_sentence, visible_text
 
 # Estrategia de sincronía del doblaje (no configurables por API: describen el criterio).
 SYNC_TOLERANCE = 0.94   # por debajo de este ratio se rellena con pausas internas
@@ -738,7 +738,7 @@ def clone_voice_segments(
             seg_audio_ref = audio_ref
 
         seq_num = only_indices[idx] if only_indices else idx + 1
-        seg_phonemes = text_dict.get("phonemes") or {}
+        seg_phonemes = {} if text_dict.get("phonemes_disabled") else (text_dict.get("phonemes") or {})
         tts_tasks.append((idx, text, seg_audio_ref, seq_num, seg_phonemes))
 
     # Si hay múltiples segmentos, paralelizamos las solicitudes HTTP (hasta 5 hilos)
@@ -790,25 +790,27 @@ def clone_voice_segments(
         arr_en, rate_en = torchaudio.load(str(audio_en_path))
         dur_en = arr_en.shape[-1] / rate_en
 
-        # Bordes reales del clip de origen. Incluyen el margen que recupera el habla no
-        # transcrita, así que el QA y el ripple miden contra el audio que existe y no
-        # contra la última palabra que Whisper escribió.
+        # Bordes reales del clip de origen (márgenes incluidos). El TTS se coloca en
+        # src_start, el mismo punto donde el timeline pone el clip original: así la voz
+        # doblada y la imagen no se desfasan.
         src_start = float(text_dict.get("src_start", text_dict.get("orig_start", start_time)))
-        src_end = float(text_dict.get("src_end", text_dict.get("orig_end", start_time + dur_en)))
+        src_end = float(text_dict.get("src_end", text_dict.get("orig_end", src_start + dur_en)))
 
-        # ─── BÚSQUEDA DEL PRÓXIMO SEGMENTO CRONOLÓGICO Y ESPACIO DISPONIBLE ───
+        # ─── PRÓXIMO SEGMENTO Y ESPACIO DISPONIBLE ───
+        # Se mide contra el arranque del siguiente clip (src_start), no contra la última
+        # palabra transcrita: si no, un clip que ya llena su slot se comprime de más.
         next_starts = [
-            float(t["start"])
+            float(t.get("src_start", t.get("orig_start", t.get("start", 0.0))))
             for t in texts
-            if float(t["start"]) > start_time + 0.01
+            if float(t.get("src_start", t.get("orig_start", t.get("start", 0.0)))) > src_start + 0.01
         ]
         next_seg_start = min(next_starts) if next_starts else None
 
         # Límite máximo disponible antes de chocar o invadir silencios musicales
         if next_seg_start is not None:
-            hard_limit = max(0.2, next_seg_start - start_time - 0.04)
+            hard_limit = max(0.2, next_seg_start - src_start - 0.04)
         elif video_total_duration is not None:
-            hard_limit = max(0.2, video_total_duration - start_time - 0.05)
+            hard_limit = max(0.2, video_total_duration - src_start - 0.05)
         else:
             hard_limit = max(dur_en + 0.8, 2.0)
 
@@ -830,7 +832,7 @@ def clone_voice_segments(
             speaker=seg_audio_ref,
             out_audio_path=audio_es_path,
             raw_audio_path=raw_es_path,
-            phonemes=text_dict.get("phonemes"),
+            phonemes=None if text_dict.get("phonemes_disabled") else text_dict.get("phonemes"),
             speed=speed,
             target_duration=target_duration,
             orig_duration=dur_en,
@@ -845,7 +847,7 @@ def clone_voice_segments(
             tts_errors += 1
             continue
 
-        # Coordenadas del original intactas: el arranque final se decide al cerrar huecos
+        # Coordenadas del original intactas: el TTS ya se sintetizó contra su clip.
         text_dict["orig_start"] = round(float(text_dict.get("orig_start", start_time)), 3)
         text_dict["orig_end"] = round(float(text_dict.get("orig_end", start_time + dur_en)), 3)
         text_dict["orig_duration"] = round(float(text_dict.get("orig_duration", dur_en)), 3)
@@ -875,7 +877,7 @@ def clone_voice_segments(
             "text_dict": text_dict,
             "seq_num": seq_num,
             "text": text,
-            "start": start_time,
+            "start": src_start,
             "dur_en": dur_en,
             "src_start": src_start,
             "src_end": src_end,
@@ -886,34 +888,6 @@ def clone_voice_segments(
             "rate": rate,
             "chars": len(visible_text(text)),
         })
-
-    # ─── Cierre de ripple: el silencio de mitad de frase se mueve a las pausas ───
-    starts = close_ripple(
-        [item["start"] for item in prepared],
-        [item["final_dur"] for item in prepared],
-        [item["src_end"] for item in prepared],
-    )
-    before_mid, _before_end = gap_split(
-        [item["start"] for item in prepared],
-        [item["final_dur"] for item in prepared],
-        [ends_sentence(item["text"]) for item in prepared],
-    )
-    moved = 0
-    for item, new_start in zip(prepared, starts):
-        if item["start"] - new_start > 0.001:
-            moved += 1
-        item["start"] = new_start
-    if moved:
-        after_mid, _after_end = gap_split(
-            [item["start"] for item in prepared],
-            [item["final_dur"] for item in prepared],
-            [ends_sentence(item["text"]) for item in prepared],
-        )
-        print(
-            f"🔗 [Ritmo] {moved} segmento(s) adelantado(s): silencio interno "
-            f"{before_mid:.1f}s → {after_mid:.1f}s (el resto pasa a pausas de fin de frase)",
-            flush=True,
-        )
 
     for item in prepared:
         text_dict = item["text_dict"]

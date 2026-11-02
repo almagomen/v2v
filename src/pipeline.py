@@ -18,7 +18,7 @@ except ImportError:
 from src.download import yt
 from src.stt import run_main
 from src.config import QUEUE_DIR
-from src.pacing import source_margins
+from src.pacing import source_bounds
 from src.result_store import (
     load_result,
     save_result,
@@ -276,30 +276,30 @@ def split_audio_sequences(
 
     total_audio_sec = total_samples / float(org_sr) if org_sr > 0 else 0.0
 
+    # Bordes del habla transcrita de TODOS los segmentos: el margen depende de los
+    # vecinos reales, así que al regenerar un subconjunto no se puede calcular sobre
+    # la sublista (los huecos serían los del salto entre índices, no los del video).
+    all_times = [
+        (
+            float(t.get("orig_start") if t.get("orig_start") is not None else t.get("start", 0.0)),
+            float(t.get("orig_end") if t.get("orig_end") is not None else t.get("end", 0.0)),
+        )
+        for t in texts
+    ]
+
     for idx, text_dict in enumerate(texts_to_process):
-        s_sec = float(text_dict.get("orig_start") if text_dict.get("orig_start") is not None else text_dict.get("start", 0.0))
-        e_sec = float(text_dict.get("orig_end") if text_dict.get("orig_end") is not None else text_dict.get("end", 0.0))
+        real_idx = (edit_indices[idx] - 1) if edit_indices else idx
+        # Mismo cálculo que usan el presupuesto de traducción y la sincronía del TTS.
+        src_start, src_end = source_bounds(all_times, real_idx, total_audio_sec)
 
-        # Espacio de silencio disponible antes y después del segmento
-        prev_end_sec = float(texts_to_process[idx - 1].get("orig_end", texts_to_process[idx - 1].get("end", 0.0))) if idx > 0 else 0.0
-        next_start_sec = float(texts_to_process[idx + 1].get("orig_start", texts_to_process[idx + 1].get("start", total_audio_sec))) if idx + 1 < len(texts_to_process) else total_audio_sec
-
-        gap_before = max(0.0, s_sec - prev_end_sec)
-        gap_after = max(0.0, next_start_sec - e_sec)
-
-        # Extensión acústica: recupera el habla que Whisper no transcribió (muletillas,
-        # respiraciones, titubeos) que de otro modo queda como aire muerto al final del
-        # clip. Entre los dos lados nunca se toma más del 80% del hueco.
-        lead_margin, tail_margin = source_margins(gap_before, gap_after)
-
-        start = max(0, int(round((s_sec - lead_margin) * org_sr)))
-        end = min(total_samples, int(round((e_sec + tail_margin) * org_sr)))
+        start = max(0, int(round(src_start * org_sr)))
+        end = min(total_samples, int(round(src_end * org_sr)))
         if end <= start:
             continue
-        # Bordes reales del archivo escrito: son los que miden el hueco disponible, el
-        # ripple y el QA. Sin ellos, el tramo recuperado se contaba otra vez como silencio.
-        text_dict["src_start"] = round(start / float(org_sr), 3)
-        text_dict["src_end"] = round(end / float(org_sr), 3)
+        # Bordes reales del clip: son los que miden el hueco disponible, el presupuesto
+        # de traducción y el QA. Sin ellos, el tramo recuperado se contaba como silencio.
+        text_dict["src_start"] = src_start
+        text_dict["src_end"] = src_end
         arr_split = read_frames(start, end - start)
 
         # Aplicar micro-fade in (5ms) y micro-fade out (15ms) para evitar clicks o cortes bruscos de resonancias

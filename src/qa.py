@@ -241,8 +241,9 @@ def _dead_air_mid(records: Sequence[dict[str, Any]]) -> Optional[float]:
     Fracción del timeline que es silencio dentro de una frase.
 
     Es el aire muerto que suena a corte: el que cae después de un punto es una pausa
-    legítima y no molesta. `close_ripple` no puede bajar el total (el video dura lo que
-    dura), pero sí moverlo de aquí a los finales de frase, y esto es lo que lo mide.
+    legítima y no molesta. Con el TTS llenando el slot del clip de origen, este
+    silencio mide lo que queda dentro de una idea; su reparto frente a los finales de
+    frase es lo que lo reduce.
     """
     if not records:
         return None

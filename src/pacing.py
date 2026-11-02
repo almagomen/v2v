@@ -14,7 +14,7 @@ El módulo es puro: sin red, sin torch, sin genai. Se testea con `unittest` solo
 import json
 import re
 from collections import Counter
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 # (sílabas por segundo, caracteres por segundo) en locución.
 # `es` sale de la QA de un render real con Fish Audio (17.2 chars/s a 1.0x); el resto
@@ -47,22 +47,6 @@ MIN_WORDS_TO_REWRITE = 3
 # ajuste de 0.01 contaba como avance y dejaba pasar textos que seguían sin caber.
 FIT_MIN_GAIN = 0.02
 
-# ─── Cierre de ripple ────────────────────────────────────────────────────────────
-# Un hueco a mitad de frase se oye como un corte de audio; el mismo hueco tras un
-# punto es una pausa legítima. Se adelanta el arranque del clip siguiente para
-# comerse el silencio añadido, se conserva un respiro mínimo para que las palabras no
-# se peguen y el corrimiento acumulado tiene tope para no despegar la voz de la
-# imagen. En cada punto se devuelve solo una parte del corrimiento: devolverlo entero
-# convertiría una pausa natural en un silencio de más de un segundo.
-RIPPLE_GAP = 0.30
-RIPPLE_KEEP = 0.12
-RIPPLE_STEP_MAX = 0.45
-RIPPLE_SHIFT_MAX = 1.20
-RIPPLE_PAYBACK_MAX = 0.35
-# Pausa de la fuente a partir de la cual el corrimiento se devuelve: por debajo de
-# esto el hueco es del corte de segmentos, no del habla, y cerrarlo no se nota.
-RIPPLE_PAUSE_MIN = 0.60
-
 # ─── Margen del clip de origen ───────────────────────────────────────────────────
 # Whisper no escribe muletillas, respiraciones ni titubeos: el segmento termina en la
 # última palabra transcrita y el resto de habla quedaba como aire muerto al final del
@@ -86,6 +70,45 @@ def source_margins(gap_before: float, gap_after: float) -> tuple[float, float]:
         min(SOURCE_LEAD_MAX, gb * SOURCE_MARGIN_SHARE),
         min(SOURCE_TAIL_MAX, ga * SOURCE_MARGIN_SHARE),
     )
+
+
+def source_bounds(
+    times: Sequence[tuple[float, float]],
+    index: int,
+    total_duration: float,
+) -> tuple[float, float]:
+    """
+    Arranque y fin del clip de origen de un segmento, márgenes incluidos.
+
+    Es la única fuente de verdad del tramo que ocupa un segmento en el audio. El
+    presupuesto de traducción, el corte de `vocals.wav` y la sincronía del TTS tienen
+    que medir exactamente lo mismo: si la traducción se presupuesta contra el habla de
+    Whisper pero el TTS se sincroniza contra el clip recortado (que recupera
+    muletillas y respiraciones), el texto sale corto por construcción y el
+    sincronizador lo estira hasta 0.80x.
+
+    Args:
+        times: (inicio, fin) del habla transcrita de cada segmento, en segundos.
+        index: posición del segmento dentro de `times`.
+        total_duration: duración total del audio de voces.
+
+    Returns:
+        (src_start, src_end) redondeados al milisegundo.
+    """
+    n = len(times)
+    if not 0 <= index < n:
+        raise IndexError(f"índice {index} fuera de rango para {n} segmentos")
+
+    s_sec = float(times[index][0])
+    e_sec = float(times[index][1])
+    prev_end = float(times[index - 1][1]) if index > 0 else 0.0
+    next_start = float(times[index + 1][0]) if index + 1 < n else float(total_duration)
+
+    lead, tail = source_margins(s_sec - prev_end, next_start - e_sec)
+    start = max(0.0, s_sec - lead)
+    end = min(float(total_duration), e_sec + tail)
+    return round(start, 3), round(end, 3)
+
 
 _TERMINAL_RE = re.compile(r"[.!?…]+[\"'»)\]]*\s*$")
 
@@ -183,59 +206,6 @@ def needs_rewrite(text: str, lang: str, seconds: float, lock_map: Optional[dict[
 def ends_sentence(text: str) -> bool:
     """True si el texto cierra frase: tras un punto la pausa es intencional."""
     return bool(_TERMINAL_RE.search(visible_text(text)))
-
-
-def close_ripple(
-    starts: list[float],
-    durations: list[float],
-    source_ends: list[float],
-) -> list[float]:
-    """
-    Quita el silencio que añadió el doblaje y lo devuelve a las pausas legítimas.
-
-    El silencio total no se puede eliminar: el video dura lo que dura. Lo que sí se
-    puede es reubicarlo. Un hueco dentro de una idea suena a corte de audio; el mismo
-    silencio dentro de una pausa del original suena natural. Por eso el corrimiento se
-    acumula mientras la fuente no pausaba y se devuelve cuando la fuente sí pausaba.
-
-    La pausa legítima se decide con `source_ends`, no con la puntuación del texto: el
-    traductor pone punto final en casi todos los segmentos (el corte de STT no respeta
-    frases), así que mirar el punto devolvía el corrimiento en cada frontera y el cierre
-    no llegaba a actuar.
-
-    Solo se cierra el silencio que no existía en el original: si la fuente ya tenía una
-    pausa de dos segundos, cerrarla dejaría el doblaje más rápido que el habla original,
-    que es un defecto distinto.
-
-    El tope `RIPPLE_SHIFT_MAX` acota cuánto puede adelantarse la voz dentro de una
-    cadena, para no despegarla de la imagen más de lo tolerable.
-
-    Args:
-        starts: arranque original de cada segmento, en segundos.
-        durations: duración final del audio sintetizado de cada segmento.
-        source_ends: fin del habla original de cada segmento, en segundos.
-
-    Returns:
-        Nuevos arranques, en el mismo orden que la entrada.
-    """
-    n = len(starts)
-    if not (len(durations) == n and len(source_ends) == n):
-        raise ValueError("starts, durations y source_ends deben tener la misma longitud")
-
-    new = [float(s) for s in starts]
-    order = sorted(range(n), key=lambda i: new[i])
-    shift = 0.0
-    for prev, cur in zip(order, order[1:]):
-        gap_i = float(starts[cur]) - (float(starts[prev]) + float(durations[prev]))
-        source_gap = float(starts[cur]) - float(source_ends[prev])
-        if source_gap >= RIPPLE_PAUSE_MIN:
-            shift = max(0.0, shift - RIPPLE_PAYBACK_MAX)
-        if gap_i > RIPPLE_GAP:
-            closable = gap_i - max(source_gap, RIPPLE_KEEP)
-            if closable > 0:
-                shift = min(shift + min(closable, RIPPLE_STEP_MAX), RIPPLE_SHIFT_MAX)
-        new[cur] = round(float(starts[cur]) - shift, 3)
-    return new
 
 
 def gap_split(

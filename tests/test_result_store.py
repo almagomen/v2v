@@ -115,5 +115,24 @@ class TestBordesDelClip(unittest.TestCase):
         self.assertEqual((entry["orig_start"], entry["orig_end"]), (0.15, 1.0))
 
 
+class TestFonemasDesactivados(unittest.TestCase):
+    def test_flag_desactiva_y_limpia_fonemas(self):
+        entry = create_segment_entry(
+            1,
+            0.0,
+            1.0,
+            "texto",
+            phonemes={"Ghidra": "gui-dra"},
+            phonemes_disabled=True,
+        )
+        self.assertTrue(entry["phonemes_disabled"])
+        self.assertNotIn("phonemes", entry)
+
+    def test_sin_flag_persiste_fonemas(self):
+        entry = create_segment_entry(1, 0.0, 1.0, "texto", phonemes={"Ghidra": "gui-dra"})
+        self.assertEqual(entry["phonemes"], {"Ghidra": "gui-dra"})
+        self.assertNotIn("phonemes_disabled", entry)
+
+
 if __name__ == "__main__":
     unittest.main()

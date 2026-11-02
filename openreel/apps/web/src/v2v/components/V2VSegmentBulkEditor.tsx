@@ -188,6 +188,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         repetitionPenalty: 1.2,
         volume: 0.0,
         phonemes: apiRow.phonemes || {},
+        phonemesDisabled: Boolean(apiRow.phonemes_disabled),
       };
       // Si el audio falta, forzamos dirty=true para que "Aplicar todos" lo incluya automáticamente
       const forceDirty = missingAudio && ttsText.trim().length > 0;
@@ -311,16 +312,23 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
         targets.map((r) => r.seg),
         effectiveTargetLang,
         Object.keys(customMap).length > 0 ? customMap : undefined,
+        targets.filter((r) => r.phonemesDisabled).map((r) => r.seg),
       );
       const bySeg = new Map(segments.map((s) => [s.seg, s]));
       setRows((prev) =>
         prev.map((r) => {
           const item = bySeg.get(r.seg);
           if (item == null) return r;
+          const phonemesDisabled = item.phonemes_disabled ?? r.phonemesDisabled ?? false;
           const next = {
             ...r,
             draftText: item.text,
-            phonemes: item.phonemes ? { ...(r.phonemes || {}), ...item.phonemes } : r.phonemes,
+            phonemesDisabled,
+            phonemes: phonemesDisabled
+              ? {}
+              : item.phonemes
+                ? { ...(r.phonemes || {}), ...item.phonemes }
+                : r.phonemes,
           };
           return { ...next, dirty: rowIsDirty(next) };
         }),
@@ -372,6 +380,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
           repetition_penalty: row.repetitionPenalty,
           volume: row.volume,
           phonemes: row.phonemes,
+          phonemes_disabled: Boolean(row.phonemesDisabled),
           prevent_overlap: row.preventOverlap,
         },
       );
@@ -548,6 +557,7 @@ export const V2VSegmentBulkEditor: React.FC<Props> = ({
             repetition_penalty: row.repetitionPenalty,
             volume: row.volume,
             phonemes: row.phonemes,
+            phonemes_disabled: Boolean(row.phonemesDisabled),
             prevent_overlap: row.preventOverlap,
           },
         );

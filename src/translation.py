@@ -25,6 +25,7 @@ from src.pacing import (
     echoed_texts,
     fit_deviation,
     needs_rewrite,
+    source_bounds,
     speech_rate,
     visible_text,
 )
@@ -141,6 +142,7 @@ def translate_text_list(
     model_name: Optional[str] = None,
     print_full_prompt: bool = False,
     times: Optional[list[Tuple[float, float]]] = None,
+    total_duration: Optional[float] = None,
     segments_meta: Optional[list[dict]] = None,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
@@ -150,7 +152,9 @@ def translate_text_list(
     """
     Traduce o adapta una lista de frases a un idioma objetivo usando Gemini (Interactions API).
 
-    - Doblaje isométrico: presupuesto de sílabas/tiempo neto por segmento.
+    - Doblaje isométrico: presupuesto de sílabas/tiempo neto por segmento. El slot es
+      el clip de origen completo (`source_bounds`), márgenes incluidos, porque es lo que
+      el TTS tiene que llenar.
     - Entity lock: nombres técnicos, archivos, rutas y versiones viajan como ⟦E#⟧ y se
       restauran tras verificar que el modelo no los tocó.
     - Chunking: la lista se parte en bloques (TRANSLATION_CHUNK_SEGMENTS, 80 por defecto)
@@ -223,11 +227,14 @@ def translate_text_list(
             entry_lines.append(locked_s)
             continue
 
-        start_t, end_t = times[i]
-        total_dur = max(0.4, round(end_t - start_t, 2))
-        # El clip de origen ocupa el slot entero, pausas internas incluidas. Si el
-        # presupuesto descuenta esas pausas, el texto sale corto por definición y el
-        # sincronizador tiene que estirar el audio (hasta 0.80x) para rellenar.
+        if total_duration and total_duration > 0:
+            slot_start, slot_end = source_bounds(times, i, total_duration)
+        else:
+            slot_start, slot_end = times[i]
+        total_dur = max(0.4, round(slot_end - slot_start, 2))
+        # El clip de origen ocupa el slot entero, márgenes y pausas internas incluidos.
+        # Si el presupuesto mide solo el habla transcrita, el texto sale corto por
+        # construcción y el sincronizador tiene que estirar el audio (hasta 0.80x).
         speech_seconds[i] = total_dur
 
         b = budget_for(target_lang, total_dur)
@@ -697,6 +704,13 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 # ─── Pronunciación: una regla por palabra y cobertura de las bloqueadas ───
                 # Corre antes de la etiqueta de emoción para que la clave case con el
                 # texto tal como lo dirá la voz, sin prefijos de control.
+                # Los segmentos con la inferencia desactivada no entran en la
+                # consolidación: ni se les pide respelling ni se les aplica tabla.
+                skip_phonemes = {
+                    i
+                    for i, meta_item in enumerate(segments_meta or [])
+                    if meta_item.get("phonemes_disabled")
+                }
                 phonemes_map = _finalize_pronunciations(
                     phonemes_map,
                     aligned_list,
@@ -704,6 +718,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     target_lang,
                     target_lang_name,
                     lambda prompt: _call_model(client, model, is_gemma, prompt),
+                    skip=skip_phonemes,
                 )
 
                 # Etiqueta de emoción al frente (después del rescate: el modelo no debe verla)
@@ -714,7 +729,11 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 # Fonemas y estado de traducción por segmento
                 if segments_meta and len(segments_meta) == total_count:
                     for idx, meta_item in enumerate(segments_meta):
-                        ph = phonemes_map.get(idx) or {}
+                        ph = (
+                            {}
+                            if meta_item.get("phonemes_disabled")
+                            else (phonemes_map.get(idx) or {})
+                        )
                         if ph:
                             meta_item["phonemes"] = ph
                         elif "phonemes" not in meta_item:
@@ -775,6 +794,7 @@ def _finalize_pronunciations(
     target_lang: str,
     target_lang_name: str,
     call: Callable[[str], str],
+    skip: Optional[set[int]] = None,
 ) -> dict[int, dict[str, str]]:
     """
     Consolida las reglas del lote y cubre los términos que el traductor no pudo ver.
@@ -788,7 +808,8 @@ def _finalize_pronunciations(
     Returns:
         {índice: {clave: respelling}} listo para `pronunciation_dictionary`.
     """
-    tables = [phonemes_map.get(i) or {} for i in range(len(texts))]
+    skip = skip or set()
+    tables = [{} if i in skip else (phonemes_map.get(i) or {}) for i in range(len(texts))]
     chosen, display, conflicts = consolidate(tables, target_lang)
 
     entity_terms = [term for mapping in lock_maps for term in mapping.values()]
@@ -814,7 +835,7 @@ def _finalize_pronunciations(
                 extra[norm_key(rule["key"])] = rule
 
     final = {
-        i: apply_table(texts[i], tables[i], chosen, display, extra)
+        i: {} if i in skip else apply_table(texts[i], tables[i], chosen, display, extra)
         for i in range(len(texts))
     }
 

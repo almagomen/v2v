@@ -127,6 +127,9 @@ def get_segments_editor(job_id: str, video_index: int):
                 original_speaker=orig_spk,
                 filename=_find_tts_filename(folder, seg_num),
                 phonemes=seg_ph,
+                phonemes_disabled=bool(
+                    tts_d.get("phonemes_disabled") or orig_d.get("phonemes_disabled")
+                ),
             )
         )
 
@@ -165,10 +168,24 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
         target_lang = "es" if source_lang != "es" else "en"
 
     indices = sorted(set(req.seg_indices))
+    skip_phonemes = set(req.skip_phonemes or [])
     sentences: list[str] = []
     valid_indices: list[int] = []
     times_list: list[tuple[float, float]] = []
     meta_list: list[dict] = []
+
+    # El slot de traducción es el clip de origen completo (márgenes incluidos), el
+    # mismo tramo que recorta `split_audio_sequences` y que el TTS debe llenar.
+    from src.audio_utils import get_audio_file_duration
+    from src.pacing import source_bounds
+
+    vocals = folder / "vocals.wav"
+    if not vocals.exists():
+        vocals = folder / "vocals.m4a"
+    total_duration = get_audio_file_duration(vocals) if vocals.exists() else None
+    full_times = [
+        (float(d.get("start", 0.0)), float(d.get("end", 0.0))) for d in original_list
+    ]
 
     for seg_idx in indices:
         if seg_idx < 1 or seg_idx > len(original_list):
@@ -185,10 +202,15 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
         if text:
             sentences.append(text)
             valid_indices.append(seg_idx)
-            s_t = float(orig_d.get("start", 0.0))
-            e_t = float(orig_d.get("end", s_t + 2.0))
+            if total_duration and total_duration > 0:
+                s_t, e_t = source_bounds(full_times, seg_idx - 1, total_duration)
+            else:
+                s_t = float(orig_d.get("start", 0.0))
+                e_t = float(orig_d.get("end", s_t + 2.0))
             times_list.append((s_t, e_t))
-            meta_list.append(orig_d)
+            meta = dict(orig_d)
+            meta["phonemes_disabled"] = seg_idx in skip_phonemes
+            meta_list.append(meta)
 
     if not sentences:
         raise HTTPException(status_code=400, detail="No hay textos para retraducir")
@@ -223,16 +245,17 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
                     speaker=curr.get("speaker") or meta.get("speaker") or "mrbeast",
                     original_speaker=meta.get("original_speaker") or curr.get("original_speaker") or "SPEAKER_00",
                     phonemes=ph or meta.get("phonemes") or curr.get("phonemes"),
+                    phonemes_disabled=bool(meta.get("phonemes_disabled")),
+                    orig_start=curr.get("orig_start"),
+                    orig_end=curr.get("orig_end"),
+                    orig_duration=curr.get("orig_duration"),
+                    src_start=curr.get("src_start"),
+                    src_end=curr.get("src_end"),
+                    syllable_count=curr.get("syllable_count"),
+                    internal_pause_sec=curr.get("internal_pause_sec"),
                     translation_status=meta.get("translation_status"),
                     entity_fail=meta.get("entity_fail"),
-                    extra={
-                        k: v for k, v in curr.items()
-                        if k not in (
-                            "seg", "start", "end", "duration", "text",
-                            "original_text", "speaker",
-                            "original_speaker", "phonemes"
-                        )
-                    },
+                    untranslated=meta.get("untranslated"),
                 )
         update_result_segments(folder, tts_list)
     except Exception as e_upd:
@@ -240,7 +263,16 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
 
     return RetranslateSegmentsResponse(
         segments=[
-            RetranslateSegmentItem(seg=seg, text=txt, phonemes=ph or meta.get("phonemes"))
+            RetranslateSegmentItem(
+                seg=seg,
+                text=txt,
+                phonemes=(
+                    None
+                    if meta.get("phonemes_disabled")
+                    else (ph or meta.get("phonemes"))
+                ),
+                phonemes_disabled=bool(meta.get("phonemes_disabled")),
+            )
             for seg, txt, ph, meta in zip(valid_indices, translated, phonemes_list or [None] * len(translated), meta_list)
         ]
     )

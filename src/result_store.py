@@ -208,6 +208,7 @@ def create_segment_entry(
     speaker: Optional[str] = None,
     original_speaker: Optional[str] = None,
     phonemes: Optional[dict[str, str]] = None,
+    phonemes_disabled: bool = False,
     orig_start: Optional[float] = None,
     orig_end: Optional[float] = None,
     orig_duration: Optional[float] = None,
@@ -275,7 +276,9 @@ def create_segment_entry(
         entry["src_end"] = s_end
     if syl_cnt:
         entry["syllable_count"] = syl_cnt
-    if clean_phonemes:
+    if phonemes_disabled:
+        entry["phonemes_disabled"] = True
+    elif clean_phonemes:
         entry["phonemes"] = clean_phonemes
     if internal_pause_sec:
         entry["internal_pause_sec"] = float(internal_pause_sec)
