@@ -177,6 +177,13 @@ def translate_text_list(
     total_count = len(list_sentences)
     has_times = bool(times and len(times) == total_count)
     fit_enabled = os.environ.get("TRANSLATION_FIT_BUDGET", "1").strip().lower() not in ("0", "false", "no")
+    # Segmentos con la inferencia de fonemas desactivada: ni el prompt les pide
+    # glosario, ni entran en la consolidación, ni se persisten sus fonemas.
+    skip_phonemes = {
+        i
+        for i, meta_item in enumerate(segments_meta or [])
+        if meta_item.get("phonemes_disabled")
+    }
 
     # ─── Entity lock: congelar términos técnicos antes de tocar el prompt ───
     # Las mayúsculas del ASR no distinguen nombres propios de ortografía de pausa:
@@ -275,7 +282,7 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
     else:
         entity_rule = "9. CIFRAS Y NOMBRES: Conserva sin cambios los números, nombres de archivo, rutas, versiones y siglas técnicas que aparezcan en el texto."
 
-    def _build_prompt(entries: dict[str, str], count: int, context: list[str]) -> str:
+    def _build_prompt(entries: dict[str, str], count: int, context: list[str], no_phonemes_keys: Optional[set[str]] = None) -> str:
         ex_text_1 = f"frase 1 adaptada al {target_lang_name}"
         ex_text_2 = f"frase 2 adaptada al {target_lang_name}"
 
@@ -304,6 +311,14 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
                 f"{json.dumps(context, ensure_ascii=False)}\n"
             )
 
+        no_phonemes_rule = ""
+        if no_phonemes_keys:
+            keys_txt = ", ".join(f'"{k}"' for k in sorted(no_phonemes_keys, key=int))
+            no_phonemes_rule = (
+                f"\n   8-b. SEGMENTOS SIN FONEMAS: para las claves {keys_txt}, devuelve "
+                f'siempre "phonemes": {empty_dict_str} y no generes glosario de pronunciación.'
+            )
+
         return f"""{role_mission}
 
 Directrices obligatorias:
@@ -326,7 +341,7 @@ Directrices obligatorias:
    Para cada vocablo detectado en la frase:
    - Como clave: la palabra exacta tal como está escrita en tu texto traducido.
    - Como valor: su transcripción fonética legible e intuitiva para un hablante de {target_lang_name}, marcando con tilde la sílaba con mayor fuerza de entonación (acento prosódico) para guiar con precisión la pronunciación de la voz sintética.
-   - En tu salida, asocia el diccionario al campo "phonemes": {{"Palabra": "Pronunciación"}}. Si una frase contiene únicamente vocabulario cotidiano estándar de {target_lang_name}, deja "phonemes": {empty_dict_str}.
+   - En tu salida, asocia el diccionario al campo "phonemes": {{"Palabra": "Pronunciación"}}. Si una frase contiene únicamente vocabulario cotidiano estándar de {target_lang_name}, deja "phonemes": {empty_dict_str}.{no_phonemes_rule}
 {entity_rule}
 10. MAYÚSCULAS DEL RECONOCIMIENTO DE VOZ (NO SON NOMBRES PROPIOS):
    El texto de entrada viene de un ASR que capitaliza la primera palabra de cada trozo separado por una pausa, aunque sea una palabra corriente. Una mayúscula a mitad de frase NO indica nombre propio: solo los marcadores ⟦E1⟧, ⟦E2⟧... son términos protegidos.
@@ -401,7 +416,10 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         """Traduce un bloque. Devuelve {índice_global: payload} o None si la respuesta no sirve."""
         local_entries = {str(n + 1): entry_lines[g] for n, g in enumerate(indices)}
         context = [locked_sentences[g] for g in range(max(0, indices[0] - 2), indices[0])]
-        prompt = _build_prompt(local_entries, len(indices), context)
+        local_no_phonemes = {
+            str(n + 1) for n, g in enumerate(indices) if g in skip_phonemes
+        }
+        prompt = _build_prompt(local_entries, len(indices), context, local_no_phonemes)
 
         if print_full_prompt:
             print("\n" + "=" * 60, flush=True)
@@ -704,13 +722,6 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 # ─── Pronunciación: una regla por palabra y cobertura de las bloqueadas ───
                 # Corre antes de la etiqueta de emoción para que la clave case con el
                 # texto tal como lo dirá la voz, sin prefijos de control.
-                # Los segmentos con la inferencia desactivada no entran en la
-                # consolidación: ni se les pide respelling ni se les aplica tabla.
-                skip_phonemes = {
-                    i
-                    for i, meta_item in enumerate(segments_meta or [])
-                    if meta_item.get("phonemes_disabled")
-                }
                 phonemes_map = _finalize_pronunciations(
                     phonemes_map,
                     aligned_list,

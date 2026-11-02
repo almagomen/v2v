@@ -383,5 +383,50 @@ class TestFitBudget(unittest.TestCase):
         self.assertNotIn("slot |", fake.interactions.translation_prompts[0])
 
 
+@unittest.skipUnless(_HAS_GENAI, "google-genai no instalado en este entorno")
+class TestFonemasDesactivados(unittest.TestCase):
+    """El interruptor por segmento debe callar al modelo y al diccionario."""
+
+    def _run_with_meta(self, responses, sentences, meta, respellings=None):
+        _FakeClient.instances.clear()
+        fake = _FakeClient("k")
+        fake.interactions.responses = responses
+        fake.interactions.respellings = dict(respellings or {})
+        with patch("src.translation.get_google_api_keys", return_value=["test-key"]), \
+             patch("src.translation.genai.Client", lambda api_key: fake):
+            result = translate_text_list(
+                sentences,
+                target_lang="es",
+                source_lang="pt",
+                segments_meta=meta,
+                return_details=True,
+            )
+        return result, meta, fake
+
+    def test_prompt_pide_phonemes_vacio_para_el_segmento(self):
+        sentences = ["Abre o Ghidra agora.", "Instala o npm depois."]
+        meta = [{"seg": 1, "phonemes_disabled": True}, {"seg": 2}]
+        payload = {
+            "1": {"text": "Abre el ⟦E1⟧ ahora.", "phonemes": {"Ghidra": "guidra"}},
+            "2": {"text": "Instala el npm después.", "phonemes": {"npm": "ene-pe-eme"}},
+        }
+        result, meta, fake = self._run_with_meta(
+            [json.dumps(payload)],
+            sentences,
+            meta,
+            respellings={"Ghidra": "guidra", "npm": "ene-pe-eme"},
+        )
+        texts, phonemes = result
+
+        prompt = fake.interactions.translation_prompts[0]
+        self.assertIn("SEGMENTOS SIN FONEMAS", prompt)
+        self.assertIn('para las claves "1"', prompt)
+        self.assertEqual(phonemes[0], {})
+        self.assertEqual(meta[0]["phonemes"], {})
+        # El segmento con el interruptor apagado sigue recibiendo su diccionario.
+        self.assertEqual(meta[1]["phonemes"], {"npm": "ene-pe-eme"})
+        self.assertEqual(texts[0], "Abre el Ghidra ahora.")
+
+
 if __name__ == "__main__":
     unittest.main()
