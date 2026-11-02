@@ -403,7 +403,7 @@ class TestFonemasDesactivados(unittest.TestCase):
             )
         return result, meta, fake
 
-    def test_prompt_pide_phonemes_vacio_para_el_segmento(self):
+    def test_prompt_omite_fonemas_del_segmento_desactivado(self):
         sentences = ["Abre o Ghidra agora.", "Instala o npm depois."]
         meta = [{"seg": 1, "phonemes_disabled": True}, {"seg": 2}]
         payload = {
@@ -419,13 +419,66 @@ class TestFonemasDesactivados(unittest.TestCase):
         texts, phonemes = result
 
         prompt = fake.interactions.translation_prompts[0]
-        self.assertIn("SEGMENTOS SIN FONEMAS", prompt)
-        self.assertIn('para las claves "1"', prompt)
+        # La regla existe por la clave 2, pero no menciona a la clave 1.
+        self.assertIn("DETECCIÓN FONÉTICA", prompt)
+        self.assertIn('Aplica solo a las claves "2"', prompt)
+        self.assertNotIn("SEGMENTOS SIN FONEMAS", prompt)
+        self.assertIn('"1": {\n    "text": "frase 1 adaptada al Español"\n  }', prompt)
         self.assertEqual(phonemes[0], {})
         self.assertEqual(meta[0]["phonemes"], {})
-        # El segmento con el interruptor apagado sigue recibiendo su diccionario.
+        # El segmento con el interruptor encendido sigue recibiendo su diccionario.
         self.assertEqual(meta[1]["phonemes"], {"npm": "ene-pe-eme"})
         self.assertEqual(texts[0], "Abre el Ghidra ahora.")
+
+    def test_prompt_sin_fonemas_cuando_todos_estan_desactivados(self):
+        sentences = ["Abre o Ghidra agora.", "Instala o npm depois."]
+        meta = [
+            {"seg": 1, "phonemes_disabled": True},
+            {"seg": 2, "phonemes_disabled": True},
+        ]
+        payload = {
+            "1": {"text": "Abre el ⟦E1⟧ ahora.", "phonemes": {"Ghidra": "guidra"}},
+            "2": {"text": "Instala el npm después.", "phonemes": {"npm": "ene-pe-eme"}},
+        }
+        result, meta, fake = self._run_with_meta([json.dumps(payload)], sentences, meta)
+        texts, phonemes = result
+
+        prompt = fake.interactions.translation_prompts[0]
+        # Sin claves activas no debe quedar rastro del campo ni del glosario.
+        self.assertNotIn("phonemes", prompt)
+        self.assertNotIn("DETECCIÓN FONÉTICA", prompt)
+        self.assertNotIn("GLOSARIO DE PRONUNCIACIÓN", prompt)
+        self.assertEqual(phonemes, [{}, {}])
+        self.assertEqual(meta[0]["phonemes"], {})
+        self.assertEqual(meta[1]["phonemes"], {})
+        self.assertEqual(texts, ["Abre el Ghidra ahora.", "Instala el npm después."])
+
+    def test_ejemplo_mixto_muestra_ambas_formas(self):
+        sentences = ["Abre o Ghidra.", "Instala o npm.", "Roda o script.", "Fecha tudo."]
+        meta = [
+            {"seg": 1, "phonemes_disabled": True},
+            {"seg": 2, "phonemes_disabled": True},
+            {"seg": 3},
+            {"seg": 4, "phonemes_disabled": True},
+        ]
+        payload = {
+            "1": {"text": "Abre el Ghidra."},
+            "2": {"text": "Instala el npm."},
+            "3": {"text": "Ejecuta el script.", "phonemes": {"script": "escript"}},
+            "4": {"text": "Cierra todo."},
+        }
+        result, meta, fake = self._run_with_meta([json.dumps(payload)], sentences, meta)
+        texts, _ = result
+
+        prompt = fake.interactions.translation_prompts[0]
+        self.assertIn('Aplica solo a las claves "3"', prompt)
+        # La clave desactivada 1 no lleva el campo; la activa 3 sí; y el
+        # ejemplo conserva el marcador de elisión.
+        self.assertIn('"1": {\n    "text": "frase 1 adaptada al Español"\n  }', prompt)
+        self.assertIn('"3": {\n    "text": "frase 2 adaptada al Español",\n    "phonemes": {}', prompt)
+        self.assertIn('"4": {\n    "text": "frase 4 adaptada al Español"\n  }', prompt)
+        self.assertIn("\n  ...\n", prompt)
+        self.assertEqual(texts[2], "Ejecuta el script.")
 
 
 if __name__ == "__main__":

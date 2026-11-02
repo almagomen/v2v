@@ -177,8 +177,8 @@ def translate_text_list(
     total_count = len(list_sentences)
     has_times = bool(times and len(times) == total_count)
     fit_enabled = os.environ.get("TRANSLATION_FIT_BUDGET", "1").strip().lower() not in ("0", "false", "no")
-    # Segmentos con la inferencia de fonemas desactivada: ni el prompt les pide
-    # glosario, ni entran en la consolidación, ni se persisten sus fonemas.
+    # Segmentos con la inferencia de fonemas desactivada: el prompt ni siquiera
+    # menciona el campo, no entran en la consolidación y no se persisten.
     skip_phonemes = {
         i
         for i, meta_item in enumerate(segments_meta or [])
@@ -285,8 +285,14 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
     def _build_prompt(entries: dict[str, str], count: int, context: list[str], no_phonemes_keys: Optional[set[str]] = None) -> str:
         ex_text_1 = f"frase 1 adaptada al {target_lang_name}"
         ex_text_2 = f"frase 2 adaptada al {target_lang_name}"
+        # Claves del bloque sin inferencia de fonemas: su ejemplo de salida no
+        # lleva el campo y la regla 8 no las menciona.
+        disabled_keys = no_phonemes_keys or set()
+        enabled_keys = [str(n) for n in range(1, count + 1) if str(n) not in disabled_keys]
 
         def _ex(k: int, text: str) -> str:
+            if str(k) in disabled_keys:
+                return f'  "{k}": {{\n    "text": "{text}"\n  }}'
             return f'  "{k}": {{\n    "text": "{text}",\n    "phonemes": {empty_dict_str}\n  }}'
 
         # El ejemplo no debe repetir la última clave cuando el bloque es corto
@@ -296,11 +302,23 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
                 _ex(k, ex_text_1 if k == 1 else ex_text_2) for k in range(1, count + 1)
             )
         else:
+            # En bloques mixtos el ejemplo debe mostrar ambas formas; si las
+            # claves 1, 2 y count no cubren las dos, se cambia la central.
+            sample = [1, 2, count]
+            if enabled_keys and disabled_keys:
+                shown = {str(k) in disabled_keys for k in sample}
+                if len(shown) == 1:
+                    pool = enabled_keys if shown.pop() else sorted(disabled_keys, key=int)
+                    swap = next((int(k) for k in pool if int(k) not in sample), None)
+                    if swap is not None:
+                        sample[1] = swap
+            sample = sorted(set(sample))
+            head = ",\n".join(
+                _ex(k, ex_text_1 if k == 1 else ex_text_2) for k in sample[:-1]
+            )
             example_json = (
-                _ex(1, ex_text_1) + ",\n"
-                + _ex(2, ex_text_2) + ",\n"
-                + "  ...\n"
-                + _ex(count, f"frase {count} adaptada al {target_lang_name}")
+                head + ",\n  ...\n"
+                + _ex(sample[-1], f"frase {sample[-1]} adaptada al {target_lang_name}")
             )
 
         contexto = ""
@@ -311,13 +329,26 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
                 f"{json.dumps(context, ensure_ascii=False)}\n"
             )
 
-        no_phonemes_rule = ""
-        if no_phonemes_keys:
-            keys_txt = ", ".join(f'"{k}"' for k in sorted(no_phonemes_keys, key=int))
-            no_phonemes_rule = (
-                f"\n   8-b. SEGMENTOS SIN FONEMAS: para las claves {keys_txt}, devuelve "
-                f'siempre "phonemes": {empty_dict_str} y no generes glosario de pronunciación.'
-            )
+        # La sección de fonemas solo se redacta si el bloque tiene alguna clave
+        # que los use; si todas los desactivan, el prompt no menciona el campo.
+        phoneme_rule = ""
+        if enabled_keys:
+            scope = ""
+            if disabled_keys:
+                keys_txt = ", ".join(f'"{k}"' for k in enabled_keys)
+                scope = f" Aplica solo a las claves {keys_txt}."
+            phoneme_rule = f"""8. DETECCIÓN FONÉTICA Y GLOSARIO DE PRONUNCIACIÓN (TTS):{scope}
+   Identifica en cada frase cualquier vocablo cuya lectura ortográfica literal en {target_lang_name} pueda ser pronunciada de forma errónea, distorsionada o antinatural por un sintetizador de voz. Evalúa rigurosamente candidatos en cualquier área temática que cumplan con alguno de los siguientes criterios:
+   a) Nombres propios, marcas, productos, entidades o topónimos de origen no nativo o grafía singular.
+   b) Siglas, acrónimos o combinaciones alfanuméricas que deban pronunciarse con la fonética propia de su disciplina o mediante deletreo.
+   c) Extranjerismos, vocablos foráneos o términos especializados que conserven la pronunciación de su idioma de origen y no sigan las reglas ortográficas del {target_lang_name}.
+   d) Palabras cuya ortografía estándar en {target_lang_name} resulte propensa a una lectura defectuosa o robótica por modelos de voz.
+
+   Para cada vocablo detectado en la frase:
+   - Como clave: la palabra exacta tal como está escrita en tu texto traducido.
+   - Como valor: su transcripción fonética legible e intuitiva para un hablante de {target_lang_name}, marcando con tilde la sílaba con mayor fuerza de entonación (acento prosódico) para guiar con precisión la pronunciación de la voz sintética.
+   - En tu salida, asocia el diccionario al campo "phonemes": {{"Palabra": "Pronunciación"}}. Si una frase contiene únicamente vocabulario cotidiano estándar de {target_lang_name}, deja "phonemes": {empty_dict_str}.
+"""
 
         return f"""{role_mission}
 
@@ -331,18 +362,7 @@ Directrices obligatorias:
 7. PUNTUACIÓN Y RITMO ORAL:
    - Preserva estrictamente la entonación interrogativa (¿?) y exclamativa (¡!) para una entonación creíble.
    - Emplea comas, dos puntos y puntos seguidos para articular un ritmo oral natural y bien estructurado.
-8. DETECCIÓN FONÉTICA Y GLOSARIO DE PRONUNCIACIÓN (TTS):
-   Identifica en cada frase cualquier vocablo cuya lectura ortográfica literal en {target_lang_name} pueda ser pronunciada de forma errónea, distorsionada o antinatural por un sintetizador de voz. Evalúa rigurosamente candidatos en cualquier área temática que cumplan con alguno de los siguientes criterios:
-   a) Nombres propios, marcas, productos, entidades o topónimos de origen no nativo o grafía singular.
-   b) Siglas, acrónimos o combinaciones alfanuméricas que deban pronunciarse con la fonética propia de su disciplina o mediante deletreo.
-   c) Extranjerismos, vocablos foráneos o términos especializados que conserven la pronunciación de su idioma de origen y no sigan las reglas ortográficas del {target_lang_name}.
-   d) Palabras cuya ortografía estándar en {target_lang_name} resulte propensa a una lectura defectuosa o robótica por modelos de voz.
-
-   Para cada vocablo detectado en la frase:
-   - Como clave: la palabra exacta tal como está escrita en tu texto traducido.
-   - Como valor: su transcripción fonética legible e intuitiva para un hablante de {target_lang_name}, marcando con tilde la sílaba con mayor fuerza de entonación (acento prosódico) para guiar con precisión la pronunciación de la voz sintética.
-   - En tu salida, asocia el diccionario al campo "phonemes": {{"Palabra": "Pronunciación"}}. Si una frase contiene únicamente vocabulario cotidiano estándar de {target_lang_name}, deja "phonemes": {empty_dict_str}.{no_phonemes_rule}
-{entity_rule}
+{phoneme_rule}{entity_rule}
 10. MAYÚSCULAS DEL RECONOCIMIENTO DE VOZ (NO SON NOMBRES PROPIOS):
    El texto de entrada viene de un ASR que capitaliza la primera palabra de cada trozo separado por una pausa, aunque sea una palabra corriente. Una mayúscula a mitad de frase NO indica nombre propio: solo los marcadores ⟦E1⟧, ⟦E2⟧... son términos protegidos.
    Traduce TODAS las palabras, incluidas las que aparecen en mayúscula, salvo los marcadores protegidos. Dejar una palabra del {source_lang_name} sin traducir porque venía capitalizada es un error grave.
@@ -820,11 +840,17 @@ def _finalize_pronunciations(
         {índice: {clave: respelling}} listo para `pronunciation_dictionary`.
     """
     skip = skip or set()
+    # Sin ninguna clave activa no hay diccionario que consolidar ni términos que
+    # consultar: evitar la llamada de respelling por completo.
+    if skip.issuperset(range(len(texts))):
+        return {i: {} for i in range(len(texts))}
+
     tables = [{} if i in skip else (phonemes_map.get(i) or {}) for i in range(len(texts))]
     chosen, display, conflicts = consolidate(tables, target_lang)
 
     entity_terms = [term for mapping in lock_maps for term in mapping.values()]
-    pending = missing_terms(texts, entity_terms, chosen)
+    active_texts = [t for i, t in enumerate(texts) if i not in skip]
+    pending = missing_terms(active_texts, entity_terms, chosen)
     extra: dict[str, dict] = {}
     for start in range(0, len(pending), MAX_TERMS_PER_CALL):
         batch = pending[start : start + MAX_TERMS_PER_CALL]
