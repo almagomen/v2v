@@ -100,7 +100,7 @@ def _do_regenerate_segment(
         raise HTTPException(status_code=404, detail="result.json no encontrado")
 
     texts_original = result_data.get("segments", [])
-    source_lang = result_data.get("source_lang", "es")
+    source_lang = result_data.get("source_lang")
 
     if seg_idx < 1 or seg_idx > len(texts_original):
         raise HTTPException(status_code=400, detail="Índice de segmento inválido")
@@ -152,7 +152,7 @@ def _do_regenerate_segment(
     lang = (
         translate_lang
         if translate_lang and translate_lang != "None"
-        else source_lang or "es"
+        else result_data.get("target_lang") or source_lang
     )
 
     paths_es, _, _ = clone_voice_segments(
@@ -307,7 +307,7 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     from src.result_store import create_segment_entry
 
     speaker_audio = SPEAKER_OPTIONS.get(req.speaker, req.speaker)
-    lang = result_data.get("source_lang") or "es"
+    lang = result_data.get("target_lang") or result_data.get("source_lang")
     speaker_key = resolve_speaker_key(req.speaker)
     safe_speaker = speaker_key.replace(" ", "_").replace("/", "_").replace("\\", "_")
 

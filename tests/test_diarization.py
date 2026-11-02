@@ -9,7 +9,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from src.diarization import assign_speakers_by_word
+from src.diarization import assign_speakers_by_word, is_dangling_word_agnostic
 
 
 class _Turns:
@@ -61,6 +61,29 @@ class TestSpeakerAssignment(unittest.TestCase):
         segs = [_segment(1.0, 2.0, [(1.1, 1.9, "a")])]
         out = assign_speakers_by_word(segs, diar)
         self.assertEqual(out[0]["speaker"], "UNKNOWN")
+
+
+class TestPalabraColgante(unittest.TestCase):
+    def test_conectores_cortos_de_cualquier_idioma(self):
+        for word in ("de", "the", "que", "and", "и", "und"):
+            with self.subTest(word=word):
+                self.assertTrue(is_dangling_word_agnostic(word))
+
+    def test_palabra_larga_no_es_colgante(self):
+        for word in ("casa", "world", "東京"):
+            with self.subTest(word=word):
+                self.assertFalse(is_dangling_word_agnostic(word))
+
+    def test_escritura_sin_caja_no_usa_la_longitud(self):
+        """En CJK un carácter es una palabra: no se trata como conector débil."""
+        for word in ("の", "東京"):
+            with self.subTest(word=word):
+                self.assertFalse(is_dangling_word_agnostic(word))
+
+    def test_puntuacion_mayor_o_sigla_no_es_colgante(self):
+        for word in ("fin.", "CPU", "API"):
+            with self.subTest(word=word):
+                self.assertFalse(is_dangling_word_agnostic(word))
 
 
 if __name__ == "__main__":

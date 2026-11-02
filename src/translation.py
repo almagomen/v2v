@@ -11,7 +11,6 @@ from google import genai
 from src.config import get_google_api_keys, rotate_google_api_key
 from src.entities import (
     ambiguous_terms,
-    calendar_terms,
     check_entities,
     collapse_repeats,
     collect_known_terms,
@@ -19,7 +18,7 @@ from src.entities import (
     normalize_asr_casing,
     restore_text,
 )
-from src.lang_utils import shared_tokens
+from src.lang_utils import language_name, same_language, shared_tokens
 from src.pacing import (
     FIT_MIN_GAIN,
     budget_for,
@@ -27,6 +26,7 @@ from src.pacing import (
     echoed_texts,
     fit_deviation,
     needs_rewrite,
+    primary_lang,
     source_bounds,
     speech_rate,
     visible_text,
@@ -49,16 +49,6 @@ from src.review import (
     parse_term_groups,
 )
 
-LANGUAGE_NAMES = {
-    "es": "Español",
-    "en": "Inglés",
-    "fr": "Francés",
-    "de": "Alemán",
-    "it": "Italiano",
-    "pt": "Portugués",
-    "ja": "Japonés",
-    "zh-CN": "Chino",
-}
 
 # Modelos recomendados: gemini-flash-lite-latest (alta velocidad, sin errores 503) y gemma-4-26b-a4b-it como respaldo
 DEFAULT_TITLE_MODEL = os.environ.get("DEFAULT_TITLE_MODEL", "gemini-flash-lite-latest")
@@ -169,7 +159,7 @@ def translate_text_list(
     """
     Traduce o adapta una lista de frases a un idioma objetivo usando Gemini (Interactions API).
 
-    - Doblaje isométrico: presupuesto de sílabas/tiempo neto por segmento. El slot es
+    - Doblaje isométrico: presupuesto de caracteres/tiempo neto por segmento. El slot es
       el clip de origen completo (`source_bounds`), márgenes incluidos, porque es lo que
       el TTS tiene que llenar.
     - Entity lock: nombres técnicos, archivos, rutas y versiones viajan como ⟦E#⟧ y se
@@ -187,9 +177,9 @@ def translate_text_list(
         print("❌ [Traducción] Error: No hay ninguna API Key de Google configurada.", flush=True)
         return None
 
-    source_lang_name = LANGUAGE_NAMES.get(source_lang, "español")
-    target_lang_name = LANGUAGE_NAMES.get(target_lang, "español")
-    is_same_lang = (source_lang.strip().lower() == target_lang.strip().lower())
+    source_lang_name = language_name(source_lang)
+    target_lang_name = language_name(target_lang)
+    is_same_lang = same_language(source_lang, target_lang)
 
     total_count = len(list_sentences)
     has_times = bool(times and len(times) == total_count)
@@ -213,34 +203,36 @@ def translate_text_list(
     known_terms = collect_known_terms(source_texts)
     if not is_same_lang:
         # La estadística deja un grupo dudoso: palabras en mayúscula que nunca aparecen
-        # en minúscula. Congelar una palabra corriente mete idioma origen en la salida;
-        # no congelar un nombre propio solo lo expone a una mala transcripción. Ante la
-        # duda, que decida el modelo, que sí conoce el idioma.
+        # en minúscula. Congelar una palabra que tiene traducción mete idioma origen en
+        # la salida; no congelar un nombre propio solo lo expone a una mala
+        # transcripción. Ante la duda decide el modelo, que conoce el par de idiomas.
+        #
+        # No hay listas de meses, días, idiomas ni gentilicios: la pregunta es general
+        # ("¿tiene traducción natural al idioma destino?") y cubre cualquier categoría
+        # y cualquier idioma. Si el juicio falla se liberan todos los dudosos: el peor
+        # caso es que un nombre se traduzca, no que una palabra corriente se congele.
         doubtful = ambiguous_terms(source_texts) & known_terms
         if doubtful:
             try:
                 judge_client = genai.Client(api_key=available_keys[0])
                 judge_model = (model_name or DEFAULT_TRANSLATION_MODEL).strip()
                 judge_gemma = "gemma" in judge_model.lower()
-                dropped = _judge_common_words(
+                dropped = _judge_translatable(
                     lambda prompt: _call_model(judge_client, judge_model, judge_gemma, prompt),
                     sorted(doubtful),
                     source_lang_name,
+                    target_lang_name,
                 )
             except Exception as e_judge:
-                print(f"⚠️ [Entidades] juicio de palabras omitido ({e_judge})", flush=True)
-                dropped = set()
+                print(f"⚠️ [Entidades] juicio de traducción omitido ({e_judge})", flush=True)
+                dropped = set(doubtful)
             if dropped:
                 known_terms -= dropped
-                print(f"🔍 [Entidades] {len(dropped)} palabra(s) corriente(s) descartada(s): {', '.join(sorted(dropped))}", flush=True)
-
-    # Meses y días se traducen siempre: bloquearlos deja `September` dentro del
-    # español. Va después del juicio porque el juicio no es determinista entre runs,
-    # y también aplica a es→es: un mes en inglés en un vídeo español se traduce.
-    calendar = calendar_terms(known_terms)
-    if calendar:
-        known_terms -= calendar
-        print(f"🔍 [Entidades] {len(calendar)} palabra(s) de calendario liberada(s): {', '.join(sorted(calendar))}", flush=True)
+                print(
+                    f"🔍 [Entidades] {len(dropped)} término(s) con traducción liberado(s): "
+                    f"{', '.join(sorted(dropped))}",
+                    flush=True,
+                )
 
     source_sentences = [normalize_asr_casing(s.strip(), keep=known_terms) for s in source_texts]
     locked_sentences: list[str] = []
@@ -275,17 +267,17 @@ def translate_text_list(
 
         b = budget_for(target_lang, total_dur)
         entry_lines.append(
-            f"[{total_dur:.1f}s slot | ~{b['syl_min']}-{b['syl_max']} sílabas | "
-            f"~{b['chars_min']}-{b['chars_max']} chars, apunta a {b['chars_target']}]: {locked_s}"
+            f"[{total_dur:.1f}s slot | ~{b['chars_min']}-{b['chars_max']} chars, "
+            f"apunta a {b['chars_target']}]: {locked_s}"
         )
 
-    chars_per_sec = speech_rate(target_lang)[1]
+    chars_per_sec = speech_rate(target_lang)
 
     pacing_instruction = f"""5. DOBLAJE ISOMÉTRICO (CONTROL DE TIEMPO Y EXTENSIÓN):
-   Cada segmento incluye su presupuesto temporal: `[Xs slot | ~A-B sílabas | ~M-Z chars, apunta a T]: texto original`.
+   Cada segmento incluye su presupuesto temporal: `[Xs slot | ~M-Z chars, apunta a T]: texto original`.
    El ritmo medido en doblaje profesional de {target_lang_name} es ~{chars_per_sec:.0f} caracteres por segundo, y ese valor ya está aplicado en el rango.
    - ENCAJE: apunta al valor `apunta a T`; nunca por debajo del mínimo `M`. Por encima de `Z` obliga a acelerar la voz y suena artificial.
-   - NO RESUMAS: traduce toda la información de la frase. A igual contenido el español suele ocupar igual o más espacio que el original; si el original llena el slot, tu versión también debe llenarlo.
+   - NO RESUMAS: traduce toda la información de la frase. A igual contenido, {target_lang_name} puede ocupar más o menos espacio que el original; el rango ya está medido para este idioma, así que respétalo en vez de suponer.
    - QUEDARSE CORTO ES EL ERROR MÁS CARO: si el texto no llena el slot, queda silencio muerto entre frases y el sincronizador tiene que arrastrar la voz. Al quedarte corto, agrega matices naturales del habla antes que recortar.
    - VERIFICA ANTES DE RESPONDER: cuenta los caracteres de cada frase y comprueba que caen entre `M` y `Z`.
    - RITMO ORAL: Entrega un texto hablado directo, fluido y creíble.
@@ -366,6 +358,19 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
             if disabled_keys:
                 keys_txt = ", ".join(f'"{k}"' for k in enabled_keys)
                 scope = f" Aplica solo a las claves {keys_txt}."
+            if primary_lang(target_lang) == "en":
+                phoneme_value = (
+                    "usa CMU Arpabet en mayúsculas, separado por espacios y con el "
+                    "dígito de acento (0, 1 o 2) opcional. Ejemplo de formato: "
+                    '"OW1 P AH0 N K OW1 D"'
+                )
+            else:
+                phoneme_value = (
+                    f"usa la ortografía de {target_lang_name} tal como debe sonar, "
+                    "con una sola tilde en la sílaba tónica cuando la escritura lo "
+                    f"permita y sin combinaciones de letras que no existan en "
+                    f"{target_lang_name}"
+                )
             phoneme_rule = f"""8. DETECCIÓN FONÉTICA Y GLOSARIO DE PRONUNCIACIÓN (TTS):{scope}
    Identifica en cada frase cualquier vocablo cuya lectura ortográfica literal en {target_lang_name} pueda ser pronunciada de forma errónea, distorsionada o antinatural por un sintetizador de voz. Evalúa rigurosamente candidatos en cualquier área temática que cumplan con alguno de los siguientes criterios:
    a) Nombres propios, marcas, productos, entidades o topónimos de origen no nativo o grafía singular.
@@ -375,7 +380,7 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
 
    Para cada vocablo detectado en la frase:
    - Como clave: la palabra exacta tal como está escrita en tu texto traducido.
-   - Como valor: su transcripción fonética legible e intuitiva para un hablante de {target_lang_name}, marcando con tilde la sílaba con mayor fuerza de entonación (acento prosódico) para guiar con precisión la pronunciación de la voz sintética.
+   - Como valor: {phoneme_value}.
    - En tu salida, asocia el diccionario al campo "phonemes": {{"Palabra": "Pronunciación"}}. Si una frase contiene únicamente vocabulario cotidiano estándar de {target_lang_name}, deja "phonemes": {empty_dict_str}.
 """
 
@@ -389,7 +394,7 @@ Directrices obligatorias:
 {pacing_instruction}
 6. COHERENCIA Y CONTINUIDAD ENTRE FRASES: Las frases forman parte de una narración continua en un timeline audiovisual. Si una frase continúa la idea de la clave anterior (o deja una idea abierta para la clave siguiente), preserva la ilación gramatical natural, usando puntuación de enlace (comas o puntos seguidos) para que al reproducirse consecutivamente en el reproductor suenen como un discurso fluido y continuo, sin interrupciones abruptas ni pausas antinaturales.
 7. PUNTUACIÓN Y RITMO ORAL:
-   - Preserva estrictamente la entonación interrogativa (¿?) y exclamativa (¡!) para una entonación creíble.
+   - Conserva la entonación interrogativa y exclamativa con la puntuación propia de {target_lang_name}.
    - Emplea comas, dos puntos y puntos seguidos para articular un ritmo oral natural y bien estructurado.
 {phoneme_rule}{entity_rule}
 10. MAYÚSCULAS DEL RECONOCIMIENTO DE VOZ (NO SON NOMBRES PROPIOS):
@@ -1047,7 +1052,7 @@ def _finalize_pronunciations(
         batch = pending[start : start + MAX_TERMS_PER_CALL]
         try:
             parsed = _loads_loose(
-                call(build_respelling_prompt(batch, target_lang_name)),
+                call(build_respelling_prompt(batch, target_lang_name, target_lang)),
                 "[Pronunciación] respelling",
             )
         except Exception as exc:
@@ -1219,38 +1224,47 @@ Devuelve únicamente un JSON con las mismas claves:
     return _call_json_map(client, model, is_gemma, prompt, "[Rescate entidades]")
 
 
-def _judge_common_words(
+def _judge_translatable(
     call: Callable[[str], str],
     words: list[str],
     source_lang_name: str,
+    target_lang_name: str,
 ) -> set[str]:
     """
-    De una lista de palabras capitalizadas, devuelve las que son habla corriente.
+    De una lista de términos capitalizados, devuelve los que deben traducirse.
 
     La estadística del lote no separa un nombre propio de una palabra que el ASR
     capitalizó tras una pausa cuando aparece una sola vez. El modelo sí lo separa,
-    porque conoce el idioma. La respuesta se acota a la lista de entrada: cualquier
-    palabra inventada se descarta, así que un juicio errático no puede romper el lock.
+    porque conoce el par de idiomas.
+
+    La pregunta es general a propósito: no enumera meses, días ni categorías. Un
+    término se libera si tiene una traducción natural al idioma destino; se conserva
+    si es un nombre que debe sonar igual. La respuesta se acota a la lista de entrada,
+    así que un juicio errático no puede inventar términos ni romper el lock.
     """
     if not words:
         return set()
 
-    prompt = f"""Recibes palabras que aparecen en mayúscula en la transcripción automática de un audio en {source_lang_name}.
+    prompt = f"""Recibes términos que aparecen en mayúscula en la transcripción automática de un audio en {source_lang_name}.
 
-El reconocimiento de voz capitaliza el inicio de cada trozo separado por una pausa, así que muchas de esas mayúsculas son palabras normales, no nombres propios.
+El reconocimiento de voz capitaliza el inicio de cada fragmento y, a veces, palabras que no son nombres propios. El doblaje es al {target_lang_name}: solo debe conservarse sin cambios lo que no se traduce.
 
-Devuelve SOLO las que son palabras comunes de {source_lang_name} escritas en mayúscula por esa razón: verbos, adverbios, conectores, pronombres, adjetivos y expresiones corrientes.
+Devuelve SOLO los términos que NO deben bloquearse porque tienen una traducción natural al {target_lang_name}: palabras comunes, verbos, adverbios, conectores, pronombres, adjetivos, meses, días de la semana, idiomas, nacionalidades, gentilicios, unidades y expresiones corrientes.
 
-NO incluyas nombres de personas, marcas, productos, empresas, siglas ni términos técnicos.
+NO incluyas nombres de personas, marcas, productos, empresas, obras, lugares, siglas ni términos técnicos que deban conservarse tal cual.
 
 Responde únicamente con este JSON:
-{{"palabras": ["palabra en minúscula"]}}
+{{"liberar": ["palabra en minúscula"]}}
 
-Palabras: {", ".join(words)}"""
+Términos: {", ".join(words)}"""
 
     raw_text = call(prompt)
-    parsed = _loads_loose(raw_text, "[Entidades] juicio de palabras")
-    found = parsed.get("palabras") if isinstance(parsed, dict) else None
+    parsed = _loads_loose(raw_text, "[Entidades] juicio de traducción")
+    found = None
+    if isinstance(parsed, dict):
+        # `palabras` es la clave antigua: se acepta para no romper una respuesta
+        # cacheada o un modelo que arrastre el formato anterior.
+        found = parsed.get("liberar") if "liberar" in parsed else parsed.get("palabras")
     if not isinstance(found, list):
         return set()
 
@@ -1323,8 +1337,9 @@ def _translate_residue_retry(
 ) -> dict[str, str]:
     """
     Segunda pasada acotada: solo los segmentos con palabras del idioma origen que el
-    modelo confirmó como no traducidas. Es el fallo más audible del pipeline
-    (portugués dentro del español) y la entrada ya viene filtrada por `_judge_leaks`.
+    modelo confirmó como no traducidas. Es el fallo más audible del pipeline (una
+    palabra del origen dentro del doblaje) y la entrada ya viene filtrada por
+    `_judge_leaks`.
     """
     prompt = f"""Eres un revisor de doblaje al {target_lang_name}.
 
@@ -1349,7 +1364,7 @@ Devuelve únicamente un JSON con las mismas claves:
 
 def generate_tiktok_title(
     youtube_url: Optional[str] = None,
-    target_lang: str = "es",
+    target_lang: str = "",
     model_name: Optional[str] = None,
     fallback_text: Optional[str] = None,
     print_full_prompt: bool = False,
@@ -1363,7 +1378,7 @@ def generate_tiktok_title(
         print("⚠️ [Título Viral] No hay ninguna GOOGLE_API_KEY configurada.", flush=True)
         return None
 
-    target_lang_name = LANGUAGE_NAMES.get(target_lang, "español")
+    target_lang_name = language_name(target_lang)
     base_prompt = f"""Eres un experto en marketing digital y creación de contenido viral.
 Tu misión es generar EL TÍTULO MÁS LLAMATIVO para TikTok que despierte curiosidad
 y haga que la gente quiera ver el video completo.

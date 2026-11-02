@@ -253,7 +253,7 @@ class RegenerateTitleRequest(BaseModel):
     folder_name: Optional[str] = None
     model_name: Optional[str] = None
     custom_title: Optional[str] = None
-    target_lang: Optional[str] = "es"
+    target_lang: Optional[str] = None
 
 
 class RegenerateTitleResponse(BaseModel):

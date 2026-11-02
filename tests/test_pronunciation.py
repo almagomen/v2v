@@ -10,7 +10,6 @@ from __future__ import annotations
 import unittest
 
 from src.pronunciation import (
-    FOREIGN_DIGRAPHS,
     apply_table,
     build_respelling_prompt,
     consolidate,
@@ -30,16 +29,22 @@ class TestValidateRule(unittest.TestCase):
         rule = validate_rule("API", "a-pe-i", "es")
         self.assertTrue(rule["case_sensitive"])
 
-    def test_digrafo_extranjero_se_rechaza(self):
-        """Un TTS español lee 'th' y 'sh' letra por letra: la regla suena peor."""
-        for value in ("zhou-th", "sher-sh", "back-ck"):
-            self.assertIsNone(validate_rule("X", value, "es"), value)
+    def test_respelling_en_otros_alfabetos(self):
+        """La validación es de escritura, no de un alfabeto concreto."""
+        self.assertIsNotNone(validate_rule("Москва", "масква", "ru"))
+        self.assertIsNotNone(validate_rule("東京", "とうきょう", "ja"))
+        self.assertIsNotNone(validate_rule("Αθήνα", "α-θί-να", "el"))
+
+    def test_valor_con_numeros_o_signos_se_rechaza(self):
+        self.assertIsNone(validate_rule("X", "a1", "es"))
+        self.assertIsNone(validate_rule("X", "a+b", "es"))
 
     def test_valor_identico_a_la_clave_no_aporta(self):
         self.assertIsNone(validate_rule("desktop", "desktop", "es"))
 
     def test_caracteres_fuera_de_la_ortografia(self):
-        self.assertIsNone(validate_rule("SQL", "sɛkwəl", "es"))
+        # Letras de cualquier alfabeto valen; signos y números no.
+        self.assertIsNone(validate_rule("SQL", "sɛk+wəl", "es"))
         self.assertIsNone(validate_rule("X", "a<b", "es"))
 
     def test_marcadores_de_fonema_prohibidos(self):
@@ -53,11 +58,6 @@ class TestValidateRule(unittest.TestCase):
         self.assertIsNotNone(validate_rule("Kubernetes", "K UW2 B ER0 N EH1 T IY0 Z", "en"))
         self.assertIsNone(validate_rule("Kubernetes", "ku-ber-ne-tes", "en"))
         self.assertIsNone(validate_rule("Kubernetes", "K UX2 B ER0", "en"))
-
-    def test_digrafos_declarados_no_se_repiten(self):
-        """La lista de dígrafos es un conjunto cerrado de grafemas ausentes, no vocabulario."""
-        self.assertEqual(len(FOREIGN_DIGRAPHS), len(set(FOREIGN_DIGRAPHS)))
-
 
 class TestConsolidate(unittest.TestCase):
     def test_una_sola_regla_por_palabra(self):
@@ -74,12 +74,12 @@ class TestConsolidate(unittest.TestCase):
         self.assertIn("opencod", conflicts[0])
 
     def test_reglas_invalidas_no_votan(self):
-        tables = [{"SQL": "th"}, {"SQL": "ese-cu-ele"}]
+        tables = [{"SQL": "e1"}, {"SQL": "ese-cu-ele"}]
         chosen, _display, _conflicts = consolidate(tables, "es")
         self.assertEqual(chosen["sql"]["value"], "ese-cu-ele")
 
     def test_sin_reglas_validas_devuelve_vacio(self):
-        chosen, display, conflicts = consolidate([{"X": "th"}], "es")
+        chosen, display, conflicts = consolidate([{"X": "a1"}], "es")
         self.assertEqual(chosen, {})
         self.assertEqual(display, {})
         self.assertEqual(conflicts, [])
@@ -131,10 +131,18 @@ class TestCoverage(unittest.TestCase):
 
     def test_prompt_declara_las_convenciones(self):
         prompt = build_respelling_prompt(["Ghidra", "MCP"], "Español")
-        self.assertIn("guindous", prompt)
-        self.assertIn("a-pe-i", prompt)
+        self.assertIn("Español", prompt)
         self.assertIn("null", prompt)
         self.assertIn("Ghidra", prompt)
+        # No hay ejemplos en un idioma concreto que confundan a otros destinos.
+        self.assertNotIn("guindous", prompt)
+        self.assertNotIn("jota-de-ka", prompt)
+
+    def test_ingles_pide_arpabet(self):
+        """La validación de inglés exige Arpabet; el prompt tiene que pedirlo."""
+        prompt = build_respelling_prompt(["Ghidra"], "Inglés", "en")
+        self.assertIn("Arpabet", prompt)
+        self.assertNotIn("solo letras de Inglés", prompt)
 
 
 if __name__ == "__main__":

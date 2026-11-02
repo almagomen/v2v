@@ -92,9 +92,9 @@ def process_video_queue(
                                     "url": u,
                                     "info": result_data.get("info", {}),
                                     "texts": c_segs,
-                                    "src_lang": result_data.get("source_lang", "es"),
+                                    "src_lang": result_data.get("source_lang"),
                                     "result": c_orig,
-                                    "transcription_lang": result_data.get("source_lang", "es"),
+                                    "transcription_lang": result_data.get("source_lang"),
                                     "cached": True,
                                 }
                             )
@@ -129,9 +129,9 @@ def process_video_queue(
                             "url": u,
                             "info": cached_data.get("info", {}),
                             "texts": c_segs,
-                            "src_lang": cached_data.get("source_lang", "es"),
+                            "src_lang": cached_data.get("source_lang"),
                             "result": c_orig,
-                            "transcription_lang": cached_data.get("source_lang", "es"),
+                            "transcription_lang": cached_data.get("source_lang"),
                             "cached": True,
                         }
                     )
@@ -173,7 +173,12 @@ def process_video_queue(
                 url=u,
                 output_name=output_name,
                 source_lang=source_lang,
-                target_lang=translate_lang if isinstance(translate_lang, str) else None,
+                target_lang=(
+                    translate_lang
+                    if isinstance(translate_lang, str)
+                    and translate_lang not in ("None", "")
+                    else None
+                ),
                 segments=translated_result,
                 original_segments=original_result,
                 info=info,

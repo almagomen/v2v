@@ -15,6 +15,8 @@ import re
 from collections import Counter
 from typing import Iterable, Sequence
 
+from src.lang_utils import SENTENCE_END_CHARS
+
 PLACEHOLDER_TMPL = "⟦E{}⟧"
 PLACEHOLDER_RE = re.compile(r"⟦\s*E\s*(\d+)\s*⟧")
 
@@ -35,8 +37,11 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b\d+\.\d+(?:\.\d+)*\b"), "version"),
     (re.compile(r"\b[A-Z][a-z]{1,}[A-Z][A-Za-z0-9]*\b"), "pascal"),
     (re.compile(r"\b[a-z]+[A-Z][A-Za-z0-9]*\b"), "camel"),
-    (re.compile(r"\b[A-Z][A-Z0-9]{1,7}\b"), "caps"),
-    (re.compile(r"\b[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}\b"), "proper"),
+    # `caps` y `proper` usan clases Unicode y se afinan con `str.isupper/islower`
+    # en `_find_spans`: así reconocen mayúsculas de cirílico, griego o latín
+    # acentuado sin depender de un rango escrito a mano.
+    (re.compile(r"\b[^\W\d_][\w'’-]{1,7}\b", re.UNICODE), "caps"),
+    (re.compile(r"\b[^\W\d_][\w'’-]{2,}\b", re.UNICODE), "proper"),
 ]
 
 # Categorías que se bloquean siempre: su forma no existe en el habla corriente.
@@ -45,7 +50,7 @@ _STRUCTURAL_KINDS = frozenset({"code", "url", "path", "file", "version", "pascal
 # Categorías que dependen de que la mayúscula signifique algo en el idioma de origen.
 _CASE_KINDS = frozenset({"caps", "proper"})
 
-_SENTENCE_END_CHARS = ".!?:;\n\"'«»-—"
+_SENTENCE_END_CHARS = SENTENCE_END_CHARS + ":;\n\"'«»-—"
 _WORD_RE = re.compile(r"[^\W\d_][\w'-]*", re.UNICODE)
 
 # Una palabra de menos de 3 letras coincide demasiadas veces con artículos y
@@ -78,8 +83,13 @@ def _find_spans(text: str, lock_sentence_start: bool) -> list[tuple[int, int, st
             token = m.group(0)
             if kind == "caps" and not token.isupper():
                 continue
-            if kind == "proper" and not lock_sentence_start and _is_sentence_start(text, s):
-                continue
+            if kind == "proper":
+                # Nombre propio = inicial mayúscula y resto minúscula. Con
+                # `str.islower` funciona en cualquier alfabeto con caja.
+                if not (token[:1].isupper() and token[1:].islower()):
+                    continue
+                if not lock_sentence_start and _is_sentence_start(text, s):
+                    continue
             found.append((s, e, kind))
 
     found.sort(key=lambda x: (x[0], -(x[1] - x[0])))
@@ -170,41 +180,12 @@ def _split_terms(sentences: Sequence[str]) -> tuple[set[str], set[str]]:
     return structural, ambiguous
 
 
-# Meses y días: tienen traducción directa, así que protegerlos deja inglés (o
-# portugués) dentro del doblaje. En un build real el juicio del modelo protegió
-# `September` en un vídeo y lo tradujo en otro; con esta lista la decisión es fija.
-CALENDAR_TERMS = frozenset({
-    # inglés
-    "january", "february", "march", "april", "may", "june", "july", "august",
-    "september", "october", "november", "december",
-    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-    # portugués
-    # `marco` sin cedilla queda fuera: es mucho más probable que sea un nombre.
-    "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
-    "agosto", "setembro", "outubro", "novembro", "dezembro",
-    "segunda", "terça", "terca", "quarta", "quinta", "sexta", "sábado", "sabado",
-    "domingo",
-    # español
-    "enero", "febrero", "marzo", "mayo", "junio", "julio", "agosto", "septiembre",
-    "setiembre", "octubre", "noviembre", "diciembre",
-    "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes",
-})
-
-
-def calendar_terms(terms: Iterable[str]) -> set[str]:
-    """Términos del lote que son meses o días y no deben bloquearse."""
-    return {
-        t for t in terms
-        if str(t).strip(".,;:!?()[]\"'").lower() in CALENDAR_TERMS
-    }
-
-
 # El ASR repite una palabra cuando titubea (`Maribyte Maribyte Maribyte`). La
 # repetición viaja como entidad protegida y se locuta tal cual, así que se colapsa
 # antes de bloquear. Solo con 3+ repeticiones y con mayúscula inicial: `no no no`
 # puede ser intencional y `Don Don` es un tartamudeo de dos que no vale la pena tocar.
 _REPEATED_CAP_RE = re.compile(
-    r"\b([A-ZÁÉÍÓÚÜÑ][\w'’.-]{2,})((?:[ \t,;]+(?:\1)){2,})",
+    r"\b([^\W\d_][\w'’.-]{2,})((?:[ \t,;]+(?:\1)){2,})",
     re.UNICODE,
 )
 
@@ -213,7 +194,13 @@ def collapse_repeats(text: str) -> str:
     """Colapsa una palabra capitalizada repetida 3+ veces seguidas."""
     if not text:
         return text
-    return _REPEATED_CAP_RE.sub(r"\1", text)
+
+    def _one(match: re.Match[str]) -> str:
+        # La mayúscula se comprueba con `str.isupper`, no con un rango latino:
+        # el ASR también titubea en cirílico, griego o cualquier otro alfabeto.
+        return match.group(1) if match.group(1)[:1].isupper() else match.group(0)
+
+    return _REPEATED_CAP_RE.sub(_one, text)
 
 
 def collect_known_terms(sentences: Sequence[str]) -> set[str]:

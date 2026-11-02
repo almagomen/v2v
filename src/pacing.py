@@ -1,12 +1,23 @@
 """
 Presupuesto de duración para doblaje (isocronía).
 
-Las tasas están calibradas con audio real, no con intuición. La referencia humana se
-midió sobre el doblaje español de YouTube y su original portugués separando voz de
-silencio con ffmpeg: ambos rondan 16.0 chars/s y ~5.35 sílabas/s. El TTS no habla a esa
-velocidad: la QA de un render real (Fish Audio, 144 segmentos) midió 17.2 chars/s a
-1.0x. El presupuesto usa la tasa del TTS porque es la que decide si el clip llena su
-slot o si el sincronizador tiene que estirarlo.
+La única tasa que se mide es caracteres por segundo, porque es lo que el modelo puede
+contar y lo que el TTS entrega de verdad. Las sílabas quedaron fuera: no están
+definidas igual en todos los idiomas (un ideograma chino no es una sílaba, el japonés
+cuenta moras) y el modelo no las cuenta de forma fiable. El carácter sí es una unidad
+universal y medible en cualquier escritura.
+
+La referencia humana se midió sobre el doblaje español de YouTube y su original
+portugués separando voz de silencio con ffmpeg: ambos rondan 16.0 chars/s. El TTS no
+habla a esa velocidad: la QA de un render real (Fish Audio, 144 segmentos) midió
+17.2 chars/s a 1.0x. El presupuesto usa la tasa del TTS porque es la que decide si el
+clip llena su slot o si el sincronizador tiene que estirarlo.
+
+La tasa depende de la escritura, no solo del idioma: los idiomas con alfabeto rondan
+15-17 chars/s, mientras que una escritura logográfica entrega muchos menos caracteres
+por segundo con la misma información. Por eso un idioma nuevo se calibra con una
+medición real (`src.qa` ya reporta los chars/s del render) y mientras tanto usa
+`DEFAULT_RATE`.
 
 El módulo es puro: sin red, sin torch, sin genai. Se testea con `unittest` solo.
 """
@@ -16,18 +27,20 @@ import re
 from collections import Counter
 from typing import Mapping, Optional, Sequence
 
-# (sílabas por segundo, caracteres por segundo) en locución.
-# `es` sale de la QA de un render real con Fish Audio (17.2 chars/s a 1.0x); el resto
+from src.lang_utils import SENTENCE_END_CHARS
+
+# Caracteres por segundo en locución, medidos sobre audio real.
+# `es` sale de la QA de un render con Fish Audio (17.2 chars/s a 1.0x); el resto
 # conserva la referencia de doblaje humano (16.0) hasta tener medición propia.
-SPEECH_RATES: dict[str, tuple[float, float]] = {
-    "es": (5.35, 17.2),
-    "pt": (5.33, 16.0),
-    "en": (5.50, 15.0),
-    "it": (5.40, 15.8),
-    "fr": (5.30, 15.5),
-    "de": (4.90, 15.0),
+SPEECH_RATES: dict[str, float] = {
+    "es": 17.2,
+    "pt": 16.0,
+    "en": 15.0,
+    "it": 15.8,
+    "fr": 15.5,
+    "de": 15.0,
 }
-DEFAULT_RATE: tuple[float, float] = (5.20, 15.5)
+DEFAULT_RATE: float = 15.5
 
 # Banda de encaje aceptable: por debajo del 94% del slot el clip no lo llena
 # (aire muerto), por encima del 110% el TTS tendrá que acelerarse de forma audible.
@@ -110,7 +123,7 @@ def source_bounds(
     return round(start, 3), round(end, 3)
 
 
-_TERMINAL_RE = re.compile(r"[.!?…]+[\"'»)\]]*\s*$")
+_TERMINAL_RE = re.compile(rf"[{re.escape(SENTENCE_END_CHARS)}]+[\"'»)\]]*\s*$")
 
 _TAG_RE = re.compile(r"\[[^\]]*\]")
 _MARKER_RE = re.compile(r"⟦E\d+⟧")
@@ -125,8 +138,8 @@ def primary_lang(lang: str) -> str:
     return str(lang or "").strip().lower().replace("_", "-").split("-")[0]
 
 
-def speech_rate(lang: str) -> tuple[float, float]:
-    """(sílabas/s, chars/s) del idioma objetivo; cae al promedio si no está en la tabla."""
+def speech_rate(lang: str) -> float:
+    """Caracteres por segundo del idioma objetivo; cae al promedio si no está medido."""
     return SPEECH_RATES.get(primary_lang(lang), DEFAULT_RATE)
 
 
@@ -148,13 +161,12 @@ def visible_text(text: str, lock_map: Optional[dict[int, str]] = None) -> str:
 
 def estimate_seconds(text: str, lang: str, lock_map: Optional[dict[int, str]] = None) -> float:
     """Duración hablada estimada del texto en el idioma objetivo."""
-    _, chars_per_sec = speech_rate(lang)
-    return len(visible_text(text, lock_map)) / chars_per_sec
+    return len(visible_text(text, lock_map)) / speech_rate(lang)
 
 
 def budget_for(lang: str, seconds: float) -> dict[str, int]:
     """
-    Rango y objetivo de caracteres/sílabas que caben en `seconds` de locución.
+    Rango y objetivo de caracteres que caben en `seconds` de locución.
 
     `target` existe porque un rango solo se incumple por abajo: medido sobre un
     doblaje real, el modelo entregaba un 6% menos de lo que cabía en cada slot, y el
@@ -162,18 +174,13 @@ def budget_for(lang: str, seconds: float) -> dict[str, int]:
     al que apuntar corrige la tendencia mejor que dos extremos.
     """
     if seconds <= 0:
-        return {"chars_min": 0, "chars_max": 0, "chars_target": 0, "syl_min": 0, "syl_max": 0}
-    syl_per_sec, chars_per_sec = speech_rate(lang)
-    target_chars = seconds * chars_per_sec
-    target_syl = seconds * syl_per_sec
+        return {"chars_min": 0, "chars_max": 0, "chars_target": 0}
+    target_chars = seconds * speech_rate(lang)
     chars_min = max(4, int(round(target_chars * FIT_MIN)))
-    syl_min = max(1, int(round(target_syl * FIT_MIN)))
     return {
         "chars_min": chars_min,
         "chars_max": max(chars_min + 4, int(round(target_chars * FIT_MAX))),
         "chars_target": max(chars_min, int(round(target_chars))),
-        "syl_min": syl_min,
-        "syl_max": max(syl_min + 1, int(round(target_syl * FIT_MAX))),
     }
 
 
@@ -252,9 +259,9 @@ def build_fit_prompt(items: dict[str, dict[str, str]], lang_name: str) -> str:
 
     `items` = {"1": {"texto": ..., "actual": ..., "objetivo": ..., "estado": ...}}.
     El objetivo se expresa en caracteres porque es lo que el modelo puede contar sin
-    alucinar; las sílabas se reservan para el prompt principal. Los textos cortos
-    llevan además `faltan`, el déficit exacto que hay que cubrir: sin ese número el
-    modelo devolvía una mejora mínima y el clip seguía quedando corto.
+    alucinar. Los textos cortos llevan además `faltan`, el déficit exacto que hay que
+    cubrir: sin ese número el modelo devolvía una mejora mínima y el clip seguía
+    quedando corto.
     """
     return f"""Eres un ajustador de duración para doblaje al {lang_name}.
 
@@ -270,9 +277,9 @@ cada `texto` para que quede dentro de su rango, sin excepciones:
 3. Si el texto es CORTO: no resumas ni recortes nada. Primero restituye la información
    del original que la traducción haya omitido (una idea, un matiz, un sujeto); si ya
    está toda, desarrolla la MISMA idea con más palabras hasta cubrir `faltan`, con
-   recursos del habla natural (conectores, refuerzos, vocativos). No repitas el mismo
-   conector en dos entradas del bloque y no añadas relleno vacío ni contenido
-   inventado: la muletilla se oye y no arregla el hueco.
+   recursos del habla natural de {lang_name} (conectores, refuerzos, vocativos). No
+   repitas el mismo conector en dos entradas del bloque y no añadas relleno vacío ni
+   contenido inventado: la muletilla se oye y no arregla el hueco.
 4. Cuenta los caracteres de tu resultado antes de responder: debe quedar dentro de
    `objetivo`. Quedarse por debajo del mínimo deja silencio muerto en el video.
 5. Los marcadores ⟦E1⟧, ⟦E2⟧... son intocables: mismos, una sola vez, mismo orden.

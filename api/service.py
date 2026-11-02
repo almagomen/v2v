@@ -150,7 +150,7 @@ def _run_pipeline(
             path = r["path"]
             texts = r["texts"]
             output_name = f"{idx + 1}. {r['output_name']}"
-            lang = translate_lang if translate_lang else r.get("src_lang", "es")
+            lang = translate_lang if translate_lang else r.get("src_lang")
 
             # Leer activos deterministas desde el manifiesto
             assets = load_assets(path.parent)
@@ -248,7 +248,7 @@ def _run_pipeline(
                 path, texts, lang, speaker_audio, model_tts,
                 sync_to_original=True,
                 speaker_map=speaker_map,
-                source_lang=r.get("src_lang", "pt"),
+                source_lang=r.get("src_lang"),
             )
             t_tts = time.perf_counter() - t0_tts
             print(f"⏱️ [Síntesis TTS] Completada en {t_tts:.1f}s")

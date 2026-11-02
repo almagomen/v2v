@@ -14,6 +14,7 @@ except ImportError:
     Pipeline = None
 
 from src.config import DEVICE, DEVICE_SECONDARY, DRIVE_DIR, KAGGLE_INPUT_DIR, get_hf_token
+from src.lang_utils import SENTENCE_END_CHARS
 from src.models import get_or_load_model
 
 DIARIZATION_DIR = DRIVE_DIR / "speaker-diarization-community-1" if DRIVE_DIR else None
@@ -133,7 +134,7 @@ def assign_speakers_by_word(whisper_result: Any, diarization: Any) -> list[dict]
     return assigned_segments
 
 
-MAJOR_PUNCT = re.compile(r"[.!?¡¿;:]+$")
+MAJOR_PUNCT = re.compile(rf"[{re.escape(SENTENCE_END_CHARS + '¡¿;:')}]+$")
 TITLE_ABBREV = re.compile(r"^[A-ZÁÉÍÓÚÑÇÀÈÌÒÙÄËÏÖÜ][a-záéíóúñç]{0,2}\.$")
 INTERNAL_DOT = re.compile(r"\w\.\w")
 
@@ -153,7 +154,7 @@ def has_major_punct(word: str) -> bool:
 
 
 def count_syllables_approx(text: str) -> int:
-    """Estimación rápida de sílabas fonéticas multilingüe (ES/PT/EN/FR/IT), ignorando tags entre corchetes."""
+    """Solo para escrituras alfabéticas: no se usa para decisiones de doblaje."""
     clean = re.sub(r"\[.*?\]", "", text.lower())
     words = re.findall(r"[a-záéíóúâêîôûãõàèìòùäëïöüñç]+", clean)
     total = 0
@@ -169,24 +170,24 @@ def count_syllables_approx(text: str) -> int:
 
 def is_dangling_word_agnostic(word: str) -> bool:
     """
-    Detección agnóstica multilingüe de palabras conectoras débiles sin listas de diccionarios:
-    Una palabra es colgante si no termina en puntuación mayor (. ! ? ; :) y:
-    - Es extremadamente corta (1 o 2 letras alfanuméricas, ej: e, y, o, a, de, do, da, in, on, at, to, um, un, il, le).
-    - O es una partícula común de enlace de 3 letras en minúscula (com, con, que, and, for, the, por, pra, pro, etc.).
+    Detecta si un segmento no debería cortarse después de esta palabra.
+
+    Regla general, sin listas de conectores: en una escritura con caja, una palabra
+    corta en minúscula y sin puntuación mayor es un enlace débil (artículos,
+    preposiciones, conjunciones). Con 3 letras o menos el corte suena a frase partida.
+    Las escrituras sin caja (CJK, árabe, hebreo) no usan este criterio: ahí un carácter
+    puede ser una palabra completa y el corte se guía por las pausas acústicas.
     """
     w = word.strip()
     if not w or has_major_punct(w):
         return False
     if re.search(r"[,—\-]$", w):
         return False
-    raw_letters = re.sub(r"[^\wáéíóúâêîôûãõàèìòùäëïöüñçÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÄËÏÖÜÑÇ]", "", w)
-    if len(raw_letters) <= 2:
-        return True
-    if len(raw_letters) == 3 and w.islower() and w in (
-        "com", "con", "que", "and", "for", "the", "por", "pra", "pro", "das", "dos", "los", "las", "les", "des", "une"
-    ):
-        return True
-    return False
+    raw_letters = "".join(ch for ch in w if ch.isalpha())
+    if not any(ch.isupper() or ch.islower() for ch in raw_letters):
+        return False
+    # `not isupper` en lugar de `islower`: las mayúsculas mixtas no son conectores.
+    return len(raw_letters) <= 3 and not w.isupper()
 
 
 def smart_group_segments_strict(

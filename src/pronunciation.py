@@ -1,9 +1,10 @@
 """Reglas de pronunciación para TTS: el valor es un respelling, no un fonema.
 
 Fish Audio sustituye el `value` durante la síntesis, así que lo que se escribe es lo
-que suena. Para español y portugués no existe notación de fonemas documentada: el
-valor se escribe con la ortografía del idioma destino. Para inglés sí existe (CMU
-Arpabet) y ahí el valor se valida contra el inventario cerrado de símbolos.
+que suena. Para la mayoría de idiomas no hay una notación de fonemas documentada: el
+valor se escribe con la ortografía del idioma destino y se valida como texto. Para
+inglés sí existe (CMU Arpabet) y ahí el valor se valida contra el inventario cerrado
+de símbolos.
 
 El problema que resuelve este módulo no es "qué es una entidad", sino la consistencia
 y la legalidad del respelling: el modelo traduce segmento a segmento, sin memoria
@@ -23,16 +24,11 @@ ARPABET = frozenset(
     "P R S SH T TH UH UW V W Y Z ZH".split()
 )
 
-# Dígrafos que una ortografía romance no posee. Si el valor los trae, el TTS los lee
-# letra por letra y la regla suena peor que la palabra original. No es una lista de
-# palabras: es el conjunto de grafemas ausentes en el idioma destino.
-FOREIGN_DIGRAPHS = ("th", "sh", "ck", "ph", "wh", "oo", "ee")
-
-# Respuelling legible: letras romance, espacio y guion de sílaba.
-_RESPELL_RE = re.compile(
-    r"^[a-záéíóúüñçãõâêôà]+(?:[ -][a-záéíóúüñçãõâêôà]+)*$",
-    re.IGNORECASE,
-)
+# Respuelling legible: letras de cualquier alfabeto, espacio y guion de sílaba.
+# No se limita al latín romance: el mismo mecanismo sirve para cirílico, griego o
+# cualquier escritura alfabética, y una lista de letras por idioma nunca estaría
+# completa. Lo que sí es universal: nada de dígitos, signos ni marcas de fonemas.
+_RESPELL_RE = re.compile(r"^[^\W\d_]+(?:[ -][^\W\d_]+)*$", re.UNICODE)
 _ARPABET_RE = re.compile(r"^([A-Z]{1,2})([012])?$")
 
 MAX_KEY_CHARS = 256
@@ -64,10 +60,10 @@ def validate_rule(key: str, value: str, lang: str) -> Optional[dict]:
     """
     Devuelve la regla lista para Fish Audio, o None si no aporta nada legible.
 
-    El valor se lee como texto, así que la validación es ortográfica: caracteres que
-    el idioma destino no posee, dígrafos extranjeros, valores que reproducen la propia
-    clave y valores fuera de límite. Una regla inválida no falla en la API: se ignora
-    en silencio, así que descartarla aquí es la única forma de saber qué se aplicó.
+    El valor se lee como texto, así que la validación es ortográfica: que sean
+    letras (de cualquier alfabeto), que no reproduzca la propia clave y que esté
+    dentro de límite. Una regla inválida no falla en la API: se ignora en silencio,
+    así que descartarla aquí es la única forma de saber qué se aplicó.
     """
     k = str(key or "").strip()
     v = str(value or "").strip()
@@ -85,8 +81,6 @@ def validate_rule(key: str, value: str, lang: str) -> Optional[dict]:
         return {"key": k, "value": " ".join(v.split()), "case_sensitive": case_sensitive}
 
     if not _RESPELL_RE.fullmatch(v):
-        return None
-    if any(digraph in v.lower() for digraph in FOREIGN_DIGRAPHS):
         return None
     # Un valor idéntico a la clave no cambia la síntesis: solo agrega superficie de fallo.
     if v.lower().replace("-", "").replace(" ", "") == k.lower().replace(" ", ""):
@@ -196,17 +190,28 @@ def missing_terms(
     return seen
 
 
-def build_respelling_prompt(terms: Sequence[str], target_lang_name: str) -> str:
+def build_respelling_prompt(
+    terms: Sequence[str],
+    target_lang_name: str,
+    target_lang: str = "",
+) -> str:
     """Prompt de respelling para los términos que el traductor no puede ver."""
+    if _primary(target_lang) == "en":
+        notation = """- Usa CMU Arpabet en mayúsculas, separado por espacios, con el dígito de acento (0, 1 o 2) opcional. Ejemplo de formato: "OW1 P AH0 N K OW1 D".
+- No uses letras fuera del inventario Arpabet ni signos que no sean el dígito de acento."""
+    else:
+        notation = f"""- Usa la ortografía de {target_lang_name} tal como debe sonar, con una sola tilde en la sílaba tónica cuando la escritura lo permita.
+- Usa solo letras de {target_lang_name}, espacio y guion. Nada de números, signos ni marcas de fonemas.
+- No uses combinaciones de letras que no existan en {target_lang_name}: el TTS las leería letra por letra."""
+
     return f"""Eres director de doblaje y especialista en pronunciación de {target_lang_name}.
 
-Recibes términos del guion que el modelo de voz puede leer mal. Para cada uno escribe cómo debe sonar en {target_lang_name}, usando la ortografía de {target_lang_name}.
+Recibes términos del guion que el modelo de voz puede leer mal. Para cada uno escribe cómo debe sonar en {target_lang_name}, con la notación de pronunciación que corresponda a ese idioma.
 
 Convenciones obligatorias:
-- Términos de otra lengua, sobre todo anglosajones: escribe la lectura adaptada a {target_lang_name}, no la ortografía original. 'Windows' -> 'guindous', 'Cursor' -> 'cúrsor', 'OpenCode' -> 'open-coud'.
-- Siglas y acrónimos en mayúscula: deletreados con los nombres de letra de {target_lang_name}, separados por guiones. 'API' -> 'a-pe-i', 'JDK' -> 'jota-de-ka', 'MCP' -> 'eme-ce-pe'.
-- Marca la sílaba tónica con una sola tilde.
-- Usa únicamente letras de {target_lang_name}, espacio y guion. Prohibido usar th, sh, ck, ph, wh, oo, ee.
+- Si el término viene de otra lengua, escribe la lectura adaptada a {target_lang_name}, no la ortografía original.
+- Si es una sigla o acrónimo que se deletrea, escribe los nombres de las letras en {target_lang_name}, separados por guiones.
+{notation}
 - Si el término ya se lee correctamente tal como está escrito, devuelve null para ese término.
 
 Responde únicamente con este JSON:

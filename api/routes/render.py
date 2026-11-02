@@ -1223,7 +1223,12 @@ async def regenerate_title(req: RegenerateTitleRequest):
     try:
         new_title = generate_tiktok_title(
             youtube_url=cached_url or None,
-            target_lang=req.target_lang or "es",
+            target_lang=(
+                req.target_lang
+                or (result_data or {}).get("target_lang")
+                or (result_data or {}).get("source_lang")
+                or ""
+            ),
             model_name=model_to_use,
             fallback_text=fallback_text or original_title,
         )

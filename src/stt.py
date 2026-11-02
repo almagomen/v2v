@@ -47,7 +47,7 @@ def get_whisper_model():
     )
 
 
-def sanitize_whisper_raw(segments_obj: Any, detected_language: str = "es") -> dict:
+def sanitize_whisper_raw(segments_obj: Any, detected_language: str = "") -> dict:
     """
     Sanitiza y compacta el volcado crudo de Whisper para auditoría y debug,
     eliminando la copia espejo ('ori_dict'), miles de micro-secciones de silencio
@@ -133,8 +133,9 @@ def transcribe_and_process(
         print(f"⏱️ [Transcripción (Whisper{wh_gpu_tag})] Completada en {t_whisper:.1f}s")
         print(f"⏱️ [Diarización (Pyannote{dia_gpu_tag})] Completada en {t_diarize:.1f}s")
 
-        # Extraer idioma detectado antes de procesar
-        detected_language = getattr(segments, "language", "es") if segments else "es"
+        # Extraer idioma detectado antes de procesar. Sin detección no se inventa un
+        # idioma: un fallback fijo etiquetaría mal la transcripción y la traducción.
+        detected_language = getattr(segments, "language", "") if segments else ""
 
         # Guardar volcado crudo y compacto de Whisper para debug y auditoría (palabras y timestamps)
         try:

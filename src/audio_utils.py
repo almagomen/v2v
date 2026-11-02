@@ -721,8 +721,8 @@ def clone_voice_segments(
                 src_lang = r_data.get("source_lang")
         except Exception:
             pass
-    if not src_lang:
-        src_lang = "pt"
+    # Sin idioma fuente no se inventa uno: `_format_aligned_segment_texts` omite la
+    # etiqueta cuando no lo hay. Un fallback fijo etiquetaría mal cualquier idioma.
 
     times: list[int] = []
     path_es: list[Path] = []

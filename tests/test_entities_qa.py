@@ -11,7 +11,6 @@ import unittest
 
 from src.entities import (
     PLACEHOLDER_TMPL,
-    calendar_terms,
     check_entities,
     collapse_repeats,
     collect_known_terms,
@@ -121,17 +120,20 @@ class TestEntityLock(unittest.TestCase):
         self.assertEqual(restore_text(mangled, mapping), "Usa o Ghidra aqui.")
 
 
-class TestCalendarTerms(unittest.TestCase):
-    def test_libera_meses_y_dias_en_los_tres_idiomas(self):
-        terms = {"September", "Monday", "março", "Domingo", "Ghidra", "DeepSeek"}
-        self.assertEqual(
-            calendar_terms(terms),
-            {"September", "Monday", "março", "Domingo"},
-        )
+class TestEntidadesOtrosAlfabetos(unittest.TestCase):
+    def test_nombre_propio_en_cirilico(self):
+        known = collect_known_terms(["Установи Гидра и открой файл.", "Гидра работает."])
+        self.assertIn("Гидра", known)
 
-    def test_no_libera_un_nombre_que_parece_mes(self):
-        # `Marco` es nombre de persona; el mes portugués lleva cedilla.
-        self.assertEqual(calendar_terms({"Marco"}), set())
+    def test_sigla_en_cirilico(self):
+        known = collect_known_terms(["Usa el ГПС del sistema.", "El ГПС no falla."])
+        self.assertIn("ГПС", known)
+
+    def test_collapse_repeats_en_cirilico(self):
+        self.assertEqual(
+            collapse_repeats("Открой Москва Москва Москва ahora."),
+            "Открой Москва ahora.",
+        )
 
 
 class TestCollapseRepeats(unittest.TestCase):

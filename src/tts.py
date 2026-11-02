@@ -157,7 +157,7 @@ def find_pronunciation_dictionary(search_dir: Optional[Union[str, Path]] = None)
 
 def fish_tts(
     text: str,
-    language: str = "es",
+    language: str = "",
     voice_id: Optional[str] = None,
     format: str = "wav",
     temperature: float = 0.7,

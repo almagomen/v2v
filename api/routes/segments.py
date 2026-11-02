@@ -18,8 +18,10 @@ from src.result_store import load_result
 router = APIRouter(prefix="/api", tags=["segments"])
 
 
-def _load_result_texts(video_folder: Path) -> tuple[list[dict], list[dict], str | None]:
-    """Returns (tts_texts, original_stt_texts, source_lang)."""
+def _load_result_texts(
+    video_folder: Path,
+) -> tuple[list[dict], list[dict], str | None, str | None]:
+    """Returns (tts_texts, original_stt_texts, source_lang, target_lang)."""
     result_data = load_result(video_folder)
     if not result_data:
         raise HTTPException(status_code=404, detail="result.json no encontrado")
@@ -30,8 +32,9 @@ def _load_result_texts(video_folder: Path) -> tuple[list[dict], list[dict], str 
         from src.result_store import get_result_original_segments
         original_list = get_result_original_segments(video_folder)
     source_lang = result_data.get("source_lang")
+    target_lang = result_data.get("target_lang")
 
-    return tts_list, original_list, source_lang
+    return tts_list, original_list, source_lang, target_lang
 
 
 def _segment_dict_at(items: list, index: int) -> dict:
@@ -66,7 +69,7 @@ def get_segments_editor(job_id: str, video_index: int):
         raise HTTPException(status_code=404, detail="Video no encontrado")
 
     folder = _get_video_folder(job_id, video_index)
-    tts_list, original_list, source_lang = _load_result_texts(folder)
+    tts_list, original_list, source_lang, _target_lang = _load_result_texts(folder)
     job_video = videos[video_index]
     job_segments = job_video.get("segments", []) or []
 
@@ -154,18 +157,21 @@ def get_segments_editor(job_id: str, video_index: int):
 def retranslate_segments(req: RetranslateSegmentsRequest):
     """Propose new translations for selected segments (does not regenerate audio)."""
     folder = _get_video_folder(req.job_id, req.video_index)
-    tts_list, original_list, source_lang = _load_result_texts(folder)
-
-    if not source_lang:
-        source_lang = "en"
+    tts_list, original_list, source_lang, stored_target_lang = _load_result_texts(folder)
 
     job = get_job(req.job_id)
     target_lang = req.target_lang
     if not target_lang and job:
         target_lang = job.get("translate_lang")
     if not target_lang or target_lang in ("None", ""):
-        # Fallback inteligente: español si el origen no es español, de lo contrario inglés
-        target_lang = "es" if source_lang != "es" else "en"
+        # Sin destino explícito se reescribe en el idioma que ya declara el resultado;
+        # nunca se inventa un idioma (el antiguo "es"/"en" traducía al equivocado).
+        target_lang = stored_target_lang or source_lang
+    if not target_lang:
+        raise HTTPException(
+            status_code=400,
+            detail="target_lang requerido: el resultado no declara idioma de destino",
+        )
 
     indices = sorted(set(req.seg_indices))
     skip_phonemes = set(req.skip_phonemes or [])

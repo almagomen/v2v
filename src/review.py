@@ -24,18 +24,14 @@ import re
 from collections import Counter
 from typing import Iterable, Sequence
 
+from src.lang_utils import SENTENCE_END_CHARS
+
 _WORD_RE = re.compile(r"[^\W\d_][\w'’-]*", re.UNICODE)
 _CAP_TERM_RE = re.compile(r"\b[^\W\d_][\w'’.-]{3,}\b", re.UNICODE)
-_SENTENCE_RE = re.compile(r"[^.!?…]+[.!?…]?", re.UNICODE)
-
-# Términos que nunca son una entidad aunque vayan en mayúscula.
-_NOT_ENTITIES = frozenset({
-    "also", "although", "another", "because", "before", "being", "between",
-    "could", "during", "every", "however", "maybe", "might", "other", "should",
-    "since", "still", "their", "there", "these", "thing", "think", "those",
-    "through", "today", "until", "using", "where", "which", "while", "would",
-})
-
+_SENTENCE_RE = re.compile(
+    rf"[^{re.escape(SENTENCE_END_CHARS)}]+[{re.escape(SENTENCE_END_CHARS)}]?",
+    re.UNICODE,
+)
 
 def levenshtein(a: str, b: str) -> int:
     """Distancia de edición con dos filas (las palabras son cortas)."""
@@ -73,7 +69,7 @@ def _opens_sentence(text: str, pos: int) -> bool:
     j = pos - 1
     while j >= 0 and text[j] in " \t\n\r\"'«»—–-(":
         j -= 1
-    return j < 0 or text[j] in ".!?…"
+    return j < 0 or text[j] in SENTENCE_END_CHARS
 
 
 def collect_term_variants(
@@ -85,7 +81,7 @@ def collect_term_variants(
 
     No agrupa: solo reúne los candidatos que el modelo puede confundir. Se excluyen
     las palabras que también aparecen en minúscula (son habla, no marcas), las que
-    solo aparecen abriendo frase (en español cualquiera se capitaliza ahí) y los
+    solo aparecen abriendo frase (ahí la mayúscula es ortografía, no marca) y los
     términos que el usuario ya fijó.
     """
     ignored = {str(t).lower() for t in ignore}
@@ -112,8 +108,7 @@ def collect_term_variants(
     candidates = [
         (term, count)
         for term, count in surfaces.items()
-        if term.lower() not in _NOT_ENTITIES
-        and term.lower() not in ignored
+        if term.lower() not in ignored
         and term in mid_sentence
         and term.lower() not in lower_seen
     ]
@@ -227,8 +222,7 @@ SOLO el problema que indica `motivo`:
 
 Reglas:
 1. Conserva el significado, el tono y la persona gramatical. No añadas datos nuevos.
-2. No añadas muletillas ni conectores de relleno («la verdad es que», «mira»,
-   «¿vale?»).
+2. No añadas muletillas ni conectores de relleno propios de {target_lang_name}.
 3. Los marcadores ⟦E1⟧, ⟦E2⟧... son intocables: los mismos que en `patron`, una sola
    vez y en el mismo orden. No los traduzcas ni los expliques.
 4. Si el segmento no tiene arreglo sin inventar, devuélvelo igual.

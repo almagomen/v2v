@@ -310,8 +310,7 @@ class TestFitBudget(unittest.TestCase):
         _texts, _meta, fake = self._run_timed([json.dumps(good)], sentences)
         prompt = fake.interactions.translation_prompts[0]
         self.assertIn(f"~{b['chars_min']}-{b['chars_max']} chars", prompt)
-        self.assertIn(f"~{b['syl_min']}-{b['syl_max']} sílabas", prompt)
-        self.assertIn(f"{speech_rate('es')[1]:.0f} caracteres por segundo", prompt)
+        self.assertIn(f"{speech_rate('es'):.0f} caracteres por segundo", prompt)
         # El ejemplo de salida no repite la última clave (bloque de 1 segmento).
         self.assertEqual(prompt.count('"1": {'), 1)
 

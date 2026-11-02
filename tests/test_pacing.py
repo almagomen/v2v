@@ -40,13 +40,11 @@ class TestTasas(unittest.TestCase):
 
     def test_tasas_calibradas_en_rango_plausible(self):
         """Regresión: `es` usa la tasa medida del TTS (17.2 chars/s), no la humana."""
-        for lang, (syl, chars) in SPEECH_RATES.items():
+        for lang, chars in SPEECH_RATES.items():
             with self.subTest(lang=lang):
                 self.assertGreater(chars, 12.0, "tasa absurda: el doblaje quedaría corto")
                 self.assertLess(chars, 22.0, "tasa absurda: el doblaje se aceleraría")
-                self.assertGreater(syl, 3.0)
-                self.assertLess(syl, 8.0)
-        self.assertEqual(SPEECH_RATES["es"][1], 17.2)
+        self.assertEqual(SPEECH_RATES["es"], 17.2)
 
 
 class TestTextoVisible(unittest.TestCase):
@@ -66,7 +64,7 @@ class TestTextoVisible(unittest.TestCase):
 
 class TestEstimacion(unittest.TestCase):
     def test_estimacion_usa_la_tasa_del_idioma(self):
-        chars_per_sec = SPEECH_RATES["es"][1]
+        chars_per_sec = SPEECH_RATES["es"]
         texto = "a" * int(chars_per_sec * 10)
         self.assertAlmostEqual(estimate_seconds(texto, "es"), 10.0, delta=0.2)
 
@@ -83,7 +81,7 @@ class TestEstimacion(unittest.TestCase):
 class TestPresupuesto(unittest.TestCase):
     def test_rango_rodea_el_objetivo(self):
         b = budget_for("es", 10.0)
-        objetivo = 10.0 * SPEECH_RATES["es"][1]
+        objetivo = 10.0 * SPEECH_RATES["es"]
         self.assertLess(b["chars_min"], objetivo)
         self.assertGreater(b["chars_max"], objetivo)
         self.assertAlmostEqual(b["chars_min"], objetivo * FIT_MIN, delta=2)
@@ -98,8 +96,7 @@ class TestPresupuesto(unittest.TestCase):
             with self.subTest(sec=sec):
                 b = budget_for("es", sec)
                 self.assertLess(b["chars_min"], b["chars_max"])
-                self.assertLess(b["syl_min"], b["syl_max"])
-                self.assertGreater(b["syl_min"], 0)
+                self.assertGreater(b["chars_min"], 0)
 
 
 class TestNecesitaReescritura(unittest.TestCase):
@@ -111,7 +108,7 @@ class TestNecesitaReescritura(unittest.TestCase):
         self.assertTrue(needs_rewrite("palabra " * 60, "es", 3.0))
 
     def test_texto_encajado_no_dispara(self):
-        justo = "a" * int(10.0 * SPEECH_RATES["es"][1])
+        justo = "a" * int(10.0 * SPEECH_RATES["es"])
         self.assertFalse(needs_rewrite(justo, "es", 10.0))
 
     def test_frase_de_dos_palabras_no_se_toca(self):
@@ -122,7 +119,7 @@ class TestNecesitaReescritura(unittest.TestCase):
 
     def test_umbrales_son_asimetricos(self):
         """Corto dispara antes que largo: el silencio muerto se nota más que la compresión."""
-        objetivo = int(10.0 * SPEECH_RATES["es"][1])
+        objetivo = int(10.0 * SPEECH_RATES["es"])
         casi_corto = "a" * int(objetivo * (1 - REWRITE_SHORT + 0.03)) + " bb"
         casi_largo = "a" * int(objetivo * (1 + REWRITE_LONG - 0.05)) + " bb"
         self.assertFalse(needs_rewrite(casi_corto, "es", 10.0))
@@ -173,6 +170,11 @@ class TestFinDeFrase(unittest.TestCase):
     def test_etiqueta_de_emocion_no_tapa_el_punto(self):
         self.assertTrue(ends_sentence("[excited] Listo."))
         self.assertFalse(ends_sentence("[excited] Listo"))
+
+    def test_puntuacion_no_latina_cierra_frase(self):
+        for texto in ("これで終わり。", "本当ですか？", "انتهى؟", "यह खत्म।"):
+            with self.subTest(texto=texto):
+                self.assertTrue(ends_sentence(texto))
 
 
 class TestBordesDelClip(unittest.TestCase):
