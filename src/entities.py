@@ -170,6 +170,52 @@ def _split_terms(sentences: Sequence[str]) -> tuple[set[str], set[str]]:
     return structural, ambiguous
 
 
+# Meses y días: tienen traducción directa, así que protegerlos deja inglés (o
+# portugués) dentro del doblaje. En un build real el juicio del modelo protegió
+# `September` en un vídeo y lo tradujo en otro; con esta lista la decisión es fija.
+CALENDAR_TERMS = frozenset({
+    # inglés
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    # portugués
+    # `marco` sin cedilla queda fuera: es mucho más probable que sea un nombre.
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
+    "agosto", "setembro", "outubro", "novembro", "dezembro",
+    "segunda", "terça", "terca", "quarta", "quinta", "sexta", "sábado", "sabado",
+    "domingo",
+    # español
+    "enero", "febrero", "marzo", "mayo", "junio", "julio", "agosto", "septiembre",
+    "setiembre", "octubre", "noviembre", "diciembre",
+    "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes",
+})
+
+
+def calendar_terms(terms: Iterable[str]) -> set[str]:
+    """Términos del lote que son meses o días y no deben bloquearse."""
+    return {
+        t for t in terms
+        if str(t).strip(".,;:!?()[]\"'").lower() in CALENDAR_TERMS
+    }
+
+
+# El ASR repite una palabra cuando titubea (`Maribyte Maribyte Maribyte`). La
+# repetición viaja como entidad protegida y se locuta tal cual, así que se colapsa
+# antes de bloquear. Solo con 3+ repeticiones y con mayúscula inicial: `no no no`
+# puede ser intencional y `Don Don` es un tartamudeo de dos que no vale la pena tocar.
+_REPEATED_CAP_RE = re.compile(
+    r"\b([A-ZÁÉÍÓÚÜÑ][\w'’.-]{2,})((?:[ \t,;]+(?:\1)){2,})",
+    re.UNICODE,
+)
+
+
+def collapse_repeats(text: str) -> str:
+    """Colapsa una palabra capitalizada repetida 3+ veces seguidas."""
+    if not text:
+        return text
+    return _REPEATED_CAP_RE.sub(r"\1", text)
+
+
 def collect_known_terms(sentences: Sequence[str]) -> set[str]:
     """
     Reúne las entidades del lote: formas estructurales y palabras que nunca

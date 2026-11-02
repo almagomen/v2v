@@ -11,7 +11,9 @@ from google import genai
 from src.config import get_google_api_keys, rotate_google_api_key
 from src.entities import (
     ambiguous_terms,
+    calendar_terms,
     check_entities,
+    collapse_repeats,
     collect_known_terms,
     lock_text,
     normalize_asr_casing,
@@ -38,6 +40,14 @@ from src.pronunciation import (
     norm_key,
     validate_rule,
 )
+from src.review import (
+    apply_term_map,
+    audit_summary,
+    build_review_prompt,
+    build_term_prompt,
+    collect_term_variants,
+    parse_term_groups,
+)
 
 LANGUAGE_NAMES = {
     "es": "Español",
@@ -62,6 +72,13 @@ POPULAR_GEMINI_MODELS = [
 # Frases de contexto que se envían al juicio de fugas. Con más, el prompt crece sin
 # mejorar el veredicto: los cognados se reconocen en las primeras apariciones.
 MAX_CONTEXT_PAIRS = 12
+
+# Revisión pre-TTS: solo entra lo que sigue marcado después del encaje. Un desvío
+# menor no se toca (reescribir por 3% de caracteres solo gasta una llamada), y el
+# bloque se acota porque un prompt de revisión con 80 entradas no cabe con contexto.
+REVIEW_DEV_THRESHOLD = 0.25
+REVIEW_MAX_SEGS = 24
+REVIEW_MIN_GAIN = 0.02
 
 
 def get_default_title_model() -> str:
@@ -177,6 +194,9 @@ def translate_text_list(
     total_count = len(list_sentences)
     has_times = bool(times and len(times) == total_count)
     fit_enabled = os.environ.get("TRANSLATION_FIT_BUDGET", "1").strip().lower() not in ("0", "false", "no")
+    # La revisión pre-TTS es determinista salvo que quede algo marcado: sin marcas
+    # no hay llamada. Se puede apagar sin tocar el resto del pipeline.
+    review_enabled = os.environ.get("TRANSLATION_REVIEW", "1").strip().lower() not in ("0", "false", "no")
     # Segmentos con la inferencia de fonemas desactivada: el prompt ni siquiera
     # menciona el campo, no entran en la consolidación y no se persisten.
     skip_phonemes = {
@@ -188,7 +208,8 @@ def translate_text_list(
     # ─── Entity lock: congelar términos técnicos antes de tocar el prompt ───
     # Las mayúsculas del ASR no distinguen nombres propios de ortografía de pausa:
     # se normalizan antes de bloquear, o el modelo las lee como marcas y no las traduce.
-    source_texts = [(s or "") for s in list_sentences]
+    # El ASR repite una palabra cuando titubea; si viaja como entidad, se locuta.
+    source_texts = [collapse_repeats(s or "") for s in list_sentences]
     known_terms = collect_known_terms(source_texts)
     if not is_same_lang:
         # La estadística deja un grupo dudoso: palabras en mayúscula que nunca aparecen
@@ -212,6 +233,14 @@ def translate_text_list(
             if dropped:
                 known_terms -= dropped
                 print(f"🔍 [Entidades] {len(dropped)} palabra(s) corriente(s) descartada(s): {', '.join(sorted(dropped))}", flush=True)
+
+    # Meses y días se traducen siempre: bloquearlos deja `September` dentro del
+    # español. Va después del juicio porque el juicio no es determinista entre runs,
+    # y también aplica a es→es: un mes en inglés en un vídeo español se traduce.
+    calendar = calendar_terms(known_terms)
+    if calendar:
+        known_terms -= calendar
+        print(f"🔍 [Entidades] {len(calendar)} palabra(s) de calendario liberada(s): {', '.join(sorted(calendar))}", flush=True)
 
     source_sentences = [normalize_asr_casing(s.strip(), keep=known_terms) for s in source_texts]
     locked_sentences: list[str] = []
@@ -499,6 +528,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         # el modelo sabe cuál de las dos cosas es. La aceptación sí es mecánica: la
         # reescritura solo entra si baja el número de coincidencias.
         untranslated: dict[int, list[str]] = {}
+        leaks: set[str] = set()
         if not is_same_lang:
             candidates: dict[int, list[str]] = {}
             for n in range(len(indices)):
@@ -593,6 +623,28 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         if left:
                             untranslated[n] = left
 
+        def _residue_now() -> dict[int, list[str]]:
+            """Fugas de idioma sobre el texto actual (no sobre el de la primera pasada)."""
+            if is_same_lang or not leaks:
+                return {}
+            found: dict[int, list[str]] = {}
+            for n in range(len(indices)):
+                if n in missing_local:
+                    continue
+                g = indices[n]
+                left = [
+                    t
+                    for t in shared_tokens(
+                        source_sentences[g],
+                        restore_text(texts[n], lock_maps[g]),
+                        lock_maps[g].values(),
+                    )
+                    if t in leaks
+                ]
+                if left:
+                    found[n] = left
+            return found
+
         # ─── Encaje temporal: pasadas acotadas solo sobre los que no caben ───
         # El prompt ya pide el rango, pero el modelo no lo cumple siempre. Aquí se mide
         # la duración estimada y se reescribe únicamente lo que queda fuera del slot,
@@ -655,6 +707,106 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         break
             except Exception as e_fit:
                 print(f"⚠️ [Encaje] bloque {chunk_no}: ajuste omitido ({e_fit})", flush=True)
+
+        # El residuo se midió antes del encaje. El encaje puede haber quitado la
+        # palabra (o haberla dejado), así que se recalcula sobre el texto final: si no,
+        # el aviso del QA señala una fuga que ya no está y esconde la que quedó.
+        untranslated = _residue_now()
+
+        # ─── Revisión pre-TTS: solo lo que sigue marcado ───
+        # No es una quinta pasada general. Se audita el resultado y el modelo solo ve
+        # los segmentos con fuga, entidad rota o desvío severo; cada reescritura entra
+        # únicamente si conserva los marcadores y mejora lo que se le señaló.
+        if review_enabled:
+            flagged: dict[str, dict[str, str]] = {}
+            for n in range(len(indices)):
+                if n in missing_local:
+                    continue
+                g = indices[n]
+                reasons: list[str] = []
+                if untranslated.get(n):
+                    reasons.append("residuo: " + ", ".join(untranslated[n]))
+                if n in problems:
+                    reasons.append("entidad: " + "; ".join(problems[n]))
+                if speech_seconds[g] > 0:
+                    dev = fit_deviation(texts[n], target_lang, speech_seconds[g], lock_maps[g])
+                    if abs(dev) >= REVIEW_DEV_THRESHOLD:
+                        reasons.append(f"duración: desvío {dev:+.0%}")
+                if not reasons:
+                    continue
+                motivo = " | ".join(reasons)
+                flagged[str(n + 1)] = {
+                    "texto": texts[n],
+                    "fuente": source_sentences[g],
+                    "patron": locked_sentences[g],
+                    "motivo": motivo,
+                }
+
+            if flagged:
+                flagged = dict(list(flagged.items())[:REVIEW_MAX_SEGS])
+                print(
+                    f"🔎 [Revisión] bloque {chunk_no}: "
+                    f"{audit_summary([{'motivo': v['motivo']} for v in flagged.values()])}; revisando...",
+                    flush=True,
+                )
+                try:
+                    revised = _review_retry(client, model, is_gemma, flagged, target_lang_name)
+                except Exception as e_rev:
+                    print(f"⚠️ [Revisión] bloque {chunk_no}: omitida ({e_rev})", flush=True)
+                    revised = {}
+
+                # Igual que en el encaje: un texto repetido para entradas distintas es
+                # un eco de la plantilla, no una corrección.
+                repetidos = echoed_texts(revised)
+                accepted = 0
+                for key_str, new_text in revised.items():
+                    n = int(key_str) - 1
+                    if not (0 <= n < len(indices)) or not new_text.strip():
+                        continue
+                    if new_text.strip() in repetidos:
+                        continue
+                    g = indices[n]
+                    if not check_entities(locked_sentences[g], new_text)["ok"]:
+                        continue
+
+                    improved = False
+                    if untranslated.get(n):
+                        before = len(untranslated[n])
+                        after = sum(
+                            1
+                            for t in shared_tokens(
+                                source_sentences[g],
+                                restore_text(new_text, lock_maps[g]),
+                                lock_maps[g].values(),
+                            )
+                            if t in leaks
+                        )
+                        improved = after < before
+                    if n in problems:
+                        improved = True
+                    if speech_seconds[g] > 0:
+                        old_dev = abs(fit_deviation(texts[n], target_lang, speech_seconds[g], lock_maps[g]))
+                        new_dev = abs(fit_deviation(new_text, target_lang, speech_seconds[g], lock_maps[g]))
+                        # Arreglar una fuga no puede deshacer el encaje: si el texto
+                        # se sale del slot mucho más que antes, no entra aunque el
+                        # residuo baje.
+                        if new_dev > old_dev + 0.10:
+                            continue
+                        if new_dev < old_dev - REVIEW_MIN_GAIN:
+                            improved = True
+                    if not improved:
+                        continue
+
+                    texts[n] = new_text.strip()
+                    problems.pop(n, None)
+                    accepted += 1
+
+                print(
+                    f"🔎 [Revisión] bloque {chunk_no}: {accepted}/{len(flagged)} corregido(s)",
+                    flush=True,
+                )
+                if accepted:
+                    untranslated = _residue_now()
 
         out: dict[int, dict] = {}
         for n, g in enumerate(indices):
@@ -738,6 +890,45 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 aligned_list = [resolved[i]["text"] for i in range(total_count)]
                 phonemes_map = {i: resolved[i]["phonemes"] for i in range(total_count)}
                 duration = time.perf_counter() - t_start
+
+                # ─── Variantes del ASR: una sola grafía por entidad ───
+                # `Guidra`/`Ghidra` o `DeepSeq`/`DeepSeek` son la misma entidad y el
+                # bloque las puede traducir por separado. Se unifican aquí, sobre el
+                # texto ya completo, porque la variante correcta se ve en el conjunto
+                # y no dentro de un bloque de 80 frases.
+                if review_enabled:
+                    try:
+                        candidates = collect_term_variants(aligned_list)
+                        if len(candidates) >= 2:
+                            raw_groups = _review_terms(
+                                client,
+                                model,
+                                is_gemma,
+                                build_term_prompt(candidates, source_lang_name),
+                            )
+                            term_map = parse_term_groups(
+                                raw_groups, [c["term"] for c in candidates]
+                            )
+                            if term_map:
+                                aligned_list, changed = apply_term_map(aligned_list, term_map)
+                                # La entidad bloqueada sigue siendo la variante vieja en
+                                # `lock_maps`; si no se actualiza, la cobertura de
+                                # pronunciación busca una palabra que ya no está y deja
+                                # sin regla a la grafía canónica.
+                                for mapping in lock_maps:
+                                    for key, value in list(mapping.items()):
+                                        if value in term_map:
+                                            mapping[key] = term_map[value]
+                                detail = ", ".join(
+                                    f"{k} → {v}" for k, v in sorted(term_map.items())
+                                )
+                                print(
+                                    f"🔎 [Revisión] {len(term_map)} variante(s) unificada(s) "
+                                    f"({changed} reemplazo(s)): {detail}",
+                                    flush=True,
+                                )
+                    except Exception as e_term:
+                        print(f"⚠️ [Revisión] variantes del ASR omitidas ({e_term})", flush=True)
 
                 # ─── Pronunciación: una regla por palabra y cobertura de las bloqueadas ───
                 # Corre antes de la etiqueta de emoción para que la clave case con el
@@ -944,7 +1135,7 @@ def _call_json_map(client, model: str, is_gemma: bool, prompt: str, log_tag: str
     if isinstance(parsed, dict):
         for key, val in parsed.items():
             if isinstance(val, dict):
-                text_val = str(val.get("text", "")).strip()
+                text_val = str(val.get("text") or val.get("texto") or "").strip()
             elif isinstance(val, str):
                 text_val = val.strip()
             else:
@@ -967,6 +1158,32 @@ def _fit_retry(
     (entidades intactas y desviación menor que la original).
     """
     return _call_json_map(client, model, is_gemma, build_fit_prompt(payload, target_lang_name), "[Encaje]")
+
+
+def _review_retry(
+    client,
+    model: str,
+    is_gemma: bool,
+    payload: dict[str, dict[str, str]],
+    target_lang_name: str,
+) -> dict[str, str]:
+    """
+    Revisión pre-TTS de los segmentos que siguen marcados. No es una pasada
+    general: el prompt ya trae el motivo y la aceptación (entidades intactas y
+    mejora medible) la decide quien llama.
+    """
+    return _call_json_map(
+        client, model, is_gemma, build_review_prompt(payload, target_lang_name), "[Revisión]"
+    )
+
+
+def _review_terms(client, model: str, is_gemma: bool, prompt: str) -> dict[str, Any]:
+    """Llamada al modelo para agrupar variantes del ASR; devuelve el JSON crudo."""
+    raw_text = _call_model(client, model, is_gemma, prompt)
+    if not raw_text:
+        return {}
+    parsed = _loads_loose(raw_text, "[Revisión]")
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _translate_entity_retry(

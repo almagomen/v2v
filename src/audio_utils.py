@@ -510,6 +510,7 @@ def synthesize_segment_audio(
     max_allowed_dur: Optional[float] = None,
     tts_fn: Optional[callable] = None,
     cached_arr_rate: Optional[Tuple[Any, int]] = None,
+    metrics_out: Optional[dict[str, float]] = None,
     **tts_kwargs,
 ) -> Tuple[Optional[Any], Optional[int], float, float, str]:
     """
@@ -522,6 +523,11 @@ def synthesize_segment_audio(
     5. Guarda el audio final en out_audio_path.
 
     Retorna: (arr, rate, raw_duration, final_duration, mode_tag)
+
+    `metrics_out`, si se pasa, se rellena con lo que el QA necesita para no confundir
+    tres cosas distintas: `speed` (cambio real de tempo aplicado a la voz, 1.0 = sin
+    tocar), `compaction` (fracción de la duración cruda recortada como silencio) y
+    `padded` (segundos de silencio añadidos para llenar el hueco).
     """
     if tts_fn is None:
         from src.tts import model_tts
@@ -541,6 +547,13 @@ def synthesize_segment_audio(
     if arr is None or rate is None:
         return None, None, 0.0, 0.0, "error"
 
+    # Se escribe directamente en el dict del llamador: `update` copiaría los valores
+    # iniciales y los cambios posteriores (la velocidad real) se perderían.
+    metrics: dict[str, float] = metrics_out if metrics_out is not None else {}
+    metrics["speed"] = 1.0
+    metrics["compaction"] = 0.0
+    metrics["padded"] = 0.0
+
     raw_dur = float(arr.shape[-1]) / float(rate)
 
     if raw_audio_path and torchaudio is not None:
@@ -559,6 +572,8 @@ def synthesize_segment_audio(
             arr_compact = compact_silence_valleys(arr, rate, int(max_allowed_dur * rate))
             compact_dur = float(arr_compact.shape[-1]) / float(rate)
 
+            metrics["compaction"] = max(0.0, 1.0 - compact_dur / raw_dur) if raw_dur > 0 else 0.0
+
             if compact_dur <= max_allowed_dur:
                 arr = arr_compact
                 gained_pct = max(1, int(round((1.0 - compact_dur / raw_dur) * 100)))
@@ -568,6 +583,7 @@ def synthesize_segment_audio(
                 arr = arr_compact
                 target_samples = int(max_allowed_dur * rate)
                 ratio_needed = float(arr.shape[-1]) / float(target_samples)
+                metrics["speed"] = ratio_needed
                 speed_str = f"⚡ {ratio_needed:.2f}x" if ratio_needed <= 1.25 else f"🔥 {ratio_needed:.2f}x"
                 if (raw_dur - compact_dur) >= 0.05:
                     gained_pct = max(1, int(round((1.0 - compact_dur / raw_dur) * 100)))
@@ -596,6 +612,8 @@ def synthesize_segment_audio(
                 expanded_dur = float(arr_expanded.shape[-1]) / float(rate)
                 expanded_ratio = expanded_dur / orig_duration
 
+                metrics["padded"] = max(0.0, expanded_dur - raw_dur)
+
                 if expanded_ratio >= SYNC_TOLERANCE:
                     arr = arr_expanded
                     mode_tag = f"✨ 1.00x (pausas +{int(round((expanded_ratio - ratio_slow) * 100))}%)"
@@ -605,6 +623,7 @@ def synthesize_segment_audio(
                     # (estiramiento suave imperceptible; nunca colas de ceros)
                     min_allowed_speed = STRETCH_FLOOR
                     effective_speed = max(min_allowed_speed, expanded_ratio)
+                    metrics["speed"] = effective_speed
                     mode_tag = f"🔉 {effective_speed:.2f}x"
                     stretch_samples = int(arr.shape[-1] / effective_speed)
                     arr = adjust_audio_duration(arr, stretch_samples, rate)
@@ -621,11 +640,13 @@ def synthesize_segment_audio(
     if target_duration is not None and target_duration > 0:
         raw_speed = dur_after_sync / target_duration
         effective_speed = max(0.5, min(raw_speed, 2.0))
+        metrics["speed"] = effective_speed
         mode_tag = f"🎯 {effective_speed:.2f}x (target)"
         target_samples = int(target_duration * rate)
         arr = adjust_audio_duration(arr, target_samples, rate)
     elif speed is not None and abs(speed - 1.0) > 0.01 and speed > 0:
         target_samples = int(arr.shape[-1] / speed)
+        metrics["speed"] = float(speed)
         mode_tag = f"🎛️ {speed:.2f}x (manual)"
         arr = adjust_audio_duration(arr, target_samples, rate)
 
@@ -826,6 +847,7 @@ def clone_voice_segments(
         raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"
 
         cached_tts = tts_results.get(idx)
+        sync_metrics: dict[str, float] = {}
         arr, rate, raw_dur_es, final_dur, mode_tag = synthesize_segment_audio(
             text=text,
             lang=language,
@@ -840,6 +862,7 @@ def clone_voice_segments(
             max_allowed_dur=max_allowed_dur,
             tts_fn=tts_fn,
             cached_arr_rate=cached_tts,
+            metrics_out=sync_metrics,
             **kwargs,
         )
 
@@ -883,6 +906,9 @@ def clone_voice_segments(
             "src_end": src_end,
             "raw_dur_es": raw_dur_es,
             "final_dur": final_dur,
+            "speed": sync_metrics.get("speed"),
+            "compaction": sync_metrics.get("compaction", 0.0),
+            "padded": sync_metrics.get("padded", 0.0),
             "levels": levels_from_pcm(arr),
             "audio_path": audio_es_path,
             "rate": rate,
@@ -904,6 +930,9 @@ def clone_voice_segments(
             orig_duration=item["src_end"] - item["src_start"],
             raw_duration=item["raw_dur_es"],
             final_duration=final_dur,
+            speed=item.get("speed"),
+            compaction=item.get("compaction", 0.0),
+            padded=item.get("padded", 0.0),
             levels=item["levels"],
             translation_status=text_dict.get("translation_status"),
             entity_problems=text_dict.get("entity_fail"),

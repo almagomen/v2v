@@ -33,7 +33,14 @@ QA_THRESHOLDS: dict[str, float] = {
     "fallback_max": 0,
     "silent_max": 0,
     "error_max": 0,
-    "tempo_p95_max": 1.12,
+    # Velocidad real aplicada a la voz (sin contar el recorte de silencios).
+    "speed_p95_max": 1.12,
+    # Un segmento por debajo de 0.85x ya se oye arrastrado. El 0.80x es el suelo del
+    # sincronizador, así que este ratio mide cuánto del vídeo vive en ese suelo.
+    "slow_speed": 0.85,
+    "slow_ratio_max": 0.10,
+    # Recortar más de un cuarto del clip como silencio deja la locución entrecortada.
+    "compaction_p95_max": 0.25,
     "overlap_max": 0,
     "rms_std_max": 1.5,
     # El doblaje automático de YouTube deja 25.0% de silencio y el original 18.0%.
@@ -84,6 +91,9 @@ def evaluate_segment(
     orig_duration: float,
     raw_duration: float,
     final_duration: float,
+    speed: Optional[float] = None,
+    compaction: float = 0.0,
+    padded: float = 0.0,
     arr: Any = None,
     levels: Optional[tuple[float, float]] = None,
     translation_status: Optional[str] = None,
@@ -101,6 +111,9 @@ def evaluate_segment(
     cerrar los huecos de ritmo, cuando el tensor del segmento ya se liberó.
     """
     tempo = round(raw_duration / final_duration, 3) if final_duration > 0 else None
+    # `tempo` mezcla aceleración real y recorte de silencios. `speed` es solo lo que
+    # se le hizo a la voz: 1.0 = intacta, 1.2 = 20% más rápida, 0.8 = arrastrada.
+    applied = round(float(speed), 3) if speed is not None else tempo
     length_dev = round(final_duration / orig_duration - 1.0, 3) if orig_duration > 0 else None
     peak_dbfs, rms_dbfs = levels if levels is not None else levels_from_pcm(arr)
     problems = [str(p) for p in (entity_problems or [])]
@@ -116,6 +129,9 @@ def evaluate_segment(
         "final_duration": round(float(final_duration), 3),
         "chars": int(chars),
         "tempo": tempo,
+        "speed": applied,
+        "compaction": round(max(0.0, float(compaction)), 4),
+        "padded": round(max(0.0, float(padded)), 3),
         "length_dev": length_dev,
         "peak_dbfs": peak_dbfs,
         "rms_dbfs": rms_dbfs,
@@ -268,6 +284,12 @@ def summarize(
     """Agrega las métricas por segmento y evalúa los umbrales."""
     recs = list(records)
     tempos = [r["tempo"] for r in recs if r.get("tempo") is not None]
+    speeds = [r["speed"] for r in recs if r.get("speed") is not None]
+    compactions = [r["compaction"] for r in recs if r.get("compaction") is not None]
+    slow_segs = [
+        r["seg"] for r in recs
+        if r.get("speed") is not None and r["speed"] < QA_THRESHOLDS["slow_speed"]
+    ]
     devs = [
         abs(r["length_dev"]) for r in recs
         if r.get("length_dev") is not None
@@ -296,6 +318,9 @@ def summarize(
 
     metrics = {
         "tempo_p95": _p95(tempos),
+        "speed_p95": _p95(speeds),
+        "slow_ratio": (round(len(slow_segs) / len(speeds), 3) if speeds else None),
+        "compaction_p95": _p95(compactions),
         "length_dev_p95": _p95(devs),
         "length_dev_over_p95": _p95(devs_over),
         "rms_std": _std(levels),
@@ -327,8 +352,15 @@ def summarize(
         _fail("silent", len(silent_segs), QA_THRESHOLDS["silent_max"], silent_segs)
     if tts_errors + missing > QA_THRESHOLDS["error_max"]:
         _fail("tts_error", tts_errors + missing, QA_THRESHOLDS["error_max"])
-    if metrics["tempo_p95"] is not None and metrics["tempo_p95"] > QA_THRESHOLDS["tempo_p95_max"]:
-        _fail("tempo_p95", metrics["tempo_p95"], QA_THRESHOLDS["tempo_p95_max"])
+    if metrics["speed_p95"] is not None and metrics["speed_p95"] > QA_THRESHOLDS["speed_p95_max"]:
+        _fail("speed_p95", metrics["speed_p95"], QA_THRESHOLDS["speed_p95_max"])
+    if metrics["slow_ratio"] is not None and metrics["slow_ratio"] > QA_THRESHOLDS["slow_ratio_max"]:
+        _fail("slow_ratio", metrics["slow_ratio"], QA_THRESHOLDS["slow_ratio_max"], slow_segs)
+    if (
+        metrics["compaction_p95"] is not None
+        and metrics["compaction_p95"] > QA_THRESHOLDS["compaction_p95_max"]
+    ):
+        _fail("compaction_p95", metrics["compaction_p95"], QA_THRESHOLDS["compaction_p95_max"])
     if overlap_count > QA_THRESHOLDS["overlap_max"]:
         _fail("overlap", overlap_count, QA_THRESHOLDS["overlap_max"], overlap_segs)
     if metrics["rms_std"] is not None and metrics["rms_std"] > QA_THRESHOLDS["rms_std_max"]:
@@ -372,15 +404,23 @@ def format_report(report: dict[str, Any]) -> list[str]:
     """Líneas para el log del job. Sin tablas ni sangrías de más de 3 espacios."""
     m = report.get("metrics") or {}
     rate = m.get("chars_per_sec")
+    slow = m.get("slow_ratio")
+    slow_txt = f" | lentos {(slow or 0) * 100:.0f}%" if slow is not None else ""
     lines = [
         f"🩺 [QA] {report.get('segments', 0)}/{report.get('expected_segments') or '?'} segmentos | "
-        f"tempo p95 {m.get('tempo_p95') or 0:.2f}x | "
+        f"velocidad p95 {m.get('speed_p95') or 0:.2f}x | "
+        f"tempo bruto {m.get('tempo_p95') or 0:.2f}x{slow_txt} | "
         f"desvío p95 {(m.get('length_dev_p95') or 0) * 100:.0f}% "
         f"(desborde {(m.get('length_dev_over_p95') or 0) * 100:.0f}%) | "
         f"rms σ {m.get('rms_std') or 0:.2f} dB | "
         f"fallback {m.get('fallback', 0)} | entidades {m.get('entity_fail', 0)} | "
         f"silencios {m.get('silent', 0)} | solapes {m.get('overlap_count', 0)} ({(m.get('overlap_secs') or 0):.1f}s)"
     ]
+    comp = m.get("compaction_p95")
+    if comp is not None and comp >= 0.05:
+        lines.append(
+            f"   recorte de silencios: p95 {comp * 100:.0f}% del clip (no cambia la velocidad)"
+        )
     if rate:
         lines.append(f"   ritmo medido: {rate:.1f} chars/s a 1.0x (tabla de presupuesto: ajustar si difiere >10%)")
     dead = m.get("dead_air_ratio")

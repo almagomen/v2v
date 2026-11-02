@@ -11,7 +11,9 @@ import unittest
 
 from src.entities import (
     PLACEHOLDER_TMPL,
+    calendar_terms,
     check_entities,
+    collapse_repeats,
     collect_known_terms,
     lock_text,
     normalize_asr_casing,
@@ -119,6 +121,31 @@ class TestEntityLock(unittest.TestCase):
         self.assertEqual(restore_text(mangled, mapping), "Usa o Ghidra aqui.")
 
 
+class TestCalendarTerms(unittest.TestCase):
+    def test_libera_meses_y_dias_en_los_tres_idiomas(self):
+        terms = {"September", "Monday", "março", "Domingo", "Ghidra", "DeepSeek"}
+        self.assertEqual(
+            calendar_terms(terms),
+            {"September", "Monday", "março", "Domingo"},
+        )
+
+    def test_no_libera_un_nombre_que_parece_mes(self):
+        # `Marco` es nombre de persona; el mes portugués lleva cedilla.
+        self.assertEqual(calendar_terms({"Marco"}), set())
+
+
+class TestCollapseRepeats(unittest.TestCase):
+    def test_colapsa_tres_o_mas_capitalizadas(self):
+        self.assertEqual(
+            collapse_repeats("Instala Maribyte Maribyte Maribyte ahora."),
+            "Instala Maribyte ahora.",
+        )
+
+    def test_no_toca_dos_repeticiones_ni_minusculas(self):
+        self.assertEqual(collapse_repeats("Don Don llegó."), "Don Don llegó.")
+        self.assertEqual(collapse_repeats("no no no"), "no no no")
+
+
 class TestEntityCheck(unittest.TestCase):
     def test_ok_si_conserva_tokens_y_numeros(self):
         locked, mapping = lock_text("Instala o Ghidra 12.1 hoje.")
@@ -206,7 +233,38 @@ class TestQaGate(unittest.TestCase):
         recs = [self._rec(seg=i, tempo=1.25) for i in range(1, 21)]
         report = summarize(recs, expected_segments=20)
         self.assertFalse(report["passed"])
-        self.assertIn("tempo_p95", [f["metric"] for f in report["failures"]])
+        self.assertIn("speed_p95", [f["metric"] for f in report["failures"]])
+
+    def test_recorte_de_silencio_no_cuenta_como_velocidad(self):
+        """Un `✂️ -5%` acelera el clip pero no la voz: no debe tumbar el gate."""
+        recs = [
+            evaluate_segment(
+                seg=i, start=float(i - 1) * 3.0, orig_duration=3.0,
+                raw_duration=3.0 * 1.18, final_duration=3.0,
+                speed=1.08, compaction=0.085,
+                arr=[0.3, -0.3] * 50, chars=40,
+            )
+            for i in range(1, 21)
+        ]
+        report = summarize(recs, expected_segments=20)
+        self.assertTrue(report["passed"], report["failures"])
+        self.assertAlmostEqual(report["metrics"]["speed_p95"], 1.08, places=2)
+        self.assertGreater(report["metrics"]["tempo_p95"], 1.15)
+
+    def test_detecta_voz_arrastrada(self):
+        """El otro extremo: muchos segmentos a 0.80x suenan lentos y hoy no se medían."""
+        recs = [
+            evaluate_segment(
+                seg=i, start=float(i - 1) * 3.0, orig_duration=3.0,
+                raw_duration=2.4, final_duration=3.0,
+                speed=0.80, compaction=0.0,
+                arr=[0.3, -0.3] * 50, chars=40,
+            )
+            for i in range(1, 21)
+        ]
+        report = summarize(recs, expected_segments=20)
+        self.assertFalse(report["passed"])
+        self.assertIn("slow_ratio", [f["metric"] for f in report["failures"]])
 
     def test_detecta_segmentos_faltantes(self):
         report = summarize([self._rec(seg=i) for i in range(1, 10)], expected_segments=12)

@@ -14,6 +14,23 @@ _WORD_RE = re.compile(r"[^\W\d_][\w'-]*", re.UNICODE)
 # coinciden en casi todos los idiomas romance y no informan de nada.
 MIN_TOKEN_LEN = 3
 
+# Cognados que se escriben igual en origen y destino y son traducción correcta.
+# Sin esta lista, `shared_tokens` los propone como fuga y el juez del modelo los
+# confirma de vez en cuando (`central`, `vertical`, `service` en builds reales).
+# Solo entran formas que existen de verdad en español: una palabra inglesa que no
+# lo sea (`service`) tiene que seguir avisando.
+COGNATE_ALLOWLIST = frozenset({
+    "actual", "adicional", "animal", "anual", "artificial", "central", "comercial",
+    "cordial", "crisis", "cultural", "decimal", "dental", "digital", "dual",
+    "esencial", "especial", "espiritual", "estructural", "facial", "fatal", "federal",
+    "final", "fiscal", "formal", "frontal", "funcional", "general", "global",
+    "gradual", "hospital", "ideal", "industrial", "infantil", "inicial", "integral",
+    "intelectual", "internacional", "legal", "local", "manual", "material", "mental",
+    "musical", "nacional", "natural", "normal", "oficial", "original", "personal",
+    "postal", "profesional", "racial", "radical", "real", "regional", "rural",
+    "social", "total", "tradicional", "vertical", "virtual", "visual", "vital",
+})
+
 
 def same_language(a: str, b: str) -> bool:
     """
@@ -52,4 +69,4 @@ def shared_tokens(source: str, translated: str, ignore=()) -> list[str]:
     for term in ignore:
         ignored |= _tokens(term)
 
-    return sorted((_tokens(source) & _tokens(translated)) - ignored)
+    return sorted((_tokens(source) & _tokens(translated)) - ignored - COGNATE_ALLOWLIST)

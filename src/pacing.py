@@ -267,10 +267,12 @@ cada `texto` para que quede dentro de su rango, sin excepciones:
    ni elimines información del original.
 2. Si el texto es LARGO: quita redundancias, contrae perífrasis, usa sinónimos más
    cortos. No recortes el final de la idea.
-3. Si el texto es CORTO: no resumas ni recortes nada; desarrolla la MISMA idea con más
-   palabras hasta cubrir `faltan`. Alarga con recursos del habla natural (conectores
-   como «es decir», «la verdad es que», «mira», «en realidad», «justo», «además»;
-   refuerzos y vocativos), nunca con relleno vacío ni contenido inventado.
+3. Si el texto es CORTO: no resumas ni recortes nada. Primero restituye la información
+   del original que la traducción haya omitido (una idea, un matiz, un sujeto); si ya
+   está toda, desarrolla la MISMA idea con más palabras hasta cubrir `faltan`, con
+   recursos del habla natural (conectores, refuerzos, vocativos). No repitas el mismo
+   conector en dos entradas del bloque y no añadas relleno vacío ni contenido
+   inventado: la muletilla se oye y no arregla el hueco.
 4. Cuenta los caracteres de tu resultado antes de responder: debe quedar dentro de
    `objetivo`. Quedarse por debajo del mínimo deja silencio muerto en el video.
 5. Los marcadores ⟦E1⟧, ⟦E2⟧... son intocables: mismos, una sola vez, mismo orden.
