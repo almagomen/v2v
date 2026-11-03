@@ -38,6 +38,8 @@ export interface TokensConfigSectionProps {
   setTranslationModel: (model: string) => void;
   customTranslationModel: string;
   setCustomTranslationModel: (model: string) => void;
+  sttEngine: "stable" | "crisper";
+  setSttEngine: (engine: "stable" | "crisper") => void;
   isSavingTokens: boolean;
   onSaveTokens: () => Promise<void>;
   onClose: () => void;
@@ -58,6 +60,8 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
   setTranslationModel,
   customTranslationModel,
   setCustomTranslationModel,
+  sttEngine,
+  setSttEngine,
   isSavingTokens,
   onSaveTokens,
   onClose,
@@ -140,6 +144,9 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
               setTranslationModel("custom");
               setCustomTranslationModel(remoteTokens.translation_model);
             }
+          }
+          if (remoteTokens.stt_engine) {
+            setSttEngine(remoteTokens.stt_engine);
           }
           if (syncedCount > 0) {
             syncedMsg += " — Tokens sincronizados.";
@@ -260,6 +267,29 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
             >
               {showGoogleApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
+          </div>
+        </div>
+
+        {/* Motor de Transcripción (STT) */}
+        <div className="pt-2 border-t border-border/60 space-y-2">
+          <div className="text-[10px] font-semibold text-text-primary flex items-center gap-1.5">
+            <Mic size={12} className="text-primary" />
+            <span>Motor de Transcripción</span>
+          </div>
+
+          <div>
+            <select
+              className="w-full px-2.5 py-1.5 text-[11px] bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary truncate"
+              value={sttEngine}
+              onChange={(e) => setSttEngine(e.target.value as "stable" | "crisper")}
+            >
+              <option value="stable">Whisper Turbo (stable-ts) — rápido y limpio</option>
+              <option value="crisper">CrisperWhisper — verbatim (muletillas y pausas)</option>
+            </select>
+            <p className="text-[9px] text-text-muted mt-1 leading-normal">
+              CrisperWhisper conserva muletillas, repeticiones y pausas reales.
+              Requiere el paquete <span className="font-mono">crisperwhisper[ct2]</span> en el backend.
+            </p>
           </div>
         </div>
 

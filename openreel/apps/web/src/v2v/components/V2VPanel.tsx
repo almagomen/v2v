@@ -87,6 +87,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [customTitleModel, setCustomTitleModel] = React.useState<string>("");
   const [translationModel, setTranslationModel] = React.useState<string>("gemini-flash-lite-latest");
   const [customTranslationModel, setCustomTranslationModel] = React.useState<string>("");
+  const [sttEngine, setSttEngine] = React.useState<"stable" | "crisper">("stable");
   const [reprocessUrls, setReprocessUrls] = React.useState<Set<string>>(new Set());
   const [showTokenSettings, setShowTokenSettings] = React.useState(false);
   const [isSavingTokens, setIsSavingTokens] = React.useState(false);
@@ -136,6 +137,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
           setCustomTranslationModel(res.translation_model);
         }
       }
+
+      if (res.stt_engine) {
+        setSttEngine(res.stt_engine);
+      }
       return true;
     } catch (err) {
       console.error("Error cargando configuración de tokens/modelos:", err);
@@ -171,7 +176,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         : translationModel;
 
       v2vApi.setBackendUrl(backendUrl);
-      await v2vApi.saveTokens(fishApiKey, googleApiKey, effTitle, effTrans);
+      await v2vApi.saveTokens(fishApiKey, googleApiKey, effTitle, effTrans, sttEngine);
 
       // Sincronizar también con colab-export-store para exportación coherente
       useColabExportStore.getState().setGeminiModel(titleModel);
@@ -189,7 +194,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     } finally {
       setIsSavingTokens(false);
     }
-  }, [fishApiKey, googleApiKey, titleModel, customTitleModel, translationModel, customTranslationModel]);
+  }, [fishApiKey, googleApiKey, titleModel, customTitleModel, translationModel, customTranslationModel, sttEngine]);
 
   // Sincroniza el estado de V2V con el proyecto activo en OpenReel:
   // Si es un proyecto nuevo, el panel inicia 100% limpio.
@@ -466,6 +471,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             setTranslationModel={setTranslationModel}
             customTranslationModel={customTranslationModel}
             setCustomTranslationModel={setCustomTranslationModel}
+            sttEngine={sttEngine}
+            setSttEngine={setSttEngine}
             isSavingTokens={isSavingTokens}
             onSaveTokens={handleSaveTokens}
             onClose={() => setShowTokenSettings(false)}

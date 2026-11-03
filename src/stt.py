@@ -18,8 +18,9 @@ except ImportError:
     stable_whisper = None
     torchaudio = None
 
-from src.config import DEVICE, DRIVE_DIR, KAGGLE_INPUT_DIR
+from src.config import DEVICE, DRIVE_DIR, KAGGLE_INPUT_DIR, get_stt_engine
 from src.models import get_or_load_model
+from src.stt_crisper import get_crisper_model, transcribe_with_crisper
 from src.diarization import get_diarization_model, speaker_diarization, process_audio
 from src.translation import translate_text_list, generate_tiktok_title
 from src.result_store import create_segment_entry
@@ -103,11 +104,16 @@ def transcribe_and_process(
             raise ValueError("Se requiere media_path o segments.")
 
         t0_stt_wall = time.perf_counter()
+        stt_engine = get_stt_engine()
 
         def _run_whisper():
             t0 = time.perf_counter()
-            whisper_model = get_whisper_model()
-            res = whisper_model.transcribe(str(media_path), verbose=None)
+            if stt_engine == "crisper":
+                whisper_model = get_crisper_model()
+                res = transcribe_with_crisper(whisper_model, media_path)
+            else:
+                whisper_model = get_whisper_model()
+                res = whisper_model.transcribe(str(media_path), verbose=None)
             t_taken = time.perf_counter() - t0
             return res, t_taken
 
@@ -130,12 +136,16 @@ def transcribe_and_process(
 
         wh_gpu_tag = " | GPU 0" if gpu_count >= 2 else ""
         dia_gpu_tag = " | GPU 1" if gpu_count >= 2 else ""
-        print(f"⏱️ [Transcripción (Whisper{wh_gpu_tag})] Completada en {t_whisper:.1f}s")
+        wh_engine_label = "CrisperWhisper" if stt_engine == "crisper" else "Whisper"
+        print(f"⏱️ [Transcripción ({wh_engine_label}{wh_gpu_tag})] Completada en {t_whisper:.1f}s")
         print(f"⏱️ [Diarización (Pyannote{dia_gpu_tag})] Completada en {t_diarize:.1f}s")
 
         # Extraer idioma detectado antes de procesar. Sin detección no se inventa un
         # idioma: un fallback fijo etiquetaría mal la transcripción y la traducción.
-        detected_language = getattr(segments, "language", "") if segments else ""
+        if isinstance(segments, dict):
+            detected_language = segments.get("language") or ""
+        else:
+            detected_language = getattr(segments, "language", "") if segments else ""
 
         # Guardar volcado crudo y compacto de Whisper para debug y auditoría (palabras y timestamps)
         try:

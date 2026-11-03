@@ -180,7 +180,7 @@ def reconcile_jobs():
 
 @router.get("/settings/tokens", response_model=TokenSettingsResponse)
 def get_tokens():
-    from src.config import get_raw_google_api_keys, get_fish_api_key
+    from src.config import get_raw_google_api_keys, get_fish_api_key, get_stt_engine
     from src.translation import (
         get_default_title_model,
         get_default_translation_model,
@@ -191,6 +191,7 @@ def get_tokens():
         google_api_key=get_raw_google_api_keys() or "",
         title_model=get_default_title_model(),
         translation_model=get_default_translation_model(),
+        stt_engine=get_stt_engine(),
         available_models=POPULAR_GEMINI_MODELS,
     )
 
@@ -199,7 +200,12 @@ def get_tokens():
 def post_tokens(req: TokenSettingsRequest):
     import os
     from pathlib import Path
-    from src.config import set_google_api_keys, set_fish_api_key
+    from src.config import (
+        set_google_api_keys,
+        set_fish_api_key,
+        get_stt_engine,
+        set_stt_engine,
+    )
     from src.translation import (
         set_default_title_model,
         set_default_translation_model,
@@ -224,6 +230,9 @@ def post_tokens(req: TokenSettingsRequest):
         set_default_translation_model(req.translation_model.strip())
         os.environ["DEFAULT_TRANSLATION_MODEL"] = req.translation_model.strip()
 
+    if req.stt_engine:
+        set_stt_engine(req.stt_engine)
+
     # Intentar guardar persistente en .env
     env_path = Path(__file__).resolve().parent.parent.parent / ".env"
     try:
@@ -233,6 +242,7 @@ def post_tokens(req: TokenSettingsRequest):
         fish_found = False
         title_found = False
         trans_found = False
+        stt_found = False
 
         if exists:
             with open(env_path, "r", encoding="utf-8") as f:
@@ -255,6 +265,10 @@ def post_tokens(req: TokenSettingsRequest):
                     if req.translation_model:
                         lines[i] = f"DEFAULT_TRANSLATION_MODEL={req.translation_model.strip()}\n"
                     trans_found = True
+                elif line.strip().startswith("V2V_STT_ENGINE="):
+                    if req.stt_engine:
+                        lines[i] = f"V2V_STT_ENGINE={req.stt_engine}\n"
+                    stt_found = True
 
         if not fish_found and fish_api_val:
             lines.append(f"FISH_API_KEY={fish_api_val}\n")
@@ -264,6 +278,8 @@ def post_tokens(req: TokenSettingsRequest):
             lines.append(f"DEFAULT_TITLE_MODEL={req.title_model.strip()}\n")
         if not trans_found and req.translation_model:
             lines.append(f"DEFAULT_TRANSLATION_MODEL={req.translation_model.strip()}\n")
+        if not stt_found and req.stt_engine:
+            lines.append(f"V2V_STT_ENGINE={req.stt_engine}\n")
 
         with open(env_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
@@ -275,6 +291,7 @@ def post_tokens(req: TokenSettingsRequest):
         google_api_key=google_api_val or None,
         title_model=get_default_title_model(),
         translation_model=get_default_translation_model(),
+        stt_engine=get_stt_engine(),
         available_models=POPULAR_GEMINI_MODELS,
         message="Configuración de tokens y modelos actualizada en caliente",
     )

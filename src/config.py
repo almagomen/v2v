@@ -58,6 +58,28 @@ DEVICE = os.getenv("V2V_DEVICE", "cuda:0" if GPU_COUNT > 0 else "cpu")
 # Segunda GPU para balanceo si existen >= 2 GPUs (ej. RoFormer o Render en cuda:1)
 DEVICE_SECONDARY = os.getenv("V2V_DEVICE_SECONDARY", "cuda:1" if GPU_COUNT > 1 else DEVICE)
 
+# Motor de transcripción elegido por el usuario. No hay fallback silencioso entre
+# motores: cada job usa exactamente el que esté configurado.
+STT_ENGINES = ("stable", "crisper")
+DEFAULT_STT_ENGINE = "stable"
+
+
+def get_stt_engine() -> str:
+    """Retorna el motor STT configurado ('stable' o 'crisper')."""
+    value = (os.getenv("V2V_STT_ENGINE") or DEFAULT_STT_ENGINE).strip().lower()
+    return value if value in STT_ENGINES else DEFAULT_STT_ENGINE
+
+
+def set_stt_engine(engine: str | None) -> str:
+    """Actualiza el motor STT en caliente y valida el valor recibido."""
+    value = (engine or "").strip().lower()
+    if value not in STT_ENGINES:
+        raise ValueError(
+            f"Motor STT inválido: {engine!r}. Valores permitidos: {', '.join(STT_ENGINES)}"
+        )
+    os.environ["V2V_STT_ENGINE"] = value
+    return value
+
 # API keys: Colab userdata / Kaggle UserSecretsClient / env (soporta rotación de múltiples keys)
 _current_google_key_idx = 0
 _cached_google_keys: list[str] | None = None

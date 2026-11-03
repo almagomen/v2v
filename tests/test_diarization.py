@@ -56,6 +56,20 @@ class TestSpeakerAssignment(unittest.TestCase):
         self.assertEqual(len(out[0]["words"]), 1)
         self.assertEqual(out[0]["speaker"], "SPEAKER_00")
 
+    def test_acepta_payload_dict_de_otro_motor(self):
+        """CrisperWhisper entrega {'language', 'text', 'segments'}, no un objeto."""
+        diar = _Turns([(0.0, 1.0, "SPEAKER_00")])
+        payload = {
+            "language": "es",
+            "text": "hola",
+            "segments": [_segment(0.0, 1.0, [(0.1, 0.9, "hola")])],
+        }
+        out = assign_speakers_by_word(payload, diar)
+
+        self.assertEqual(out[0]["speaker"], "SPEAKER_00")
+        self.assertEqual(out[0]["text"], "hola")
+        self.assertEqual(out[0]["words"][0]["speaker"], "SPEAKER_00")
+
     def test_turnos_fuera_del_segmento_no_interfieren(self):
         diar = _Turns([(0.0, 0.4, "SPEAKER_00"), (5.0, 6.0, "SPEAKER_01")])
         segs = [_segment(1.0, 2.0, [(1.1, 1.9, "a")])]

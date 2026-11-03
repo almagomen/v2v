@@ -1,7 +1,7 @@
 """Pydantic schemas for v2v API."""
 
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 
 
 class ProcessUrlsRequest(BaseModel):
@@ -236,6 +236,9 @@ class TokenSettingsRequest(BaseModel):
     google_api_key: Optional[str] = Field(None, description="Nuevo valor para GOOGLE_API_KEY")
     title_model: Optional[str] = Field(None, description="Modelo de Gemini por defecto para títulos virales")
     translation_model: Optional[str] = Field(None, description="Modelo de Gemini por defecto para traducción")
+    stt_engine: Optional[Literal["stable", "crisper"]] = Field(
+        None, description="Motor de transcripción: stable (Whisper Turbo) o crisper (CrisperWhisper verbatim)"
+    )
 
 
 class TokenSettingsResponse(BaseModel):
@@ -243,6 +246,7 @@ class TokenSettingsResponse(BaseModel):
     google_api_key: Optional[str] = None
     title_model: Optional[str] = None
     translation_model: Optional[str] = None
+    stt_engine: Optional[str] = None
     available_models: list[str] = Field(default_factory=list)
     message: str = "Configuración actualizada exitosamente"
 

@@ -77,7 +77,12 @@ def assign_speakers_by_word(whisper_result: Any, diarization: Any) -> list[dict]
     lo cruzan. Antes se hacía `diarization.crop()` por palabra (O(palabras × turnos),
     con miles de turnos en un video de 2 h).
     """
-    segments_list = whisper_result.segments if hasattr(whisper_result, "segments") else whisper_result
+    if isinstance(whisper_result, dict):
+        segments_list = whisper_result.get("segments") or []
+    elif hasattr(whisper_result, "segments"):
+        segments_list = whisper_result.segments
+    else:
+        segments_list = whisper_result
 
     turns: list[tuple[float, float, str]] = []
     if diarization is not None:
