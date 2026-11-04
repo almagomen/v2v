@@ -13,6 +13,7 @@ from src.pacing import ends_sentence, visible_text
 # Estrategia de sincronía del doblaje (no configurables por API: describen el criterio).
 SYNC_TOLERANCE = 0.94   # por debajo de este ratio se rellena con pausas internas
 STRETCH_FLOOR = 0.80    # estiramiento máximo al alargar un clip (nunca por debajo)
+SILENCE_RATE = 24000    # sample rate del silencio cuando no hay audio del que copiarlo
 
 try:
     import torch
@@ -533,7 +534,20 @@ def synthesize_segment_audio(
         from src.tts import model_tts
         tts_fn = model_tts
 
-    if cached_arr_rate is not None and cached_arr_rate[0] is not None:
+    # Un segmento que solo contiene etiquetas ([UH], [lipsmack]) no tiene habla que
+    # locutar. Pedirle voz al TTS hace que el modelo invente una locución de varios
+    # segundos sobre un clip de décimas: se devuelve silencio con la duración original.
+    if not visible_text(text) and cached_arr_rate is None:
+        seconds = float(orig_duration or target_duration or 0.0)
+        if seconds <= 0:
+            return None, None, 0.0, 0.0, "empty"
+        rate = SILENCE_RATE
+        samples = max(1, int(seconds * rate))
+        if torch is not None:
+            arr = torch.zeros((1, samples), dtype=torch.float32)
+        else:
+            arr = np.zeros((1, samples), dtype=np.float32)
+    elif cached_arr_rate is not None and cached_arr_rate[0] is not None:
         arr, rate = cached_arr_rate
     else:
         seg_kwargs = dict(tts_kwargs)
@@ -760,6 +774,9 @@ def clone_voice_segments(
 
         seq_num = only_indices[idx] if only_indices else idx + 1
         seg_phonemes = {} if text_dict.get("phonemes_disabled") else (text_dict.get("phonemes") or {})
+        if not visible_text(text):
+            # Sin habla no se pide TTS: el silencio se genera en el bucle principal.
+            continue
         tts_tasks.append((idx, text, seg_audio_ref, seq_num, seg_phonemes))
 
     # Si hay múltiples segmentos, paralelizamos las solicitudes HTTP (hasta 5 hilos)
@@ -847,6 +864,17 @@ def clone_voice_segments(
         raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"
 
         cached_tts = tts_results.get(idx)
+        no_speech = not visible_text(text)
+        if no_speech:
+            # Silencio con el mismo sample rate del clip de origen: no hay llamada TTS
+            # y el QA no debe contar este clip como un fallo de audio.
+            rate_sil = int(rate_en)
+            samples = max(1, int(dur_en * rate_sil))
+            if torch is not None:
+                silence = torch.zeros((1, samples), dtype=torch.float32)
+            else:
+                silence = np.zeros((1, samples), dtype=np.float32)
+            cached_tts = (silence, rate_sil)
         sync_metrics: dict[str, float] = {}
         arr, rate, raw_dur_es, final_dur, mode_tag = synthesize_segment_audio(
             text=text,
@@ -869,6 +897,9 @@ def clone_voice_segments(
         if arr is None or rate is None:
             tts_errors += 1
             continue
+
+        if no_speech:
+            mode_tag = "🔇 silencio (sin habla)"
 
         # Coordenadas del original intactas: el TTS ya se sintetizó contra su clip.
         text_dict["orig_start"] = round(float(text_dict.get("orig_start", start_time)), 3)
@@ -913,6 +944,7 @@ def clone_voice_segments(
             "audio_path": audio_es_path,
             "rate": rate,
             "chars": len(visible_text(text)),
+            "no_speech": no_speech,
         })
 
     for item in prepared:
@@ -939,6 +971,7 @@ def clone_voice_segments(
             chars=item["chars"],
             residue=text_dict.get("untranslated"),
             ends_phrase=ends_sentence(item["text"]),
+            no_speech=item.get("no_speech", False),
         ))
 
     if qa_records:

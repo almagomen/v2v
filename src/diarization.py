@@ -198,18 +198,22 @@ def is_dangling_word_agnostic(word: str) -> bool:
 def smart_group_segments_strict(
     assigned_segments: list[dict],
     hard_gap: float = 1.3,
-    max_gap: float = 0.85,
     min_sentence_gap: float = 0.18,
-    min_silence_gap: float = 0.48,
+    min_silence_gap: float = 0.85,
     min_duration: float = 2.8,
     nonspeech_sections: list[dict] | None = None,
     **kwargs,
 ) -> list[dict]:
     """
     Agrupa palabras en segmentos prosódicos continuos agnósticos del idioma:
-    Paso 1: Corte natural guiado por pausas acústicas reales (0.48s) y signos mayores (. ! ? ; :),
+    Paso 1: Corte natural guiado por pausas acústicas reales (0.85s) y signos mayores (. ! ? ; :),
             con protección agnóstica contra conectores colgantes y absorción inmediata de colas huérfanas.
     Paso 2: Fusión limpia de micro-segmentos huérfanos residuales (< 2.8s o <= 3 palabras) con su vecino.
+
+    El umbral de pausa es 0.85s: por debajo, el ASR corta a mitad de idea en el habla
+    continua (medido sobre cuatro doblajes reales, los cortes sin puntuación bajaron
+    de 59 a 3 en el caso más largo). No hay tope de duración: un segmento largo con
+    una idea completa se locuta mejor que dos mitades separadas.
     """
     if not assigned_segments:
         return []
@@ -332,13 +336,8 @@ def smart_group_segments_strict(
                         chosen_cut_idx = curr - 1
                         break
 
-                    # 3. Pausa acústica de respiración real (gap >= min_silence_gap, 0.48s)
+                    # 3. Pausa acústica real (gap >= min_silence_gap, 0.85s)
                     if gap_before_curr >= min_silence_gap:
-                        chosen_cut_idx = curr - 1
-                        break
-
-                    # 4. Silencio estándar mayor que max_gap (0.85s)
-                    if gap_before_curr >= max_gap:
                         chosen_cut_idx = curr - 1
                         break
 
@@ -443,9 +442,8 @@ def process_audio(
     group_segments: bool = True,
     include_words: bool = False,
     hard_gap: float = 1.3,
-    max_gap: float = 0.85,
     min_sentence_gap: float = 0.18,
-    min_silence_gap: float = 0.48,
+    min_silence_gap: float = 0.85,
     min_duration: float = 2.8,
     nonspeech_sections: list[dict] | None = None,
     **kwargs,
@@ -455,7 +453,6 @@ def process_audio(
         assigned_data = smart_group_segments_strict(
             assigned_data,
             hard_gap=hard_gap,
-            max_gap=max_gap,
             min_sentence_gap=min_sentence_gap,
             min_silence_gap=min_silence_gap,
             min_duration=min_duration,

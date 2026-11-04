@@ -77,6 +77,10 @@ class TestEntityLock(unittest.TestCase):
         self.assertIn("Ghidra", out)
         self.assertIn("API", out)
 
+    def test_normalizacion_conserva_la_raiz_de_un_posesivo_protegido(self):
+        out = normalize_asr_casing("Usa Xiaomi's phone", keep={"Xiaomi"})
+        self.assertIn("Xiaomi's", out)
+
     def test_solapamiento_marca_las_palabras_sin_traducir(self):
         """Los tokens idénticos en origen y salida son el candidato que juzga el modelo."""
         shared = shared_tokens("No sirve Mais em outro lugar", "No sirve Mais en otro lugar")
@@ -118,6 +122,19 @@ class TestEntityLock(unittest.TestCase):
         locked, mapping = lock_text("Usa o Ghidra aqui.")
         mangled = locked.replace("⟦", "⟦ ").replace("⟧", " ⟧")
         self.assertEqual(restore_text(mangled, mapping), "Usa o Ghidra aqui.")
+
+    def test_cliticos_y_posesivos_no_se_bloquean(self):
+        """`I'm`, `I'll` o `Xiaomi's` se resuelven con gramática, no como entidades."""
+        src = "I'm here because Xiaomi's phone broke."
+        locked, mapping = lock_text(src, known={"I'm", "Xiaomi's"})
+        self.assertEqual(mapping, {})
+        self.assertEqual(locked, src)
+
+    def test_raiz_de_un_posesivo_no_se_bloquea_parcialmente(self):
+        """Conservar `Xiaomi` no debe congelar la raíz de `Xiaomi's` y dejar el clítico."""
+        locked, mapping = lock_text("Xiaomi's phone broke.", known={"Xiaomi"})
+        self.assertEqual(mapping, {})
+        self.assertEqual(locked, "Xiaomi's phone broke.")
 
 
 class TestEntidadesOtrosAlfabetos(unittest.TestCase):
@@ -219,6 +236,15 @@ class TestQaGate(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertEqual(report["metrics"]["silent"], 1)
         self.assertIn("silent", [f["metric"] for f in report["failures"]])
+
+    def test_silencio_intencional_no_cuenta_como_mudo(self):
+        """Un segmento de solo etiquetas ([UH], [lipsmack]) emite silencio a propósito."""
+        rec = evaluate_segment(
+            seg=1, orig_duration=0.2, raw_duration=0.2, final_duration=0.2,
+            arr=[0.0] * 100, no_speech=True,
+        )
+        self.assertFalse(rec["silent"])
+        self.assertTrue(rec["no_speech"])
 
     def test_detecta_fallback_y_entidades(self):
         recs = [

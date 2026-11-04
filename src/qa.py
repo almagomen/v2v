@@ -103,12 +103,15 @@ def evaluate_segment(
     orig_start: Optional[float] = None,
     residue: Optional[Sequence[str]] = None,
     ends_phrase: bool = False,
+    no_speech: bool = False,
 ) -> dict[str, Any]:
     """
     Métricas de un segmento ya sintetizado y sincronizado.
 
     `levels` permite pasar (peak, rms) ya medidos: el timeline se evalúa después de
     cerrar los huecos de ritmo, cuando el tensor del segmento ya se liberó.
+    `no_speech` marca un segmento que solo contenía etiquetas: su silencio es
+    intencional y no cuenta como clip mudo defectuoso.
     """
     tempo = round(raw_duration / final_duration, 3) if final_duration > 0 else None
     # `tempo` mezcla aceleración real y recorte de silencios. `speed` es solo lo que
@@ -135,7 +138,8 @@ def evaluate_segment(
         "length_dev": length_dev,
         "peak_dbfs": peak_dbfs,
         "rms_dbfs": rms_dbfs,
-        "silent": rms_dbfs < SILENT_RMS_DBFS,
+        "silent": (rms_dbfs < SILENT_RMS_DBFS) and not no_speech,
+        "no_speech": bool(no_speech),
         "translation_status": status,
         "fallback": status == "fallback",
         "entity_problems": problems,

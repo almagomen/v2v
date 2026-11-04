@@ -10,13 +10,12 @@ from google import genai
 
 from src.config import get_google_api_keys, rotate_google_api_key
 from src.entities import (
-    ambiguous_terms,
     check_entities,
     collapse_repeats,
-    collect_known_terms,
     lock_text,
     normalize_asr_casing,
     restore_text,
+    split_terms,
 )
 from src.lang_utils import language_name, same_language, shared_tokens
 from src.pacing import (
@@ -200,40 +199,52 @@ def translate_text_list(
     # se normalizan antes de bloquear, o el modelo las lee como marcas y no las traduce.
     # El ASR repite una palabra cuando titubea; si viaja como entidad, se locuta.
     source_texts = [collapse_repeats(s or "") for s in list_sentences]
-    known_terms = collect_known_terms(source_texts)
-    if not is_same_lang:
-        # La estadística deja un grupo dudoso: palabras en mayúscula que nunca aparecen
-        # en minúscula. Congelar una palabra que tiene traducción mete idioma origen en
-        # la salida; no congelar un nombre propio solo lo expone a una mala
-        # transcripción. Ante la duda decide el modelo, que conoce el par de idiomas.
-        #
-        # No hay listas de meses, días, idiomas ni gentilicios: la pregunta es general
-        # ("¿tiene traducción natural al idioma destino?") y cubre cualquier categoría
-        # y cualquier idioma. Si el juicio falla se liberan todos los dudosos: el peor
-        # caso es que un nombre se traduzca, no que una palabra corriente se congele.
-        doubtful = ambiguous_terms(source_texts) & known_terms
-        if doubtful:
-            try:
-                judge_client = genai.Client(api_key=available_keys[0])
-                judge_model = (model_name or DEFAULT_TRANSLATION_MODEL).strip()
-                judge_gemma = "gemma" in judge_model.lower()
-                dropped = _judge_translatable(
-                    lambda prompt: _call_model(judge_client, judge_model, judge_gemma, prompt),
-                    sorted(doubtful),
-                    source_lang_name,
-                    target_lang_name,
-                )
-            except Exception as e_judge:
-                print(f"⚠️ [Entidades] juicio de traducción omitido ({e_judge})", flush=True)
-                dropped = set(doubtful)
-            if dropped:
-                known_terms -= dropped
-                print(
-                    f"🔍 [Entidades] {len(dropped)} término(s) con traducción liberado(s): "
-                    f"{', '.join(sorted(dropped))}",
-                    flush=True,
-                )
+    structural, doubtful = split_terms(source_texts)
 
+    # Las formas estructurales (rutas, versiones, camelCase, siglas) se bloquean sin
+    # consultar. Solo las palabras capitalizadas que nunca aparecen en minúscula
+    # necesitan criterio semántico: pueden ser un nombre propio o una palabra común
+    # que el ASR capitalizó tras una pausa.
+    #
+    # El modelo devuelve únicamente lo que debe conservarse. La polaridad importa:
+    # si se le pidiera la lista de lo traducible, una omisión congelaría una palabra
+    # corriente; pidiendo lo conservable, una omisión solo expone un nombre a una
+    # traducción imperfecta. Un nombre traducido se oye raro; una gramática congelada
+    # rompe la frase. Si el juicio falla no se conserva nada dudoso.
+    preserved: set[str] = set()
+    if is_same_lang:
+        # Sin cambio de idioma no hay traducción que decidir: se protege todo lo
+        # dudoso para no alterar nombres durante la adaptación prosódica.
+        preserved = doubtful
+    elif doubtful:
+        try:
+            judge_client = genai.Client(api_key=available_keys[0])
+            judge_model = (model_name or DEFAULT_TRANSLATION_MODEL).strip()
+            judge_gemma = "gemma" in judge_model.lower()
+            preserved = _judge_preservable(
+                lambda prompt: _call_model(judge_client, judge_model, judge_gemma, prompt),
+                sorted(doubtful),
+                source_lang_name,
+                target_lang_name,
+            )
+        except Exception as e_judge:
+            print(f"⚠️ [Entidades] juicio de conservación omitido ({e_judge})", flush=True)
+            preserved = set()
+        released = doubtful - preserved
+        if preserved:
+            print(
+                f"🔍 [Entidades] {len(preserved)} término(s) conservado(s) sin traducir: "
+                f"{', '.join(sorted(preserved))}",
+                flush=True,
+            )
+        if released:
+            print(
+                f"🔍 [Entidades] {len(released)} término(s) dudoso(s) se traducirán: "
+                f"{', '.join(sorted(released))}",
+                flush=True,
+            )
+
+    known_terms = structural | preserved
     source_sentences = [normalize_asr_casing(s.strip(), keep=known_terms) for s in source_texts]
     locked_sentences: list[str] = []
     lock_maps: list[dict[int, str]] = []
@@ -1224,22 +1235,22 @@ Devuelve únicamente un JSON con las mismas claves:
     return _call_json_map(client, model, is_gemma, prompt, "[Rescate entidades]")
 
 
-def _judge_translatable(
+def _judge_preservable(
     call: Callable[[str], str],
     words: list[str],
     source_lang_name: str,
     target_lang_name: str,
 ) -> set[str]:
     """
-    De una lista de términos capitalizados, devuelve los que deben traducirse.
+    De una lista de términos capitalizados, devuelve los que deben conservarse.
 
     La estadística del lote no separa un nombre propio de una palabra que el ASR
     capitalizó tras una pausa cuando aparece una sola vez. El modelo sí lo separa,
     porque conoce el par de idiomas.
 
-    La pregunta es general a propósito: no enumera meses, días ni categorías. Un
-    término se libera si tiene una traducción natural al idioma destino; se conserva
-    si es un nombre que debe sonar igual. La respuesta se acota a la lista de entrada,
+    La pregunta es general a propósito: no enumera meses, días ni categorías con
+    ejemplos. Un término se conserva si no tiene una traducción natural al idioma
+    destino; todo lo demás se traduce. La respuesta se acota a la lista de entrada,
     así que un juicio errático no puede inventar términos ni romper el lock.
     """
     if not words:
@@ -1247,24 +1258,22 @@ def _judge_translatable(
 
     prompt = f"""Recibes términos que aparecen en mayúscula en la transcripción automática de un audio en {source_lang_name}.
 
-El reconocimiento de voz capitaliza el inicio de cada fragmento y, a veces, palabras que no son nombres propios. El doblaje es al {target_lang_name}: solo debe conservarse sin cambios lo que no se traduce.
+El reconocimiento de voz capitaliza el inicio de cada fragmento y, a veces, palabras que no son nombres propios. El doblaje es al {target_lang_name}.
 
-Devuelve SOLO los términos que NO deben bloquearse porque tienen una traducción natural al {target_lang_name}: palabras comunes, verbos, adverbios, conectores, pronombres, adjetivos, meses, días de la semana, idiomas, nacionalidades, gentilicios, unidades y expresiones corrientes.
+Devuelve SOLO los términos que deben conservarse sin traducir porque no tienen una traducción natural al {target_lang_name}: nombres de personas, marcas, productos, empresas, obras, lugares, siglas y términos técnicos que deban sonar igual.
 
-NO incluyas nombres de personas, marcas, productos, empresas, obras, lugares, siglas ni términos técnicos que deban conservarse tal cual.
+NO incluyas palabras comunes, verbos, adverbios, conectores, pronombres, adjetivos, meses, días, idiomas, nacionalidades, gentilicios, unidades ni expresiones corrientes: esas se traducen.
+
+Ante la duda, NO lo incluyas. Es preferible traducir un nombre que congelar una palabra del idioma de origen.
 
 Responde únicamente con este JSON:
-{{"liberar": ["palabra en minúscula"]}}
+{{"conservar": ["término"]}}
 
 Términos: {", ".join(words)}"""
 
     raw_text = call(prompt)
-    parsed = _loads_loose(raw_text, "[Entidades] juicio de traducción")
-    found = None
-    if isinstance(parsed, dict):
-        # `palabras` es la clave antigua: se acepta para no romper una respuesta
-        # cacheada o un modelo que arrastre el formato anterior.
-        found = parsed.get("liberar") if "liberar" in parsed else parsed.get("palabras")
+    parsed = _loads_loose(raw_text, "[Entidades] juicio de conservación")
+    found = parsed.get("conservar") if isinstance(parsed, dict) else None
     if not isinstance(found, list):
         return set()
 

@@ -57,6 +57,11 @@ _WORD_RE = re.compile(r"[^\W\d_][\w'-]*", re.UNICODE)
 # preposiciones como para que la estadística diga algo.
 _MIN_TOKEN_LEN = 3
 
+# Apóstrofo + 1-2 letras es un clítico o un posesivo (`I'm`, `I'll`, `Here's`,
+# `Xiaomi's`), no un nombre propio: el idioma destino lo resuelve con su propia
+# gramática. Congelarlo deja la forma de origen dentro de la traducción.
+_CLITIC_RE = re.compile(r"['’][^\W\d_]{1,2}$", re.UNICODE)
+
 
 def _is_sentence_start(text: str, pos: int) -> bool:
     """True si `pos` abre oración (inicio de texto o tras puntuación fuerte)."""
@@ -135,10 +140,14 @@ def normalize_asr_casing(text: str, keep: Iterable[str] = ()) -> str:
     cursor = 0
     for m in _WORD_RE.finditer(text):
         word = m.group(0)
+        # La raíz de un posesivo (`Xiaomi's`) conserva la mayúscula si su nombre
+        # está protegido, aunque el posesivo en sí se traduzca.
+        stem = re.split(r"['’]", word, 1)[0].lower()
         if (
             len(word) < 2
             or word.isupper()
             or word.lower() in keep_lower
+            or stem in keep_lower
             or not word[0].isupper()
             or _is_sentence_start(text, m.start())
         ):
@@ -152,7 +161,7 @@ def normalize_asr_casing(text: str, keep: Iterable[str] = ()) -> str:
     return "".join(out)
 
 
-def _split_terms(sentences: Sequence[str]) -> tuple[set[str], set[str]]:
+def split_terms(sentences: Sequence[str]) -> tuple[set[str], set[str]]:
     """
     Separa las entidades en (estructurales, dudosas).
 
@@ -160,7 +169,10 @@ def _split_terms(sentences: Sequence[str]) -> tuple[set[str], set[str]]:
     mayúscula que nunca aparecen en minúscula: pueden ser un nombre propio o una
     palabra corriente capitalizada por la pausa del reconocimiento de voz. La
     estadística del lote no las distingue cuando aparecen una sola vez, así que
-    quedan marcadas para que el modelo las juzgue.
+    quedan marcadas para que el modelo decida cuáles conservar.
+
+    Los clíticos y posesivos (`I'm`, `Xiaomi's`) nunca son dudosos: el idioma
+    destino los resuelve con su propia gramática.
     """
     texts = [t or "" for t in sentences]
     lowercase = _lowercase_counts(texts)
@@ -175,6 +187,8 @@ def _split_terms(sentences: Sequence[str]) -> tuple[set[str], set[str]]:
             if kind in _STRUCTURAL_KINDS:
                 structural.add(token)
             elif kind in _CASE_KINDS and len(token) >= _MIN_TOKEN_LEN:
+                if _CLITIC_RE.search(token):
+                    continue
                 if lowercase.get(token.lower(), 0) == 0:
                     ambiguous.add(token)
     return structural, ambiguous
@@ -212,13 +226,27 @@ def collect_known_terms(sentences: Sequence[str]) -> set[str]:
     bloquearla congelaría una función gramatical del idioma de origen dentro de la
     traducción. Por eso el criterio es la estadística del propio lote y no una lista.
     """
-    structural, ambiguous = _split_terms(sentences)
+    structural, ambiguous = split_terms(sentences)
     return structural | ambiguous
 
 
-def ambiguous_terms(sentences: Sequence[str]) -> set[str]:
-    """Subconjunto de `collect_known_terms` que necesita el juicio del modelo."""
-    return _split_terms(sentences)[1]
+def _term_spans(text: str, term: str):
+    """
+    Apariciones de `term` que son el término completo y no parte de otro.
+
+    Sin esta comprobación, conservar `Xiaomi` bloquearía también la raíz de
+    `Xiaomi's` y el posesivo quedaría intacto dentro de la traducción. Un término
+    rodeado de letras, dígitos o apóstrofos es un fragmento de una palabra mayor.
+    """
+    for m in re.finditer(re.escape(term), text):
+        s, e = m.span()
+        if s > 0 and (text[s - 1].isalnum() or text[s - 1] == "_"):
+            continue
+        if e < len(text):
+            after = text[e]
+            if after.isalnum() or after in "_'’":
+                continue
+        yield s, e
 
 
 def lock_text(text: str, known: Iterable[str] = ()) -> tuple[str, dict[int, str]]:
@@ -234,14 +262,15 @@ def lock_text(text: str, known: Iterable[str] = ()) -> tuple[str, dict[int, str]
     if not text:
         return "", {}
 
-    terms = {k for k in known if k}
-    if not terms:
+    given = [k for k in known if k]
+    terms = {k for k in given if not _CLITIC_RE.search(k)}
+    if not given:
         terms = collect_known_terms([text])
 
     spans: list[tuple[int, int, str]] = []
     for term in sorted(terms, key=len, reverse=True):
-        for m in re.finditer(re.escape(term), text):
-            spans.append((m.start(), m.end(), "known"))
+        for s, e in _term_spans(text, term):
+            spans.append((s, e, "known"))
 
     merged: list[tuple[int, int, str]] = []
     last_end = -1
