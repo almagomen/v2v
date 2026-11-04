@@ -6,6 +6,7 @@ Ejecutar desde la raíz del repo:
 from __future__ import annotations
 
 import os
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -148,6 +149,44 @@ class TestCrisperLanguageDetection(unittest.TestCase):
     def test_scores_rechaza_ids_fuera_del_vocabulario(self):
         with self.assertRaises(RuntimeError):
             _language_scores([1.0, 2.0], {"en": 5})
+
+    def test_scores_mueve_la_vista_ct2_a_cpu(self):
+        """Regresión: `StorageView` en GPU no expone `__array_interface__`."""
+        import numpy as np
+
+        class FakeStorageView:
+            def __init__(self, values, device="cuda"):
+                self.values = values
+                self.device = device
+
+            def to(self, dtype):
+                return FakeStorageView(self.values, self.device)
+
+            def to_device(self, device):
+                return FakeStorageView(self.values, "cpu")
+
+            @property
+            def __array_interface__(self):
+                if self.device != "cpu":
+                    raise AttributeError(
+                        "Cannot get __array_interface__ when the StorageView "
+                        "is viewing a CUDA array"
+                    )
+                return np.asarray(self.values, dtype=np.float32).__array_interface__
+
+        ctranslate2 = SimpleNamespace(
+            DataType=SimpleNamespace(float32="float32"),
+            Device=SimpleNamespace(cpu="cpu"),
+        )
+        lang_ids = {"en": 0, "es": 1, "pt": 2}
+
+        with patch.dict(sys.modules, {"ctranslate2": ctranslate2}):
+            language, probability = _language_scores(
+                FakeStorageView([0.0, 5.0, 1.0]), lang_ids
+            )
+
+        self.assertEqual(language, "es")
+        self.assertGreater(probability, 0.5)
 
     def test_detecta_con_prefill_sin_depender_de_detect_language(self):
         """Regresión: el config.json CT2 pierde lang_ids y detect_language revienta."""

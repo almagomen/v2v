@@ -65,6 +65,30 @@ def _load_audio_head(media_path: Path | str, seconds: float = 30.0):
     return load_audio(audio, sr=sample_rate)
 
 
+def _logits_to_array(logits: Any):
+    """Convierte los logits del decoder CT2 en un ndarray de NumPy en CPU.
+
+    `StorageView` solo expone `__array_interface__` cuando sus datos viven en
+    CPU; en GPU ese atributo lanza `AttributeError` y NumPy acaba creando un
+    array 0-d de objetos con la propia vista dentro, que luego revienta al
+    convertirlo a float. Por eso movemos la vista a CPU antes de leerla.
+    """
+    import numpy as np
+
+    if hasattr(logits, "to_device"):
+        import ctranslate2
+
+        if hasattr(logits, "to"):
+            logits = logits.to(ctranslate2.DataType.float32)
+        logits = logits.to_device(ctranslate2.Device.cpu)
+    array = np.asarray(logits)
+    if array.dtype == object:
+        raise RuntimeError(
+            "No se pudieron leer los logits de CrisperWhisper como números."
+        )
+    return array
+
+
 def _language_scores(logits: Any, lang_ids: dict[str, int]) -> tuple[str, float]:
     """Softmax sobre los logits de los tokens de idioma -> (código, probabilidad).
 
@@ -73,7 +97,7 @@ def _language_scores(logits: Any, lang_ids: dict[str, int]) -> tuple[str, float]
     """
     import numpy as np
 
-    scores = np.asarray(logits).astype(np.float64).reshape(-1)
+    scores = _logits_to_array(logits).astype(np.float64).reshape(-1)
     codes = list(lang_ids)
     ids = [int(lang_ids[code]) for code in codes]
     if not ids or max(ids) >= scores.size:
