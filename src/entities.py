@@ -148,6 +148,7 @@ def normalize_asr_casing(text: str, keep: Iterable[str] = ()) -> str:
             or word.isupper()
             or word.lower() in keep_lower
             or stem in keep_lower
+            or _CLITIC_RE.search(word)
             or not word[0].isupper()
             or _is_sentence_start(text, m.start())
         ):

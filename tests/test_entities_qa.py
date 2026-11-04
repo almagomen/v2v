@@ -81,6 +81,11 @@ class TestEntityLock(unittest.TestCase):
         out = normalize_asr_casing("Usa Xiaomi's phone", keep={"Xiaomi"})
         self.assertIn("Xiaomi's", out)
 
+    def test_normalizacion_no_baja_cliticos_capitalizados(self):
+        """`I'm` e `I'll` son formas gramaticales, no mayúsculas de pausa del ASR."""
+        raw = "He said I'm ready and I'll wait"
+        self.assertEqual(normalize_asr_casing(raw), raw)
+
     def test_solapamiento_marca_las_palabras_sin_traducir(self):
         """Los tokens idénticos en origen y salida son el candidato que juzga el modelo."""
         shared = shared_tokens("No sirve Mais em outro lugar", "No sirve Mais en otro lugar")
