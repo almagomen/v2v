@@ -50,19 +50,45 @@ def get_crisper_model():
     return get_or_load_model("crisperwhisper", _load_crisper_model)
 
 
-def _load_audio_head(media_path: Path | str, seconds: float = 30.0):
-    """Lee solo los primeros segundos del audio y lo remuestrea a 16 kHz."""
+def _load_audio_windows(
+    media_path: Path | str, seconds: float = 30.0, count: int = 3
+) -> list:
+    """Extrae hasta `count` ventanas de 30 s repartidas por el audio.
+
+    Se usa para detectar el idioma con varias muestras: una sola ventana al
+    principio puede caer en una sintonía, un silencio o música de fondo.
+    """
     import soundfile as sf
     from crisperwhisper.audio import load_audio
 
     info = sf.info(str(media_path))
-    frames = max(1, min(int(info.frames), int(seconds * info.samplerate)))
-    audio, sample_rate = sf.read(
-        str(media_path), frames=frames, dtype="float32", always_2d=False
-    )
-    if getattr(audio, "ndim", 1) > 1:
-        audio = audio.mean(axis=1)
-    return load_audio(audio, sr=sample_rate)
+    sample_rate = info.samplerate
+    total = int(info.frames)
+    span = max(1, int(seconds * sample_rate))
+    if total <= span:
+        starts = [0]
+    else:
+        count = max(1, min(count, total // span))
+        if count == 1:
+            starts = [0]
+        else:
+            starts = [
+                int(i * (total - span) / (count - 1)) for i in range(count)
+            ]
+
+    windows = []
+    for start in starts:
+        audio, file_sr = sf.read(
+            str(media_path),
+            start=start,
+            frames=min(span, total - start),
+            dtype="float32",
+            always_2d=False,
+        )
+        if getattr(audio, "ndim", 1) > 1:
+            audio = audio.mean(axis=1)
+        windows.append(load_audio(audio, sr=file_sr))
+    return windows
 
 
 def _logits_to_array(logits: Any):
@@ -89,12 +115,30 @@ def _logits_to_array(logits: Any):
     return array
 
 
-def _language_scores(logits: Any, lang_ids: dict[str, int]) -> tuple[str, float]:
-    """Softmax sobre los logits de los tokens de idioma -> (código, probabilidad).
+# CrisperWhisper 2 se entrenó con estas etiquetas delante del prefijo estándar
+# de Whisper (`[sot][idioma][transcribe][notimestamps]`). Si pedimos los logits
+# del idioma sin ellas, el decoder queda fuera de distribución y reparte la
+# probabilidad casi por igual entre los ~99 idiomas.
+VERBATIM_TAGS = "".join(f"[verbatim_{i}]" for i in range(1, 6))
 
-    Réplica en Python de lo que hace `detect_language` en el C++ de CT2, pero
-    usando el vocabulario del tokenizer en lugar del `config.json` del modelo.
+
+def _detection_prompt(engine: Any, sot_id: int) -> list[int]:
+    """Prefijo de decodificación en modo verbatim, cortado antes del idioma.
+
+    El siguiente token tras `[sot]` es justo el token de idioma, así que los
+    logits de ese paso son los que usa el modelo para elegirlo. Las etiquetas
+    solo existen en CrisperWhisper 2; en el modelo v1 se usa el prefijo normal.
     """
+    encode = getattr(engine, "encode_text", None)
+    if getattr(engine, "model_version", 2) == 2 and callable(encode):
+        tags = encode(VERBATIM_TAGS)
+        if tags:
+            return [int(token) for token in tags] + [int(sot_id)]
+    return [int(sot_id)]
+
+
+def _language_probabilities(logits: Any, lang_ids: dict[str, int]):
+    """Softmax sobre los logits de los tokens de idioma -> (códigos, probs)."""
     import numpy as np
 
     scores = _logits_to_array(logits).astype(np.float64).reshape(-1)
@@ -108,6 +152,12 @@ def _language_scores(logits: Any, lang_ids: dict[str, int]) -> tuple[str, float]
     lang_scores -= lang_scores.max()
     probs = np.exp(lang_scores)
     probs /= probs.sum()
+    return codes, probs
+
+
+def _language_scores(logits: Any, lang_ids: dict[str, int]) -> tuple[str, float]:
+    """Idioma más probable y su probabilidad para un único paso del decoder."""
+    codes, probs = _language_probabilities(logits, lang_ids)
     best = int(probs.argmax())
     return codes[best], float(probs[best])
 
@@ -119,8 +169,8 @@ def detect_language_crisper(model: Any, media_path: Path | str) -> str:
     el `config.json` de HuggingFace encima del de CTranslate2 y el modelo se
     queda sin `lang_ids`, lo que hace que el C++ lea una clave inexistente y
     falle con un `json.exception.type_error.302` engañoso. En su lugar pedimos
-    los logits del primer paso del decoder (token SOT), que es exactamente lo
-    que hace `detect_language` internamente.
+    los logits del paso del decoder que predice el idioma, replicando el mismo
+    prefijo (`[verbatim_N]...[sot]`) con el que se entrenó el modelo.
     """
     engine = getattr(model, "_engine", None)
     raw_model = getattr(engine, "model", None)
@@ -137,15 +187,41 @@ def detect_language_crisper(model: Any, media_path: Path | str) -> str:
             "Usa el backend ct2 ('crisperwhisper[ct2]') o cambia el motor STT a 'stable'."
         )
 
-    features = engine.extract_features(_load_audio_head(media_path))
-    _, logits = raw_model.prefill(features, [int(sot_id)])
+    prompt = _detection_prompt(engine, sot_id)
+    windows = _load_audio_windows(media_path)
+    total = None
     try:
-        language, probability = _language_scores(logits, lang_ids)
+        for audio in windows:
+            features = engine.extract_features(audio)
+            _, logits = raw_model.prefill(features, prompt)
+            _, probs = _language_probabilities(logits, lang_ids)
+            total = probs if total is None else total + probs
     except (IndexError, TypeError, ValueError) as exc:
         raise RuntimeError(
             "No se pudo detectar el idioma de origen con CrisperWhisper."
         ) from exc
-    print(f"🌐 [CrisperWhisper] Idioma detectado: {language} ({probability:.2f})", flush=True)
+
+    if total is None:
+        raise RuntimeError(
+            "No se pudo detectar el idioma de origen con CrisperWhisper."
+        )
+
+    codes = list(lang_ids)
+    probs = total / len(windows)
+    order = probs.argsort()[::-1]
+    language = codes[order[0]]
+    probability = float(probs[order[0]])
+    detail = ""
+    if probability < 0.5:
+        alternatives = ", ".join(
+            f"{codes[i]} {probs[i]:.2f}" for i in order[1:4]
+        )
+        detail = f" · alternativas: {alternatives}"
+    print(
+        f"🌐 [CrisperWhisper] Idioma detectado: {language} "
+        f"({probability:.2f}){detail}",
+        flush=True,
+    )
     return language
 
 

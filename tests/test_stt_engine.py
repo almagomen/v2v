@@ -18,8 +18,10 @@ from src.config import (
     set_stt_engine,
 )
 from src.stt_crisper import (
+    VERBATIM_TAGS,
     _crisper_result_to_segments,
     _language_scores,
+    _load_audio_windows,
     _split_device,
     detect_language_crisper,
 )
@@ -211,6 +213,11 @@ class TestCrisperLanguageDetection(unittest.TestCase):
             def __init__(self):
                 self.model = RawModel()
                 self.audio = []
+                self.encoded = []
+
+            def encode_text(self, text):
+                self.encoded.append(text)
+                return [900, 901, 902, 903, 904]
 
             def extract_features(self, audio):
                 self.audio.append(audio)
@@ -220,7 +227,7 @@ class TestCrisperLanguageDetection(unittest.TestCase):
         model = SimpleNamespace(_engine=engine)
 
         with (
-            patch("src.stt_crisper._load_audio_head", return_value="audio"),
+            patch("src.stt_crisper._load_audio_windows", return_value=["audio"]),
             patch("builtins.print"),
         ):
             language = detect_language_crisper(model, "vocals.wav")
@@ -228,12 +235,64 @@ class TestCrisperLanguageDetection(unittest.TestCase):
         # Código limpio, sin los marcadores <|...|>.
         self.assertEqual(language, "es")
         self.assertEqual(engine.audio, ["audio"])
-        self.assertEqual(engine.model.prompts, [("features", [Engine.sot_id])])
+        self.assertEqual(engine.encoded, [VERBATIM_TAGS])
+        # El prefijo debe imitar al de entrenamiento: etiquetas + [sot].
+        self.assertEqual(
+            engine.model.prompts, [("features", [900, 901, 902, 903, 904, 50258])]
+        )
 
     def test_falla_sin_decoder_ct2(self):
         model = SimpleNamespace(_engine=SimpleNamespace(_lang_ids={}, sot_id=None))
         with self.assertRaises(RuntimeError):
             detect_language_crisper(model, "vocals.wav")
+
+
+class TestAudioWindows(unittest.TestCase):
+    def _windows(self, total_seconds):
+        import numpy as np
+
+        reads = []
+
+        class Info:
+            samplerate = 16000
+            frames = int(total_seconds * 16000)
+
+        def read(path, start=0, frames=None, **kwargs):
+            reads.append(start)
+            return np.zeros(frames, dtype=np.float32), Info.samplerate
+
+        soundfile = SimpleNamespace(info=lambda path: Info(), read=read)
+        audio_module = SimpleNamespace(load_audio=lambda audio, sr: audio)
+        crisperwhisper = SimpleNamespace(audio=audio_module)
+
+        with patch.dict(
+            sys.modules,
+            {
+                "soundfile": soundfile,
+                "crisperwhisper": crisperwhisper,
+                "crisperwhisper.audio": audio_module,
+            },
+        ):
+            windows = _load_audio_windows("vocals.wav")
+        return windows, reads
+
+    def test_audio_corto_usa_una_ventana(self):
+        windows, reads = self._windows(10)
+
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(reads, [0])
+
+    def test_audio_largo_reparte_tres_ventanas(self):
+        windows, reads = self._windows(90)
+
+        self.assertEqual(len(windows), 3)
+        self.assertEqual(reads, [0, 30 * 16000, 60 * 16000])
+
+    def test_audio_mediano_no_repite_ventanas(self):
+        windows, reads = self._windows(40)
+
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(reads, [0])
 
 
 if __name__ == "__main__":
