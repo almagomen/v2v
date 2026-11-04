@@ -65,26 +65,64 @@ def _load_audio_head(media_path: Path | str, seconds: float = 30.0):
     return load_audio(audio, sr=sample_rate)
 
 
+def _language_scores(logits: Any, lang_ids: dict[str, int]) -> tuple[str, float]:
+    """Softmax sobre los logits de los tokens de idioma -> (código, probabilidad).
+
+    Réplica en Python de lo que hace `detect_language` en el C++ de CT2, pero
+    usando el vocabulario del tokenizer en lugar del `config.json` del modelo.
+    """
+    import numpy as np
+
+    scores = np.asarray(logits).astype(np.float64).reshape(-1)
+    codes = list(lang_ids)
+    ids = [int(lang_ids[code]) for code in codes]
+    if not ids or max(ids) >= scores.size:
+        raise RuntimeError(
+            "Los tokens de idioma de CrisperWhisper no coinciden con su vocabulario."
+        )
+    lang_scores = scores[ids]
+    lang_scores -= lang_scores.max()
+    probs = np.exp(lang_scores)
+    probs /= probs.sum()
+    best = int(probs.argmax())
+    return codes[best], float(probs[best])
+
+
 def detect_language_crisper(model: Any, media_path: Path | str) -> str:
-    """Detecta el idioma de origen con el encoder de CrisperWhisper (CT2)."""
+    """Detecta el idioma de origen con el decoder de CrisperWhisper (CT2).
+
+    No usamos `raw_model.detect_language`: el conversor de CrisperWhisper copia
+    el `config.json` de HuggingFace encima del de CTranslate2 y el modelo se
+    queda sin `lang_ids`, lo que hace que el C++ lea una clave inexistente y
+    falle con un `json.exception.type_error.302` engañoso. En su lugar pedimos
+    los logits del primer paso del decoder (token SOT), que es exactamente lo
+    que hace `detect_language` internamente.
+    """
     engine = getattr(model, "_engine", None)
     raw_model = getattr(engine, "model", None)
-    if raw_model is None or not hasattr(raw_model, "detect_language"):
+    lang_ids = dict(getattr(engine, "_lang_ids", None) or {})
+    sot_id = getattr(engine, "sot_id", None)
+    if (
+        raw_model is None
+        or not hasattr(raw_model, "prefill")
+        or sot_id is None
+        or not lang_ids
+    ):
         raise RuntimeError(
-            "CrisperWhisper no expone detect_language en este backend. "
+            "CrisperWhisper no expone el decoder CT2 necesario para detectar el idioma. "
             "Usa el backend ct2 ('crisperwhisper[ct2]') o cambia el motor STT a 'stable'."
         )
 
     features = engine.extract_features(_load_audio_head(media_path))
-    probabilities = raw_model.detect_language(features)
+    _, logits = raw_model.prefill(features, [int(sot_id)])
     try:
-        language, probability = probabilities[0][0]
+        language, probability = _language_scores(logits, lang_ids)
     except (IndexError, TypeError, ValueError) as exc:
         raise RuntimeError(
             "No se pudo detectar el idioma de origen con CrisperWhisper."
         ) from exc
-    print(f"🌐 [CrisperWhisper] Idioma detectado: {language} ({float(probability):.2f})", flush=True)
-    return str(language)
+    print(f"🌐 [CrisperWhisper] Idioma detectado: {language} ({probability:.2f})", flush=True)
+    return language
 
 
 def _crisper_result_to_segments(result: Any, language: str) -> dict:

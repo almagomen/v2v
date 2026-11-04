@@ -16,7 +16,12 @@ from src.config import (
     get_stt_engine,
     set_stt_engine,
 )
-from src.stt_crisper import _crisper_result_to_segments, _split_device
+from src.stt_crisper import (
+    _crisper_result_to_segments,
+    _language_scores,
+    _split_device,
+    detect_language_crisper,
+)
 
 
 class TestSttEngineSetting(unittest.TestCase):
@@ -129,6 +134,67 @@ class TestCrisperResultToSegments(unittest.TestCase):
         self.assertEqual(payload["language"], "fr")
         self.assertEqual(payload["text"], "")
         self.assertEqual(payload["segments"], [])
+
+
+class TestCrisperLanguageDetection(unittest.TestCase):
+    def test_scores_elige_el_mayor_y_normaliza(self):
+        lang_ids = {"en": 0, "es": 1, "pt": 2}
+        language, probability = _language_scores([1.0, 3.0, 2.0], lang_ids)
+
+        self.assertEqual(language, "es")
+        self.assertGreater(probability, 0.5)
+        self.assertLessEqual(probability, 1.0)
+
+    def test_scores_rechaza_ids_fuera_del_vocabulario(self):
+        with self.assertRaises(RuntimeError):
+            _language_scores([1.0, 2.0], {"en": 5})
+
+    def test_detecta_con_prefill_sin_depender_de_detect_language(self):
+        """Regresión: el config.json CT2 pierde lang_ids y detect_language revienta."""
+
+        class RawModel:
+            def __init__(self):
+                self.prompts = []
+
+            def detect_language(self, features):
+                raise RuntimeError(
+                    "[json.exception.type_error.302] type must be number, but is number"
+                )
+
+            def prefill(self, features, prompt):
+                self.prompts.append((features, prompt))
+                return object(), [0.0, 4.0, 1.0]
+
+        class Engine:
+            _lang_ids = {"en": 0, "es": 1, "pt": 2}
+            sot_id = 50258
+
+            def __init__(self):
+                self.model = RawModel()
+                self.audio = []
+
+            def extract_features(self, audio):
+                self.audio.append(audio)
+                return "features"
+
+        engine = Engine()
+        model = SimpleNamespace(_engine=engine)
+
+        with (
+            patch("src.stt_crisper._load_audio_head", return_value="audio"),
+            patch("builtins.print"),
+        ):
+            language = detect_language_crisper(model, "vocals.wav")
+
+        # Código limpio, sin los marcadores <|...|>.
+        self.assertEqual(language, "es")
+        self.assertEqual(engine.audio, ["audio"])
+        self.assertEqual(engine.model.prompts, [("features", [Engine.sot_id])])
+
+    def test_falla_sin_decoder_ct2(self):
+        model = SimpleNamespace(_engine=SimpleNamespace(_lang_ids={}, sot_id=None))
+        with self.assertRaises(RuntimeError):
+            detect_language_crisper(model, "vocals.wav")
 
 
 if __name__ == "__main__":
