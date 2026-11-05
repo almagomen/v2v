@@ -139,6 +139,8 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
 
   // Referencia para evitar sobreescribir el texto mientras el usuario edita y hay polling en segundo plano
   const lastLoadedClipKeyRef = useRef<string | null>(null);
+  // Texto que tiene el segmento en disco, para saber si el usuario lo editó.
+  const loadedSegmentTextRef = useRef<string>("");
 
   // Sincronizar campos cuando cambia el clip seleccionado en la Timeline
   useEffect(() => {
@@ -146,6 +148,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
 
     if (!currentClipKey) {
       lastLoadedClipKeyRef.current = null;
+      loadedSegmentTextRef.current = "";
       return;
     }
 
@@ -230,6 +233,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
 
       setText(rawText);
       setPhonemes(foundPhonemes);
+      loadedSegmentTextRef.current = rawText;
 
       // Obtener voz del segmento existente
       if (parsedSelectedSegment.speakerToken) {
@@ -387,6 +391,41 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
       return;
     }
 
+    // Modo edición sin cambios de texto: reproducir el audio que ya está en
+    // disco. Es instantáneo, no llama al TTS y no crea segmentos fantasma.
+    if (
+      isEditingExistingSegment &&
+      parsedSelectedSegment &&
+      text.trim() &&
+      text.trim() === loadedSegmentTextRef.current.trim()
+    ) {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
+      if (previewAudioUrlRef.current) {
+        URL.revokeObjectURL(previewAudioUrlRef.current);
+        previewAudioUrlRef.current = null;
+      }
+      const audio = new Audio(
+        `${v2vApi.audioSegmentUrl(jobId, activeVideoIndex, parsedSelectedSegment.segIdx)}?v=${Date.now()}`,
+      );
+      previewAudioRef.current = audio;
+      audio.onended = () => setIsPlayingPreview(false);
+      audio.onerror = () => {
+        setIsPlayingPreview(false);
+        toast.error("Error", "No se pudo reproducir el audio del segmento.");
+      };
+      try {
+        await audio.play();
+        setIsPlayingPreview(true);
+      } catch {
+        setIsPlayingPreview(false);
+        toast.error("Error", "No se pudo reproducir el audio del segmento.");
+      }
+      return;
+    }
+
     try {
       setIsProcessing(true);
       let audioResult: GeneratedAudioResult;
@@ -412,6 +451,7 @@ export const V2VGenerateTTSSection: React.FC<{ inDrawer?: boolean }> = ({
             start: effectivePreviewStart,
             temperature,
             phonemes: Object.keys(phonemes).length > 0 ? phonemes : undefined,
+            preview: true,
           },
         );
         setCachedAudio({

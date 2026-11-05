@@ -312,13 +312,24 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     safe_speaker = speaker_key.replace(" ", "_").replace("/", "_").replace("\\", "_")
 
     seqs_trg_dir = path.parent / "Seqs_trg"
-    seqs_trg_dir.mkdir(exist_ok=True)
 
     # El nuevo segmento es N + 1 con respecto a texts_original
     new_seg_idx = len(texts_original) + 1
 
-    audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}.m4a"
-    raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}_raw.wav"
+    # Preescucha: sintetizamos en un directorio temporal y no tocamos el
+    # proyecto (ni Seqs_trg ni result.json). Antes esta misma ruta se usaba
+    # para "Reproducir" y añadía un segmento N+1 fantasma en cada escucha.
+    preview_dir: Path | None = None
+    if req.preview:
+        import tempfile
+
+        preview_dir = Path(tempfile.mkdtemp(prefix="v2v_preview_"))
+        audio_es_path = preview_dir / "preview.m4a"
+        raw_es_path = preview_dir / "preview_raw.wav"
+    else:
+        seqs_trg_dir.mkdir(exist_ok=True)
+        audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}.m4a"
+        raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}_raw.wav"
 
     arr, rate, raw_dur, duration, _ = synthesize_segment_audio(
         text=req.text,
@@ -336,31 +347,33 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
     if arr is None or rate is None:
         raise HTTPException(status_code=500, detail="Error en modelo TTS")
 
-    # Registrar el nuevo segmento en result.json al final (N + 1)
-    new_segment = create_segment_entry(
-        seg=new_seg_idx,
-        start=round(float(req.start or 0.0), 3),
-        end=round(float(req.start or 0.0) + duration, 3),
-        text=req.text,
-        original_text=req.text,
-        speaker=speaker_key,
-        phonemes=req.phonemes,
-    )
-    texts_original.append(new_segment)
-    update_result_segments(path.parent, texts_original)
+    # Registrar el nuevo segmento en result.json al final (N + 1).
+    # En modo preescucha no se registra nada: el audio es efímero.
+    if not req.preview:
+        new_segment = create_segment_entry(
+            seg=new_seg_idx,
+            start=round(float(req.start or 0.0), 3),
+            end=round(float(req.start or 0.0) + duration, 3),
+            text=req.text,
+            original_text=req.text,
+            speaker=speaker_key,
+            phonemes=req.phonemes,
+        )
+        texts_original.append(new_segment)
+        update_result_segments(path.parent, texts_original)
 
-    # Sincronizar en memoria con el job si existe
-    if req.job_id:
-        job = get_job(req.job_id)
-        if job and "videos" in job and 0 <= req.video_index < len(job["videos"]):
-            job_segments = job["videos"][req.video_index].setdefault("segments", [])
-            job_segments.append({
-                "seg": new_seg_idx,
-                "start": new_segment["start"],
-                "end": new_segment["end"],
-                "text": new_segment["text"],
-                "speaker": new_segment["speaker"],
-            })
+        # Sincronizar en memoria con el job si existe
+        if req.job_id:
+            job = get_job(req.job_id)
+            if job and "videos" in job and 0 <= req.video_index < len(job["videos"]):
+                job_segments = job["videos"][req.video_index].setdefault("segments", [])
+                job_segments.append({
+                    "seg": new_seg_idx,
+                    "start": new_segment["start"],
+                    "end": new_segment["end"],
+                    "text": new_segment["text"],
+                    "speaker": new_segment["speaker"],
+                })
 
     res_path = audio_es_path if audio_es_path.exists() else audio_es_path.with_suffix(".wav")
     media_type = "audio/mp4" if res_path.suffix == ".m4a" else "audio/wav"
@@ -371,6 +384,19 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
         "X-Audio-Filename": res_path.name,
         "Access-Control-Expose-Headers": "X-Seg-Idx, X-Audio-Duration, X-Audio-Filename",
     }
+
+    if preview_dir is not None:
+        import shutil
+
+        from starlette.background import BackgroundTask
+
+        return FileResponse(
+            res_path,
+            filename=res_path.name,
+            media_type=media_type,
+            headers=headers,
+            background=BackgroundTask(shutil.rmtree, preview_dir, True),
+        )
 
     return FileResponse(
         res_path,

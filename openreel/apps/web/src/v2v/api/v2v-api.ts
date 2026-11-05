@@ -157,6 +157,7 @@ export interface GenerateAudioSegmentOptions {
   volume?: number;
   video_path?: string;
   phonemes?: Record<string, string>;
+  preview?: boolean;
 }
 
 export interface GeneratedAudioResult {
@@ -593,6 +594,7 @@ export const v2vApi = {
         repetition_penalty: options?.repetition_penalty ?? 1.2,
         volume: options?.volume ?? 0.0,
         phonemes: options?.phonemes,
+        preview: options?.preview ?? false,
       }),
     });
     if (!res.ok) {
@@ -661,6 +663,10 @@ export const v2vApi = {
       throw new Error(err.detail || "Error al listar segmentos de audio");
     }
     return readJsonOrThrow<AudioSegmentItem[]>(res);
+  },
+
+  audioSegmentUrl(jobId: string, videoIndex: number, seg: number): string {
+    return url(`/api/job/${encodeURIComponent(jobId)}/audio-segments/${videoIndex}/${seg}`);
   },
 
   async fetchAudioSegmentBlob(jobId: string, videoIndex: number, seg: number): Promise<Blob> {

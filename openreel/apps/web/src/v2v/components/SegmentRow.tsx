@@ -81,17 +81,12 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
   const [playing, setPlaying] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     return () => {
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
-      }
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current);
-        audioUrlRef.current = null;
       }
     };
   }, []);
@@ -135,39 +130,34 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
     }, 0);
   };
 
-  const handlePlayAudio = async () => {
+  const handlePlayAudio = () => {
     if (playing) return;
-    let url: string | null = null;
-    try {
-      setPlaying(true);
-      const blob = await v2vApi.fetchAudioSegmentBlob(jobId, videoIndex, row.seg);
-      url = URL.createObjectURL(blob);
-      audioUrlRef.current = url;
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => {
-        setPlaying(false);
-        if (url) URL.revokeObjectURL(url);
-        audioUrlRef.current = null;
-        audioRef.current = null;
-      };
-      audio.onerror = () => {
-        setPlaying(false);
-        if (url) URL.revokeObjectURL(url);
-        audioUrlRef.current = null;
-        audioRef.current = null;
-        toast.error("Error al reproducir", "No se pudo cargar el audio del segmento.");
-      };
-      await audio.play();
-    } catch {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    // URL directa: el navegador empieza a cargar y a reproducir en el mismo
+    // gesto del usuario. Antes se hacía `await fetch` + blob y el navegador
+    // podía bloquear el `play()` por pérdida de activación transitoria.
+    const audio = new Audio(
+      `${v2vApi.audioSegmentUrl(jobId, videoIndex, row.seg)}?v=${Date.now()}`,
+    );
+    audioRef.current = audio;
+    setPlaying(true);
+    audio.onended = () => {
       setPlaying(false);
-      if (url) {
-        URL.revokeObjectURL(url);
-        audioUrlRef.current = null;
-      }
+      audioRef.current = null;
+    };
+    audio.onerror = () => {
+      setPlaying(false);
+      audioRef.current = null;
+      toast.error("Error al reproducir", "No se pudo cargar el audio del segmento.");
+    };
+    void audio.play().catch(() => {
+      setPlaying(false);
       audioRef.current = null;
       toast.error("Error", "No se pudo reproducir el audio.");
-    }
+    });
   };
 
   return (

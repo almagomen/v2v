@@ -143,6 +143,11 @@ class GenerateAudioSegmentRequest(BaseModel):
     top_p: float = Field(0.7, ge=0.1, le=1.0, description="Fish Audio diversidad sampling")
     repetition_penalty: float = Field(1.2, ge=1.0, le=2.0, description="Fish Audio control de repetición")
     volume: float = Field(0.0, ge=-10.0, le=10.0, description="Fish Audio ajuste volumen en dB")
+    phonemes: Optional[dict[str, str]] = Field(None, description="Diccionario de pronunciación fonética")
+    preview: bool = Field(
+        False,
+        description="Si es True solo sintetiza una preescucha temporal: no escribe en Seqs_trg ni en result.json",
+    )
 
 
 class SpeakerOption(BaseModel):
