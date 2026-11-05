@@ -17,6 +17,7 @@ import {
   FolderInput,
   Smile,
   Languages,
+  Wand2,
 } from "lucide-react";
 import { Button } from "@openreel/ui";
 import { v2vApi } from "../api/v2v-api";
@@ -40,6 +41,10 @@ export interface TokensConfigSectionProps {
   setCustomTranslationModel: (model: string) => void;
   sttEngine: "stable" | "crisper";
   setSttEngine: (engine: "stable" | "crisper") => void;
+  fishAutoEmotions: boolean;
+  setFishAutoEmotions: (enabled: boolean) => void;
+  fishEnhanceVersion: "s2.1-pro" | "s2-pro";
+  setFishEnhanceVersion: (version: "s2.1-pro" | "s2-pro") => void;
   isSavingTokens: boolean;
   onSaveTokens: () => Promise<void>;
   onClose: () => void;
@@ -62,6 +67,10 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
   setCustomTranslationModel,
   sttEngine,
   setSttEngine,
+  fishAutoEmotions,
+  setFishAutoEmotions,
+  fishEnhanceVersion,
+  setFishEnhanceVersion,
   isSavingTokens,
   onSaveTokens,
   onClose,
@@ -291,6 +300,53 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
               Requiere el paquete <span className="font-mono">crisperwhisper[ct2]</span> en el backend.
             </p>
           </div>
+        </div>
+
+        {/* Etiquetado automático de emociones (Fish Audio) */}
+        <div className="pt-2 border-t border-border/60 space-y-2">
+          <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border hover:border-border-hover transition-colors">
+            <div className="flex items-center gap-2">
+              <Wand2 size={13} className="text-amber-400" />
+              <div>
+                <span className="text-[10px] font-medium text-text-primary block">
+                  Etiquetado automático de emociones
+                </span>
+                <span className="text-[9px] text-text-muted block">
+                  Fish añade [emoción], [emphasis] y pausas al texto antes del TTS
+                </span>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={fishAutoEmotions}
+              onChange={(e) => setFishAutoEmotions(e.target.checked)}
+              className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+            />
+          </div>
+
+          {fishAutoEmotions && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-background/50 border border-border/70 text-[10px]">
+                <span className="text-text-muted">Modelo de etiquetado:</span>
+                <select
+                  value={fishEnhanceVersion}
+                  onChange={(e) =>
+                    setFishEnhanceVersion(e.target.value as "s2.1-pro" | "s2-pro")
+                  }
+                  className="px-2 py-0.5 text-[10px] bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary text-text-primary"
+                >
+                  <option value="s2.1-pro">S2.1 Pro (recomendado)</option>
+                  <option value="s2-pro">S2 Pro</option>
+                </select>
+              </div>
+              <p className="text-[9px] text-text-muted leading-normal px-1">
+                Usa el endpoint interno <span className="font-mono">/enhance/text</span> de Fish
+                (una llamada extra por segmento). Si no responde, se sintetiza el texto original
+                sin etiquetas extra. No reescribe el contenido: solo añade marcas de emoción y
+                pausas.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Selección de Modelos IA */}

@@ -88,6 +88,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [translationModel, setTranslationModel] = React.useState<string>("gemini-flash-lite-latest");
   const [customTranslationModel, setCustomTranslationModel] = React.useState<string>("");
   const [sttEngine, setSttEngine] = React.useState<"stable" | "crisper">("stable");
+  const [fishAutoEmotions, setFishAutoEmotions] = React.useState(false);
+  const [fishEnhanceVersion, setFishEnhanceVersion] = React.useState<"s2.1-pro" | "s2-pro">("s2.1-pro");
   const [reprocessUrls, setReprocessUrls] = React.useState<Set<string>>(new Set());
   const [showTokenSettings, setShowTokenSettings] = React.useState(false);
   const [isSavingTokens, setIsSavingTokens] = React.useState(false);
@@ -141,6 +143,12 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       if (res.stt_engine) {
         setSttEngine(res.stt_engine);
       }
+      if (typeof res.fish_auto_emotions === "boolean") {
+        setFishAutoEmotions(res.fish_auto_emotions);
+      }
+      if (res.fish_enhance_version) {
+        setFishEnhanceVersion(res.fish_enhance_version);
+      }
       return true;
     } catch (err) {
       console.error("Error cargando configuración de tokens/modelos:", err);
@@ -176,7 +184,15 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         : translationModel;
 
       v2vApi.setBackendUrl(backendUrl);
-      await v2vApi.saveTokens(fishApiKey, googleApiKey, effTitle, effTrans, sttEngine);
+      await v2vApi.saveTokens(
+        fishApiKey,
+        googleApiKey,
+        effTitle,
+        effTrans,
+        sttEngine,
+        fishAutoEmotions,
+        fishEnhanceVersion
+      );
 
       // Sincronizar también con colab-export-store para exportación coherente
       useColabExportStore.getState().setGeminiModel(titleModel);
@@ -194,7 +210,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     } finally {
       setIsSavingTokens(false);
     }
-  }, [fishApiKey, googleApiKey, titleModel, customTitleModel, translationModel, customTranslationModel, sttEngine]);
+  }, [fishApiKey, googleApiKey, titleModel, customTitleModel, translationModel, customTranslationModel, sttEngine, fishAutoEmotions, fishEnhanceVersion]);
 
   // Sincroniza el estado de V2V con el proyecto activo en OpenReel:
   // Si es un proyecto nuevo, el panel inicia 100% limpio.
@@ -473,6 +489,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             setCustomTranslationModel={setCustomTranslationModel}
             sttEngine={sttEngine}
             setSttEngine={setSttEngine}
+            fishAutoEmotions={fishAutoEmotions}
+            setFishAutoEmotions={setFishAutoEmotions}
+            fishEnhanceVersion={fishEnhanceVersion}
+            setFishEnhanceVersion={setFishEnhanceVersion}
             isSavingTokens={isSavingTokens}
             onSaveTokens={handleSaveTokens}
             onClose={() => setShowTokenSettings(false)}

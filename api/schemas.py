@@ -244,6 +244,12 @@ class TokenSettingsRequest(BaseModel):
     stt_engine: Optional[Literal["stable", "crisper"]] = Field(
         None, description="Motor de transcripción: stable (Whisper Turbo) o crisper (CrisperWhisper verbatim)"
     )
+    fish_auto_emotions: Optional[bool] = Field(
+        None, description="Etiquetado automático de emociones con Fish Audio (/enhance/text)"
+    )
+    fish_enhance_version: Optional[Literal["s2.1-pro", "s2-pro"]] = Field(
+        None, description="Versión del modelo usada por /enhance/text"
+    )
 
 
 class TokenSettingsResponse(BaseModel):
@@ -252,6 +258,8 @@ class TokenSettingsResponse(BaseModel):
     title_model: Optional[str] = None
     translation_model: Optional[str] = None
     stt_engine: Optional[str] = None
+    fish_auto_emotions: bool = False
+    fish_enhance_version: Optional[str] = None
     available_models: list[str] = Field(default_factory=list)
     message: str = "Configuración actualizada exitosamente"
 

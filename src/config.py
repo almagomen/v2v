@@ -80,6 +80,46 @@ def set_stt_engine(engine: str | None) -> str:
     os.environ["V2V_STT_ENGINE"] = value
     return value
 
+
+# Etiquetado automático de emociones con Fish Audio (`/enhance/text`).
+# Es opcional y nunca sustituye al motor TTS: solo añade/ajusta etiquetas.
+FISH_ENHANCE_VERSIONS = ("s2.1-pro", "s2-pro")
+DEFAULT_FISH_ENHANCE_VERSION = "s2.1-pro"
+
+
+def get_fish_auto_emotions() -> bool:
+    """Indica si el etiquetado automático de emociones está activado."""
+    raw = (os.getenv("V2V_FISH_AUTO_EMOTIONS") or "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def set_fish_auto_emotions(enabled: bool | None) -> bool:
+    """Activa/desactiva el etiquetado automático en caliente."""
+    value = bool(enabled)
+    os.environ["V2V_FISH_AUTO_EMOTIONS"] = "1" if value else "0"
+    return value
+
+
+def get_fish_enhance_version() -> str:
+    """Versión de modelo usada por `/enhance/text`."""
+    value = (
+        os.getenv("V2V_FISH_ENHANCE_VERSION") or DEFAULT_FISH_ENHANCE_VERSION
+    ).strip().lower()
+    return value if value in FISH_ENHANCE_VERSIONS else DEFAULT_FISH_ENHANCE_VERSION
+
+
+def set_fish_enhance_version(version: str | None) -> str:
+    """Actualiza la versión de `/enhance/text` y valida el valor recibido."""
+    value = (version or "").strip().lower()
+    if value not in FISH_ENHANCE_VERSIONS:
+        raise ValueError(
+            "Versión de auto-emociones inválida: "
+            f"{version!r}. Valores permitidos: {', '.join(FISH_ENHANCE_VERSIONS)}"
+        )
+    os.environ["V2V_FISH_ENHANCE_VERSION"] = value
+    return value
+
+
 # API keys: Colab userdata / Kaggle UserSecretsClient / env (soporta rotación de múltiples keys)
 _current_google_key_idx = 0
 _cached_google_keys: list[str] | None = None

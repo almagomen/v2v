@@ -282,6 +282,8 @@ export interface TokenSettingsResponse {
   title_model?: string;
   translation_model?: string;
   stt_engine?: "stable" | "crisper";
+  fish_auto_emotions?: boolean;
+  fish_enhance_version?: "s2.1-pro" | "s2-pro";
   available_models?: string[];
   message?: string;
 }
@@ -999,7 +1001,9 @@ export const v2vApi = {
     googleApiKey?: string,
     titleModel?: string,
     translationModel?: string,
-    sttEngine?: "stable" | "crisper"
+    sttEngine?: "stable" | "crisper",
+    fishAutoEmotions?: boolean,
+    fishEnhanceVersion?: "s2.1-pro" | "s2-pro"
   ): Promise<TokenSettingsResponse> {
     const res = await fetch(url("/api/settings/tokens"), {
       method: "POST",
@@ -1010,6 +1014,8 @@ export const v2vApi = {
         title_model: titleModel || null,
         translation_model: translationModel || null,
         stt_engine: sttEngine || null,
+        fish_auto_emotions: fishAutoEmotions ?? null,
+        fish_enhance_version: fishEnhanceVersion || null,
       }),
     });
     if (!res.ok) {

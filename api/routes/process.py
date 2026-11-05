@@ -180,7 +180,13 @@ def reconcile_jobs():
 
 @router.get("/settings/tokens", response_model=TokenSettingsResponse)
 def get_tokens():
-    from src.config import get_raw_google_api_keys, get_fish_api_key, get_stt_engine
+    from src.config import (
+        get_raw_google_api_keys,
+        get_fish_api_key,
+        get_stt_engine,
+        get_fish_auto_emotions,
+        get_fish_enhance_version,
+    )
     from src.translation import (
         get_default_title_model,
         get_default_translation_model,
@@ -192,6 +198,8 @@ def get_tokens():
         title_model=get_default_title_model(),
         translation_model=get_default_translation_model(),
         stt_engine=get_stt_engine(),
+        fish_auto_emotions=get_fish_auto_emotions(),
+        fish_enhance_version=get_fish_enhance_version(),
         available_models=POPULAR_GEMINI_MODELS,
     )
 
@@ -205,6 +213,10 @@ def post_tokens(req: TokenSettingsRequest):
         set_fish_api_key,
         get_stt_engine,
         set_stt_engine,
+        get_fish_auto_emotions,
+        set_fish_auto_emotions,
+        get_fish_enhance_version,
+        set_fish_enhance_version,
     )
     from src.translation import (
         set_default_title_model,
@@ -233,6 +245,11 @@ def post_tokens(req: TokenSettingsRequest):
     if req.stt_engine:
         set_stt_engine(req.stt_engine)
 
+    if req.fish_auto_emotions is not None:
+        set_fish_auto_emotions(req.fish_auto_emotions)
+    if req.fish_enhance_version:
+        set_fish_enhance_version(req.fish_enhance_version)
+
     # Intentar guardar persistente en .env
     env_path = Path(__file__).resolve().parent.parent.parent / ".env"
     try:
@@ -243,6 +260,8 @@ def post_tokens(req: TokenSettingsRequest):
         title_found = False
         trans_found = False
         stt_found = False
+        auto_emotions_found = False
+        enhance_version_found = False
 
         if exists:
             with open(env_path, "r", encoding="utf-8") as f:
@@ -269,6 +288,17 @@ def post_tokens(req: TokenSettingsRequest):
                     if req.stt_engine:
                         lines[i] = f"V2V_STT_ENGINE={req.stt_engine}\n"
                     stt_found = True
+                elif line.strip().startswith("V2V_FISH_AUTO_EMOTIONS="):
+                    if req.fish_auto_emotions is not None:
+                        lines[i] = (
+                            "V2V_FISH_AUTO_EMOTIONS="
+                            f"{'1' if req.fish_auto_emotions else '0'}\n"
+                        )
+                    auto_emotions_found = True
+                elif line.strip().startswith("V2V_FISH_ENHANCE_VERSION="):
+                    if req.fish_enhance_version:
+                        lines[i] = f"V2V_FISH_ENHANCE_VERSION={req.fish_enhance_version}\n"
+                    enhance_version_found = True
 
         if not fish_found and fish_api_val:
             lines.append(f"FISH_API_KEY={fish_api_val}\n")
@@ -280,6 +310,13 @@ def post_tokens(req: TokenSettingsRequest):
             lines.append(f"DEFAULT_TRANSLATION_MODEL={req.translation_model.strip()}\n")
         if not stt_found and req.stt_engine:
             lines.append(f"V2V_STT_ENGINE={req.stt_engine}\n")
+        if not auto_emotions_found and req.fish_auto_emotions is not None:
+            lines.append(
+                "V2V_FISH_AUTO_EMOTIONS="
+                f"{'1' if req.fish_auto_emotions else '0'}\n"
+            )
+        if not enhance_version_found and req.fish_enhance_version:
+            lines.append(f"V2V_FISH_ENHANCE_VERSION={req.fish_enhance_version}\n")
 
         with open(env_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
@@ -292,6 +329,8 @@ def post_tokens(req: TokenSettingsRequest):
         title_model=get_default_title_model(),
         translation_model=get_default_translation_model(),
         stt_engine=get_stt_engine(),
+        fish_auto_emotions=get_fish_auto_emotions(),
+        fish_enhance_version=get_fish_enhance_version(),
         available_models=POPULAR_GEMINI_MODELS,
         message="Configuración de tokens y modelos actualizada en caliente",
     )
