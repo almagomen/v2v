@@ -1,11 +1,13 @@
 """Pruebas del etiquetado automático de emociones de Fish Audio."""
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import requests
 
-from src import fish_enhance
+from src import audio_utils, fish_enhance
 from src.config import (
     get_fish_auto_emotions,
     get_fish_enhance_version,
@@ -29,33 +31,44 @@ class FakeResponse:
 
 class TestFishEnhance(unittest.TestCase):
     def setUp(self):
-        fish_enhance.clear_cache()
+        self._old_enabled = os.environ.get("V2V_FISH_AUTO_EMOTIONS")
+        self._old_version = os.environ.get("V2V_FISH_ENHANCE_VERSION")
+        os.environ.pop("V2V_FISH_AUTO_EMOTIONS", None)
+        os.environ.pop("V2V_FISH_ENHANCE_VERSION", None)
 
-    def _enhance(self, text, script, version="s2.1-pro"):
+    def tearDown(self):
+        for key, value in (
+            ("V2V_FISH_AUTO_EMOTIONS", self._old_enabled),
+            ("V2V_FISH_ENHANCE_VERSION", self._old_version),
+        ):
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _enhance(self, text, script, version="s2.1-pro", log_fn=None):
         with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
             "src.fish_enhance.requests.post",
             return_value=FakeResponse(200, {"enhanced_script": script}),
         ):
-            return fish_enhance.enhance_text(text, version=version, max_retries=0)
+            return fish_enhance.enhance_text(
+                text,
+                version=version,
+                max_retries=0,
+                log_fn=log_fn,
+            )
 
-    def test_anade_etiquetas_y_normaliza_pausas(self):
-        out = self._enhance(
-            "No funciona nada y estoy muy frustrado.",
-            "[angry] No funciona nada [short pause] y estoy muy frustrado.",
-        )
-        self.assertEqual(
-            out,
-            "[angry] No funciona nada [break] y estoy muy frustrado.",
-        )
+    def test_usa_la_respuesta_de_fish_tal_cual(self):
+        script = "[angry] No funciona nada [short pause] y estoy muy frustrado."
+        out = self._enhance("No funciona nada y estoy muy frustrado.", script)
+        self.assertEqual(out, script)
 
-    def test_separa_etiqueta_pegada_a_la_palabra(self):
-        out = self._enhance(
-            "Los marineros lanzan un cable.",
-            "Los marineros lanzan un [emphasis]cable.",
-        )
-        self.assertEqual(out, "Los marineros lanzan un [emphasis] cable.")
+    def test_no_separa_etiquetas_pegadas_a_la_palabra(self):
+        script = "Los marineros lanzan un [emphasis]cable hasta el barco."
+        out = self._enhance("Los marineros lanzan un cable hasta el barco.", script)
+        self.assertEqual(out, script)
 
-    def test_conserva_la_emocion_del_usuario(self):
+    def test_conserva_la_emocion_inicial_del_usuario(self):
         out = self._enhance(
             "[excited] Pero el proceso es igual de complejo.",
             "[excited] [happy] Pero el proceso es igual de complejo.",
@@ -63,22 +76,15 @@ class TestFishEnhance(unittest.TestCase):
         self.assertTrue(out.startswith("[excited] Pero el proceso"))
         self.assertNotIn("[happy]", out)
 
-    def test_acepta_separar_siglas_sin_reescribir(self):
-        out = self._enhance(
-            "TLOUS dos tiene la memoria a tope.",
-            "[emphasis] T L O U S dos tiene la memoria a tope.",
-        )
-        self.assertIsNotNone(out)
-        self.assertIn("T L O U S", out)
-
-    def test_descarta_reescrituras_destructivas(self):
+    def test_no_valida_reescrituras(self):
+        script = "[happy] Un texto completamente distinto que no tiene nada que ver."
         out = self._enhance(
             "Los marineros lanzan un cable hasta el barco receptor.",
-            "[happy] Un texto completamente distinto que no tiene nada que ver.",
+            script,
         )
-        self.assertIsNone(out)
+        self.assertEqual(out, script)
 
-    def test_cache_evita_una_segunda_llamada(self):
+    def test_siempre_llama_a_fish_sin_cache(self):
         with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
             "src.fish_enhance.requests.post",
             return_value=FakeResponse(200, {"enhanced_script": "[calm] Hola mundo."}),
@@ -86,21 +92,30 @@ class TestFishEnhance(unittest.TestCase):
             first = fish_enhance.enhance_text("Hola mundo.", max_retries=0)
             second = fish_enhance.enhance_text("Hola mundo.", max_retries=0)
 
-        self.assertEqual(first, second)
-        self.assertEqual(post.call_count, 1)
+        self.assertEqual(first, "[calm] Hola mundo.")
+        self.assertEqual(second, "[calm] Hola mundo.")
+        self.assertEqual(post.call_count, 2)
 
-    def test_devuelve_none_si_la_api_falla(self):
+    def test_registra_el_fallo_en_el_log(self):
+        logs: list[str] = []
         with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
             "src.fish_enhance.requests.post",
             return_value=FakeResponse(500),
         ):
-            out = fish_enhance.enhance_text("Hola mundo.", max_retries=0)
+            out = fish_enhance.enhance_text(
+                "Hola mundo.", max_retries=0, log_fn=logs.append
+            )
         self.assertIsNone(out)
+        self.assertTrue(any("Falló /enhance/text" in msg for msg in logs))
 
-    def test_devuelve_none_sin_api_key(self):
+    def test_registra_el_fallo_sin_api_key(self):
+        logs: list[str] = []
         with patch("src.config.get_fish_api_key", return_value=None):
-            out = fish_enhance.enhance_text("Hola mundo.")
+            out = fish_enhance.enhance_text(
+                "Hola mundo.", max_retries=0, log_fn=logs.append
+            )
         self.assertIsNone(out)
+        self.assertTrue(any("FISH_API_KEY" in msg for msg in logs))
 
     def test_no_llama_a_fish_si_solo_hay_etiquetas(self):
         with patch("src.fish_enhance.requests.post") as post:
@@ -108,28 +123,56 @@ class TestFishEnhance(unittest.TestCase):
         self.assertIsNone(out)
         post.assert_not_called()
 
-    def test_interruptor_y_version_desde_entorno(self):
-        old_enabled = os.environ.get("V2V_FISH_AUTO_EMOTIONS")
-        old_version = os.environ.get("V2V_FISH_ENHANCE_VERSION")
-        try:
-            set_fish_auto_emotions(True)
-            self.assertTrue(get_fish_auto_emotions())
-            set_fish_auto_emotions(False)
-            self.assertFalse(get_fish_auto_emotions())
+    def test_interruptor_activado_por_defecto_y_version_drama_3(self):
+        self.assertTrue(get_fish_auto_emotions())
+        set_fish_auto_emotions(False)
+        self.assertFalse(get_fish_auto_emotions())
+        set_fish_auto_emotions(True)
+        self.assertTrue(get_fish_auto_emotions())
 
+        set_fish_enhance_version("drama-3")
+        self.assertEqual(get_fish_enhance_version(), "drama-3")
+        with self.assertRaises(ValueError):
             set_fish_enhance_version("s2-pro")
-            self.assertEqual(get_fish_enhance_version(), "s2-pro")
-            with self.assertRaises(ValueError):
-                set_fish_enhance_version("s1")
-        finally:
-            if old_enabled is None:
-                os.environ.pop("V2V_FISH_AUTO_EMOTIONS", None)
-            else:
-                os.environ["V2V_FISH_AUTO_EMOTIONS"] = old_enabled
-            if old_version is None:
-                os.environ.pop("V2V_FISH_ENHANCE_VERSION", None)
-            else:
-                os.environ["V2V_FISH_ENHANCE_VERSION"] = old_version
+        with self.assertRaises(ValueError):
+            set_fish_enhance_version("s1")
+
+    def test_apply_auto_emotions_actualiza_el_texto_del_segmento(self):
+        segments = [{"text": "Hola mundo."}, {"text": "Otra frase."}]
+        with patch(
+            "src.fish_enhance.enhance_texts",
+            return_value=["[happy] Hola mundo.", None],
+        ):
+            audio_utils.apply_auto_emotions_to_segments(segments, enabled=True)
+
+        self.assertEqual(segments[0]["text"], "[happy] Hola mundo.")
+        self.assertEqual(segments[1]["text"], "Otra frase.")
+
+    def test_las_etiquetas_se_persisten_en_result_json(self):
+        from src.result_store import load_result, save_result, update_result_segments
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            save_result(
+                folder,
+                {
+                    "output_name": "demo",
+                    "segments": [
+                        {"seg": 1, "text": "Hola mundo.", "start": 0.0, "end": 1.0}
+                    ],
+                },
+            )
+
+            segments = load_result(folder)["segments"]
+            with patch(
+                "src.fish_enhance.enhance_texts",
+                return_value=["[happy] Hola mundo."],
+            ):
+                audio_utils.apply_auto_emotions_to_segments(segments, enabled=True)
+            update_result_segments(folder, segments)
+
+            saved = load_result(folder)
+            self.assertEqual(saved["segments"][0]["text"], "[happy] Hola mundo.")
 
 
 if __name__ == "__main__":

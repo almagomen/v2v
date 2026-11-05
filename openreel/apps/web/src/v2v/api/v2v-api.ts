@@ -283,7 +283,7 @@ export interface TokenSettingsResponse {
   translation_model?: string;
   stt_engine?: "stable" | "crisper";
   fish_auto_emotions?: boolean;
-  fish_enhance_version?: "s2.1-pro" | "s2-pro";
+  fish_enhance_version?: "s2.1-pro" | "drama-3";
   available_models?: string[];
   message?: string;
 }
@@ -1003,7 +1003,7 @@ export const v2vApi = {
     translationModel?: string,
     sttEngine?: "stable" | "crisper",
     fishAutoEmotions?: boolean,
-    fishEnhanceVersion?: "s2.1-pro" | "s2-pro"
+    fishEnhanceVersion?: "s2.1-pro" | "drama-3"
   ): Promise<TokenSettingsResponse> {
     const res = await fetch(url("/api/settings/tokens"), {
       method: "POST",

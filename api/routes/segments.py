@@ -85,7 +85,9 @@ def get_segments_editor(job_id: str, video_index: int):
             js = job_segments[i]
             start = float(js.get("start", tts_d["start"]))
             end = float(js.get("end", tts_d["end"]))
-            tts_text = str(js.get("text", tts_d["text"]))
+            # result.json es la fuente de verdad del texto TTS: allí se guardan
+            # las etiquetas de /enhance/text y las regeneraciones.
+            tts_text = str(tts_d.get("text") or js.get("text", ""))
             speaker = js.get("speaker") or tts_d.get("speaker")
         else:
             start = float(tts_d["start"] or orig_d["start"])

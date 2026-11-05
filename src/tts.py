@@ -1,7 +1,6 @@
 import io
 import json
 import math
-import re
 import time
 from pathlib import Path
 from typing import Any, Tuple, Optional, Union
@@ -181,32 +180,6 @@ def fish_tts(
     if not api_key:
         print("Error: FISH_API_KEY no configurada. Configura en Colab Secrets o .env")
         return None, None
-
-    # Etiquetado automático de emociones (opcional, global desde Ajustes/Tokens).
-    # Se hace antes de calcular el timeout porque el texto puede alargarse.
-    auto_emotions = kwargs.get("auto_emotions")
-    if auto_emotions is None:
-        try:
-            from src.fish_enhance import is_enabled
-
-            auto_emotions = is_enabled()
-        except Exception:
-            auto_emotions = False
-    if auto_emotions:
-        try:
-            from src.fish_enhance import enhance_text
-
-            enhanced = enhance_text(text, version=kwargs.get("enhance_version"))
-            if enhanced:
-                added_tags = [
-                    tag for tag in re.findall(r"\[[^\]]+\]", enhanced)
-                    if tag.lower() not in text.lower()
-                ]
-                text = enhanced
-                if added_tags:
-                    print(f"[auto-emociones] {' '.join(added_tags)}")
-        except Exception as exc:
-            print(f"[auto-emociones] Se ignora la mejora: {exc}")
 
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",

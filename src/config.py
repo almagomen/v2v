@@ -83,13 +83,13 @@ def set_stt_engine(engine: str | None) -> str:
 
 # Etiquetado automático de emociones con Fish Audio (`/enhance/text`).
 # Es opcional y nunca sustituye al motor TTS: solo añade/ajusta etiquetas.
-FISH_ENHANCE_VERSIONS = ("s2.1-pro", "s2-pro")
+FISH_ENHANCE_VERSIONS = ("s2.1-pro", "drama-3")
 DEFAULT_FISH_ENHANCE_VERSION = "s2.1-pro"
 
 
 def get_fish_auto_emotions() -> bool:
-    """Indica si el etiquetado automático de emociones está activado."""
-    raw = (os.getenv("V2V_FISH_AUTO_EMOTIONS") or "0").strip().lower()
+    """Indica si el etiquetado automático de emociones está activado (por defecto sí)."""
+    raw = (os.getenv("V2V_FISH_AUTO_EMOTIONS") or "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 

@@ -247,7 +247,7 @@ class TokenSettingsRequest(BaseModel):
     fish_auto_emotions: Optional[bool] = Field(
         None, description="Etiquetado automático de emociones con Fish Audio (/enhance/text)"
     )
-    fish_enhance_version: Optional[Literal["s2.1-pro", "s2-pro"]] = Field(
+    fish_enhance_version: Optional[Literal["s2.1-pro", "drama-3"]] = Field(
         None, description="Versión del modelo usada por /enhance/text"
     )
 
@@ -258,8 +258,8 @@ class TokenSettingsResponse(BaseModel):
     title_model: Optional[str] = None
     translation_model: Optional[str] = None
     stt_engine: Optional[str] = None
-    fish_auto_emotions: bool = False
-    fish_enhance_version: Optional[str] = None
+    fish_auto_emotions: bool = True
+    fish_enhance_version: Optional[Literal["s2.1-pro", "drama-3"]] = None
     available_models: list[str] = Field(default_factory=list)
     message: str = "Configuración actualizada exitosamente"
 

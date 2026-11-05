@@ -756,6 +756,49 @@ def synthesize_segment_audio(
     return arr, rate, raw_dur, final_dur, mode_tag
 
 
+def apply_auto_emotions_to_segments(
+    texts: list[dict],
+    log_fn: Optional[callable] = None,
+    enabled: Optional[bool] = None,
+) -> None:
+    """Aplica ``/enhance/text`` a cada segmento y actualiza ``text`` in-place.
+
+    Se ejecuta antes de la síntesis para que el texto enriquecido sea el que
+    consume el TTS y el que se persiste en ``result.json``. Si Fish falla, el
+    segmento conserva su texto original.
+    """
+    from src.fish_enhance import enhance_texts, get_version
+
+    if enabled is None:
+        from src.fish_enhance import is_enabled
+
+        enabled = is_enabled()
+    if not enabled:
+        return
+
+    targets = [td for td in texts if visible_text(str(td.get("text") or ""))]
+    if not targets:
+        return
+
+    originals = [str(td.get("text") or "") for td in targets]
+    try:
+        enhanced = enhance_texts(originals, version=get_version(), log_fn=log_fn)
+    except Exception as exc:
+        message = f"[auto-emociones] Se ignora la mejora: {exc}"
+        if log_fn is not None:
+            try:
+                log_fn(message)
+            except Exception:
+                pass
+        else:
+            print(message)
+        return
+
+    for text_dict, new_text in zip(targets, enhanced):
+        if new_text:
+            text_dict["text"] = new_text
+
+
 def clone_voice_segments(
     path: Path,
     texts: list[dict],
@@ -768,6 +811,8 @@ def clone_voice_segments(
     target_duration: Optional[float] = None,
     speaker_map: Optional[dict[str, str]] = None,
     source_lang: Optional[str] = None,
+    auto_emotions: Optional[bool] = None,
+    enhance_log: Optional[callable] = None,
     **kwargs,
 ) -> Tuple[list[Path], list[int], int]:
     seqs_src_dir = path.parent / "Seqs_src"
@@ -777,6 +822,24 @@ def clone_voice_segments(
     texts_to_process = (
         texts if only_indices is None else [texts[i - 1] for i in only_indices]
     )
+
+    # Etiquetado automático de emociones: se hace antes de paralelizar el TTS y
+    # muta `text_dict["text"]`, de modo que el texto enriquecido llega tanto al
+    # motor de voz como a `result.json` (editor de segmentos).
+    should_enhance = auto_emotions
+    if should_enhance is None:
+        try:
+            from src.fish_enhance import is_enabled
+
+            should_enhance = is_enabled()
+        except Exception:
+            should_enhance = False
+    if should_enhance:
+        apply_auto_emotions_to_segments(
+            texts_to_process,
+            log_fn=enhance_log,
+            enabled=True,
+        )
 
     # Determinar idioma fuente (origen)
     src_lang = source_lang or kwargs.get("source_lang")

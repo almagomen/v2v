@@ -43,8 +43,8 @@ export interface TokensConfigSectionProps {
   setSttEngine: (engine: "stable" | "crisper") => void;
   fishAutoEmotions: boolean;
   setFishAutoEmotions: (enabled: boolean) => void;
-  fishEnhanceVersion: "s2.1-pro" | "s2-pro";
-  setFishEnhanceVersion: (version: "s2.1-pro" | "s2-pro") => void;
+  fishEnhanceVersion: "s2.1-pro" | "drama-3";
+  setFishEnhanceVersion: (version: "s2.1-pro" | "drama-3") => void;
   isSavingTokens: boolean;
   onSaveTokens: () => Promise<void>;
   onClose: () => void;
@@ -331,19 +331,19 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 <select
                   value={fishEnhanceVersion}
                   onChange={(e) =>
-                    setFishEnhanceVersion(e.target.value as "s2.1-pro" | "s2-pro")
+                    setFishEnhanceVersion(e.target.value as "s2.1-pro" | "drama-3")
                   }
                   className="px-2 py-0.5 text-[10px] bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary text-text-primary"
                 >
                   <option value="s2.1-pro">S2.1 Pro (recomendado)</option>
-                  <option value="s2-pro">S2 Pro</option>
+                  <option value="drama-3">Drama 3</option>
                 </select>
               </div>
               <p className="text-[9px] text-text-muted leading-normal px-1">
                 Usa el endpoint interno <span className="font-mono">/enhance/text</span> de Fish
-                (una llamada extra por segmento). Si no responde, se sintetiza el texto original
-                sin etiquetas extra. No reescribe el contenido: solo añade marcas de emoción y
-                pausas.
+                (una llamada extra por segmento). Se aplica la respuesta de Fish tal cual: solo
+                se conservan las etiquetas iniciales que ya hayas escrito. Si no responde, se
+                sintetiza el texto original.
               </p>
             </div>
           )}

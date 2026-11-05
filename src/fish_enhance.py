@@ -5,59 +5,40 @@ documentada (no aparece en ``openapi.json``). Se integra como una mejora
 opcional y tolerante a fallos: si no responde, se sintetiza el texto original
 sin romper el job.
 
-Reglas de seguridad para no estropear la locución:
-
-* El texto solo puede recibir etiquetas ``[..]``; si el endpoint reescribe
-  palabras, se descarta la respuesta.
-* Las etiquetas de emoción que el usuario ya puso al principio mandan: se
-  conservan y se eliminan las que añada el endpoint en esa misma posición.
-* Las pausas se normalizan a la sintaxis documentada de S2 (``[break]`` y
-  ``[long-break]``), porque el endpoint devuelve variantes como ``[pause]`` o
-  ``[short pause]``.
+La respuesta de Fish se usa **tal cual**: no se normalizan pausas, no se
+reformatean etiquetas y no se valida el contenido. La única excepción son las
+etiquetas de emoción que el usuario ya escribió al principio del texto: esas
+se conservan y sustituyen a las que devuelva Fish en esa misma posición.
 """
 
 from __future__ import annotations
 
-import difflib
-import os
 import re
 import time
-import unicodedata
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 
 FISH_ENHANCE_URL = "https://api.fish.audio/enhance/text"
-DEFAULT_ENHANCE_VERSION = "s2.1-pro"
-# Solo la familia S2 usa corchetes. S1 (paréntesis) y drama-3 (direcciones en
-# lenguaje natural) no son intercambiables con el TTS por defecto.
-ENHANCE_VERSIONS = ("s2.1-pro", "s2-pro")
 
 _TAG_RE = re.compile(r"\[[^\]]*\]")
 _LEADING_TAGS_RE = re.compile(r"^(?:\s*\[[^\]]*\]\s*)+")
-_PAUSE_TAG_RE = re.compile(
-    r"\[\s*(?:(short|long)\s+)?(?:pause|break|silence)\s*\]",
-    re.IGNORECASE,
-)
-_DUP_TAG_RE = re.compile(r"(\[[^\]]+\])(?:\s*\1)+", re.IGNORECASE)
-_TAG_SPACE_RE = re.compile(r"\]\s*(?=[^\s\]\.,;:!?¿¡\"'»”’])")
 
-# Caché en memoria: regenerar el mismo texto dentro de la misma sesión devuelve
-# exactamente las mismas etiquetas y evita una llamada HTTP extra.
-_CACHE: dict[tuple[str, str], str] = {}
-_CACHE_MAX = 2048
+
+def _config():
+    from src import config
+
+    return config
 
 
 def is_enabled() -> bool:
-    """Lee el interruptor global ``V2V_FISH_AUTO_EMOTIONS``."""
-    raw = (os.getenv("V2V_FISH_AUTO_EMOTIONS") or "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    """Lee el interruptor global ``V2V_FISH_AUTO_EMOTIONS`` (activado por defecto)."""
+    return _config().get_fish_auto_emotions()
 
 
 def get_version() -> str:
-    """Versión de modelo usada por ``/enhance/text`` (familia S2)."""
-    value = (os.getenv("V2V_FISH_ENHANCE_VERSION") or DEFAULT_ENHANCE_VERSION).strip().lower()
-    return value if value in ENHANCE_VERSIONS else DEFAULT_ENHANCE_VERSION
+    """Versión de modelo usada por ``/enhance/text``."""
+    return _config().get_fish_enhance_version()
 
 
 def _strip_tags(text: str) -> str:
@@ -68,45 +49,6 @@ def _has_visible_text(text: str) -> bool:
     return bool(re.sub(r"\s+", "", _strip_tags(text)))
 
 
-def _comparable(text: str) -> str:
-    """Texto sin etiquetas, espacios, puntuación ni acentos.
-
-    Así ``TLOUS`` y ``T L O U S`` cuentan como el mismo contenido: el endpoint
-    a veces separa siglas para que el TTS las deletree, y eso no es una
-    reescritura destructiva.
-    """
-    plain = _strip_tags(text)
-    plain = unicodedata.normalize("NFKD", plain)
-    return "".join(ch for ch in plain.lower() if ch.isalnum())
-
-
-def _is_safe_rewrite(original: str, enhanced: str) -> bool:
-    """Acepta solo cambios de etiquetas, no reescrituras del contenido."""
-    before = _comparable(original)
-    after = _comparable(enhanced)
-    if not before or not after:
-        return False
-    if len(after) / len(before) < 0.75 or len(after) / len(before) > 1.40:
-        return False
-    return difflib.SequenceMatcher(None, before, after).ratio() >= 0.90
-
-
-def _normalize_pause_tags(text: str) -> str:
-    def _repl(match: re.Match[str]) -> str:
-        return "[long-break]" if (match.group(1) or "").lower() == "long" else "[break]"
-
-    return _PAUSE_TAG_RE.sub(_repl, text)
-
-
-def _dedupe_adjacent_tags(text: str) -> str:
-    return _DUP_TAG_RE.sub(r"\1", text)
-
-
-def _ensure_space_after_tags(text: str) -> str:
-    """El endpoint a veces devuelve ``[emphasis]palabra``; separa la etiqueta."""
-    return _TAG_SPACE_RE.sub("] ", text)
-
-
 def _split_leading_tags(text: str) -> tuple[str, str]:
     match = _LEADING_TAGS_RE.match(text or "")
     if not match:
@@ -115,16 +57,17 @@ def _split_leading_tags(text: str) -> tuple[str, str]:
 
 
 def prepare_enhanced_text(original: str, enhanced: str) -> str:
-    """Normaliza la respuesta y protege las etiquetas que puso el usuario."""
-    result = _normalize_pause_tags(enhanced or "").strip()
-    result = _ensure_space_after_tags(result)
-    result = _dedupe_adjacent_tags(result)
+    """Devuelve la respuesta de Fish sin tocarla, salvo las etiquetas iniciales.
 
+    Si el usuario ya puso una emoción al principio (``[excited] ...``), esa
+    etiqueta manda y se descartan las que Fish añada en esa misma posición.
+    El resto del texto se conserva exactamente como lo devolvió Fish.
+    """
+    result = (enhanced or "").strip()
     original_prefix, _ = _split_leading_tags(original)
     if original_prefix:
         _, rest = _split_leading_tags(result)
         result = f"{original_prefix} {rest}".strip()
-
     return result
 
 
@@ -133,24 +76,38 @@ def enhance_text(
     version: Optional[str] = None,
     timeout: int = 30,
     max_retries: int = 2,
+    log_fn: Optional[Callable[[str], None]] = None,
 ) -> Optional[str]:
-    """Devuelve el texto con etiquetas de emoción o ``None`` si no es seguro.
+    """Devuelve el texto etiquetado por Fish o ``None`` si no se pudo mejorar.
 
-    Nunca lanza excepciones: cualquier fallo se traduce en ``None`` para que el
-    llamador sintetice el texto original.
+    Nunca lanza excepciones: cualquier fallo se registra y se traduce en
+    ``None`` para que el llamador sintetice el texto original.
     """
+
+    def _log(message: str) -> None:
+        if log_fn is not None:
+            try:
+                log_fn(message)
+                return
+            except Exception:
+                pass
+        print(message)
+
     text = (text or "").strip()
     if not _has_visible_text(text):
         return None
 
-    ver = (version or get_version()).strip().lower()
-    if ver not in ENHANCE_VERSIONS:
-        ver = DEFAULT_ENHANCE_VERSION
+    try:
+        ver = (version or get_version()).strip().lower()
+    except Exception:
+        ver = (version or "s2.1-pro").strip().lower()
+    try:
+        from src.config import FISH_ENHANCE_VERSIONS
 
-    cache_key = (ver, text)
-    cached = _CACHE.get(cache_key)
-    if cached is not None:
-        return cached
+        if ver not in FISH_ENHANCE_VERSIONS:
+            ver = get_version()
+    except Exception:
+        ver = version or "s2.1-pro"
 
     try:
         from src.config import get_fish_api_key
@@ -160,6 +117,7 @@ def enhance_text(
         api_key = None
 
     if not api_key:
+        _log("[auto-emociones] FISH_API_KEY no configurada: se usa el texto original.")
         return None
 
     headers = {
@@ -178,39 +136,58 @@ def enhance_text(
                 timeout=timeout,
             )
             if response.status_code == 429:
-                time.sleep(2.0 * (attempt + 1))
+                wait = 2.0 * (attempt + 1)
+                _log(
+                    "[auto-emociones] Rate limit de Fish (429): "
+                    f"reintentando en {wait:.1f}s..."
+                )
+                time.sleep(wait)
                 continue
             response.raise_for_status()
             data = response.json()
             enhanced = str(data.get("enhanced_script") or "").strip()
             if not enhanced:
+                _log(
+                    "[auto-emociones] Fish devolvió una respuesta vacía: "
+                    "se usa el texto original."
+                )
                 return None
-            if not _is_safe_rewrite(text, enhanced):
-                print("[auto-emociones] Respuesta descartada: reescribe el texto original.")
-                return None
-
-            result = prepare_enhanced_text(text, enhanced)
-            if not result:
-                return None
-
-            if len(_CACHE) >= _CACHE_MAX:
-                _CACHE.clear()
-            _CACHE[cache_key] = result
-            return result
+            return prepare_enhanced_text(text, enhanced)
 
         except requests.exceptions.RequestException as exc:
             if attempt < max_retries:
                 time.sleep(1.0 * (attempt + 1))
                 continue
-            print(f"[auto-emociones] No disponible: {exc}")
+            detail = ""
+            response = getattr(exc, "response", None)
+            if response is not None and getattr(response, "text", ""):
+                detail = f" | {str(response.text)[:300]}"
+            _log(f"[auto-emociones] Falló /enhance/text: {exc}{detail}")
             return None
         except Exception as exc:  # JSON inválido, etc.
-            print(f"[auto-emociones] Respuesta inválida: {exc}")
+            _log(f"[auto-emociones] Respuesta inválida de /enhance/text: {exc}")
             return None
 
     return None
 
 
-def clear_cache() -> None:
-    """Vacía la caché (útil en tests o al cambiar de clave/versión)."""
-    _CACHE.clear()
+def enhance_texts(
+    texts: list[str],
+    version: Optional[str] = None,
+    log_fn: Optional[Callable[[str], None]] = None,
+    max_workers: int = 5,
+) -> list[Optional[str]]:
+    """Mejora una lista de textos en paralelo, conservando el orden."""
+    if not texts:
+        return []
+    if len(texts) == 1:
+        return [enhance_text(texts[0], version=version, log_fn=log_fn)]
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _one(value: str) -> Optional[str]:
+        return enhance_text(value, version=version, log_fn=log_fn)
+
+    workers = max(1, min(max_workers, len(texts)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(_one, texts))

@@ -17,6 +17,19 @@ from src.result_store import load_result, save_result, update_result_segments
 router = APIRouter(prefix="/api", tags=["regenerate"])
 
 
+def _log_for_job(job_id: str | None, message: str) -> None:
+    """Escribe en el log del job si existe; si no, en la consola del servidor."""
+    if job_id:
+        try:
+            from api.job_store import append_log
+
+            append_log(job_id, f"{message}\n")
+            return
+        except Exception:
+            pass
+    print(message)
+
+
 def _get_video_path_from_job(job_id: str, video_index: int) -> Path:
     job = get_job(job_id)
     if not job:
@@ -70,6 +83,8 @@ async def regenerate_segment(req: RegenerateSegmentRequest):
         phonemes=req.phonemes,
         phonemes_disabled=req.phonemes_disabled,
         prevent_overlap=bool(req.prevent_overlap),
+        job_id=req.job_id,
+        video_index=req.video_index,
     )
 
 
@@ -90,6 +105,8 @@ def _do_regenerate_segment(
     phonemes: dict[str, str] | None = None,
     phonemes_disabled: bool | None = None,
     prevent_overlap: bool = False,
+    job_id: str | None = None,
+    video_index: int = 0,
 ):
     from src.pipeline import split_audio_sequences
     from src.audio_utils import clone_voice_segments
@@ -170,13 +187,29 @@ def _do_regenerate_segment(
         volume=volume,
         source_lang=source_lang,
         sync_to_original=prevent_overlap,
+        enhance_log=lambda msg: _log_for_job(job_id, msg),
     )
 
     if not paths_es:
         raise HTTPException(status_code=500, detail="No se pudo generar el audio")
 
-    # Guardar segmentos actualizados en result.json
+    # Guardar segmentos actualizados en result.json (incluye las etiquetas que
+    # haya añadido /enhance/text) y refrescar el texto en memoria del job para
+    # que el editor de segmentos lo muestre al instante.
     update_result_segments(path.parent, texts_edited)
+    if job_id:
+        try:
+            from api.job_store import update_job
+
+            job = get_job(job_id)
+            videos = (job or {}).get("videos") or []
+            if 0 <= video_index < len(videos):
+                segs = videos[video_index].get("segments") or []
+                if 0 <= seg_idx - 1 < len(segs):
+                    segs[seg_idx - 1]["text"] = str(t_edit["text"])
+                    update_job(job_id, videos=videos)
+        except Exception:
+            pass
 
     from api.routes.files import _convert_seq_wav_to_m4a
     m4a_path = _convert_seq_wav_to_m4a(paths_es[0])
@@ -313,6 +346,23 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
 
     seqs_trg_dir = path.parent / "Seqs_trg"
 
+    # Etiquetado automático de emociones (si está activo). El texto enriquecido
+    # se usa para sintetizar y se guarda en result.json; `original_text` conserva
+    # lo que escribió el usuario.
+    text_to_synthesize = req.text
+    try:
+        from src.fish_enhance import enhance_text, is_enabled
+
+        if is_enabled():
+            enhanced = enhance_text(
+                req.text,
+                log_fn=lambda msg: _log_for_job(req.job_id, msg),
+            )
+            if enhanced:
+                text_to_synthesize = enhanced
+    except Exception as exc:
+        _log_for_job(req.job_id, f"[auto-emociones] Se ignora la mejora: {exc}")
+
     # El nuevo segmento es N + 1 con respecto a texts_original
     new_seg_idx = len(texts_original) + 1
 
@@ -332,7 +382,7 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
         raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{new_seg_idx:03d}_raw.wav"
 
     arr, rate, raw_dur, duration, _ = synthesize_segment_audio(
-        text=req.text,
+        text=text_to_synthesize,
         lang=lang,
         speaker=speaker_audio,
         out_audio_path=audio_es_path,
@@ -354,7 +404,7 @@ async def generate_audio_segment(req: GenerateAudioSegmentRequest):
             seg=new_seg_idx,
             start=round(float(req.start or 0.0), 3),
             end=round(float(req.start or 0.0) + duration, 3),
-            text=req.text,
+            text=text_to_synthesize,
             original_text=req.text,
             speaker=speaker_key,
             phonemes=req.phonemes,
