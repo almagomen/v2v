@@ -207,12 +207,22 @@ def distribute_silence_padding(
     rate: int,
     max_per_valley: Optional[int] = None,
     allow_tail_pad: bool = True,
+    min_silence_sec: float = 0.10,
+    valley_growth: float = 1.6,
 ) -> Any:
     """
-    Distribuye el padding de silencio necesario entre los valles de silencio internos (respiros/[break])
-    y el final del audio, evitando dejar un hueco muerto gigante al final del clip.
-    Si allow_tail_pad es False, expande únicamente las pausas internas entre frases sin añadir colas de silencio al final.
-    Soporta tensores de PyTorch y arrays de NumPy.
+    Reparte el silencio que falta entre los valles internos del audio.
+
+    En vez de meter la misma cantidad en cada hueco (lo que alarga pausas
+    diminutas y suena artificial), ordena los valles de mayor a menor y los
+    rellena por prioridad. Cada valle puede crecer como máximo
+    `valley_growth` veces su duración natural, con un techo absoluto de
+    `max_per_valley` (0.60 s por defecto). Así los respiros largos absorben
+    casi todo el relleno y los micro-huecos apenas se tocan.
+
+    `allow_tail_pad=False` (modo timeline) no añade nada al final: si los
+    valles no dan para tanto, el clip se queda corto y luego se estira con
+    atempo (suelo 0.80x).
     """
     needed_pad = target_samples - arr.shape[-1]
     if needed_pad <= 0:
@@ -262,8 +272,23 @@ def distribute_silence_padding(
     silence_threshold = max(0.005, max_rms * 0.08)
     is_silent = frame_rms < silence_threshold
 
-    min_silence_frames = max(3, int(0.12 / 0.02))
-    valleys = []
+    # Puentea micro-cortes no silenciosos (clics, respiraciones) de <= 40 ms
+    # para que una misma pausa no se fragmente en varios valles diminutos.
+    bridge_frames = max(0, int(0.04 / 0.02))
+    if bridge_frames > 0:
+        idx = 0
+        while idx < num_frames:
+            if is_silent[idx]:
+                idx += 1
+                continue
+            start = idx
+            while idx < num_frames and not is_silent[idx]:
+                idx += 1
+            if start > 0 and idx < num_frames and (idx - start) <= bridge_frames:
+                is_silent[start:idx] = True
+
+    min_silence_frames = max(3, int(min_silence_sec / 0.02))
+    valleys = []  # (inicio, fin, punto medio)
     start_f = None
     for f_idx, silent in enumerate(is_silent):
         if silent:
@@ -273,12 +298,16 @@ def distribute_silence_padding(
             if start_f is not None:
                 dur_frames = f_idx - start_f
                 if dur_frames >= min_silence_frames:
-                    mid_frame = start_f + dur_frames // 2
-                    valleys.append(mid_frame * hop_size)
+                    v_start = start_f * hop_size
+                    v_end = f_idx * hop_size
+                    valleys.append((v_start, v_end, (v_start + v_end) // 2))
                 start_f = None
 
     min_edge = int(0.35 * rate)
-    valleys = [v for v in valleys if v > min_edge and v < (total_samples - min_edge)]
+    valleys = [
+        v for v in valleys
+        if v[2] > min_edge and v[2] < (total_samples - min_edge)
+    ]
 
     if not valleys:
         if not allow_tail_pad:
@@ -287,41 +316,59 @@ def distribute_silence_padding(
         res_np = np.concatenate([arr_np, pad], axis=-1)
         return torch.from_numpy(res_np).to(arr.device) if is_torch else res_np
 
-    limit_valley = max_per_valley if max_per_valley is not None else (int(0.35 * rate) if not allow_tail_pad else int(0.80 * rate))
-    if allow_tail_pad:
-        num_points = len(valleys) + 1
-        valley_share = min(limit_valley, needed_pad // num_points)
-        allocated_to_valleys = valley_share * len(valleys)
-        end_share = needed_pad - allocated_to_valleys
-    else:
-        valley_share = min(limit_valley, needed_pad // len(valleys)) if valleys else 0
-        end_share = 0
+    limit_valley = (
+        max_per_valley
+        if max_per_valley is not None
+        else int(0.60 * rate)
+    )
 
-    fade_len = max(64, min(int(0.005 * rate), valley_share // 2 if valley_share > 0 else 64))
+    # Reparto por prioridad: primero los respiros más largos. Cada valle
+    # puede crecer hasta `valley_growth` veces su duración natural, sin
+    # superar `limit_valley`. Así no se alargan micro-huecos de forma
+    # antinatural.
+    order = sorted(
+        range(len(valleys)),
+        key=lambda i: valleys[i][1] - valleys[i][0],
+        reverse=True,
+    )
+    allocations = [0] * len(valleys)
+    remaining = needed_pad
+    for i in order:
+        natural = valleys[i][1] - valleys[i][0]
+        cap = min(limit_valley, int(natural * valley_growth))
+        if cap <= 0:
+            continue
+        take = min(remaining, cap)
+        allocations[i] = take
+        remaining -= take
+        if remaining <= 0:
+            break
+
+    max_alloc = max(allocations, default=0)
+    fade_len = max(64, min(int(0.005 * rate), max_alloc // 2 if max_alloc > 0 else 64))
     fade_out = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
     fade_in = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
 
     parts = []
     prev_idx = 0
-    silence_chunk = np.zeros((arr_np.shape[0], valley_share), dtype=arr_np.dtype)
-    for v_idx in valleys:
-        chunk = arr_np[:, prev_idx:v_idx].copy()
+    for (_, _, v_mid), extra in zip(valleys, allocations):
+        chunk = arr_np[:, prev_idx:v_mid].copy()
         if prev_idx > 0 and chunk.shape[-1] >= fade_len:
             chunk[:, :fade_len] *= fade_in
         if chunk.shape[-1] >= fade_len:
             chunk[:, -fade_len:] *= fade_out
         parts.append(chunk)
-        if valley_share > 0:
-            parts.append(silence_chunk)
-        prev_idx = v_idx
+        if extra > 0:
+            parts.append(np.zeros((arr_np.shape[0], extra), dtype=arr_np.dtype))
+        prev_idx = v_mid
 
     chunk_last = arr_np[:, prev_idx:].copy()
     if prev_idx > 0 and chunk_last.shape[-1] >= fade_len:
         chunk_last[:, :fade_len] *= fade_in
     parts.append(chunk_last)
 
-    if allow_tail_pad and end_share > 0:
-        parts.append(np.zeros((arr_np.shape[0], end_share), dtype=arr_np.dtype))
+    if allow_tail_pad and remaining > 0:
+        parts.append(np.zeros((arr_np.shape[0], remaining), dtype=arr_np.dtype))
 
     res_np = np.concatenate(parts, axis=-1)
     if allow_tail_pad:
@@ -618,10 +665,18 @@ def synthesize_segment_audio(
                 mode_tag = f"✨ 1.00x ({diff_str})"
             else:
                 # Sub-duración (< SYNC_TOLERANCE):
-                # 1. Expandir suavemente valles internos de silencio (sin añadir silencio artificial al final del clip)
+                # 1. Expandir los valles internos de silencio por prioridad:
+                #    primero los respiros largos (hasta 0.60 s cada uno y como
+                #    máximo 1.6x su duración natural), sin tocar la cola final.
                 target_samples = int(orig_duration * rate)
                 arr_expanded = distribute_silence_padding(
-                    arr, target_samples, rate, max_per_valley=int(0.35 * rate), allow_tail_pad=False
+                    arr,
+                    target_samples,
+                    rate,
+                    max_per_valley=int(0.60 * rate),
+                    allow_tail_pad=False,
+                    min_silence_sec=0.10,
+                    valley_growth=1.6,
                 )
                 expanded_dur = float(arr_expanded.shape[-1]) / float(rate)
                 expanded_ratio = expanded_dur / orig_duration
