@@ -152,6 +152,16 @@ class TestCrisperLanguageDetection(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _language_scores([1.0, 2.0], {"en": 5})
 
+    def test_scores_usa_el_ultimo_paso_del_prefill(self):
+        """`prefill` devuelve [1, pasos, vocab]; el idioma es el último paso."""
+        import numpy as np
+
+        logits = np.array([[[9.0, 0.0, 0.0], [0.0, 9.0, 0.0]]])
+        language, probability = _language_scores(logits, {"en": 0, "es": 1, "pt": 2})
+
+        self.assertEqual(language, "es")
+        self.assertGreater(probability, 0.9)
+
     def test_scores_mueve_la_vista_ct2_a_cpu(self):
         """Regresión: `StorageView` en GPU no expone `__array_interface__`."""
         import numpy as np

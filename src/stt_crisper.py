@@ -101,7 +101,9 @@ def _logits_to_array(logits: Any):
     """
     import numpy as np
 
-    if hasattr(logits, "to_device"):
+    # NumPy 2.x incorporó un `to_device` de la Array API: sin el `isinstance`,
+    # un ndarray normal entraba por la rama de CTranslate2 y fallaba al importarlo.
+    if not isinstance(logits, np.ndarray) and hasattr(logits, "to_device"):
         import ctranslate2
 
         if hasattr(logits, "to"):
@@ -138,10 +140,22 @@ def _detection_prompt(engine: Any, sot_id: int) -> list[int]:
 
 
 def _language_probabilities(logits: Any, lang_ids: dict[str, int]):
-    """Softmax sobre los logits de los tokens de idioma -> (códigos, probs)."""
+    """Softmax sobre los logits de los tokens de idioma -> (códigos, probs).
+
+    `prefill` devuelve los logits de **todos** los pasos del prompt con forma
+    `[1, prompt_len, vocab]`. El idioma se decide en el último paso, el que
+    predice el token siguiente a `[sot]`; aplanar la matriz entera indexaba el
+    vocabulario con desplazamientos de los primeros pasos y repartía la
+    probabilidad casi por igual entre todos los idiomas.
+    """
     import numpy as np
 
-    scores = _logits_to_array(logits).astype(np.float64).reshape(-1)
+    array = _logits_to_array(logits)
+    if array.ndim >= 2:
+        scores = array.reshape(-1, array.shape[-1])[-1]
+    else:
+        scores = array.reshape(-1)
+    scores = scores.astype(np.float64)
     codes = list(lang_ids)
     ids = [int(lang_ids[code]) for code in codes]
     if not ids or max(ids) >= scores.size:
