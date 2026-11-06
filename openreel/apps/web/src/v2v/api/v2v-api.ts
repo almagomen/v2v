@@ -1141,9 +1141,9 @@ export const v2vApi = {
     const res = await fetch(url("/api/render/gemini-models"));
     if (!res.ok) {
       return {
-        default_model: "gemini-3.5-flash-lite",
+        default_model: "gemini-flash-lite-latest",
         models: [
-          "gemini-3.5-flash-lite",
+          "gemini-flash-lite-latest",
           "gemma-4-26b-a4b-it",
         ],
       };

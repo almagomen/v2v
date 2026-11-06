@@ -137,7 +137,7 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
             syncedCount++;
           }
           if (remoteTokens.title_model) {
-            const known = ["gemini-3.5-flash-lite", "gemma-4-26b-a4b-it"];
+            const known = ["gemini-flash-lite-latest", "gemma-4-26b-a4b-it"];
             if (known.includes(remoteTokens.title_model)) {
               setTitleModel(remoteTokens.title_model);
             } else {
@@ -146,7 +146,7 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
             }
           }
           if (remoteTokens.translation_model) {
-            const known = ["gemini-3.5-flash-lite", "gemma-4-26b-a4b-it"];
+            const known = ["gemini-flash-lite-latest", "gemma-4-26b-a4b-it"];
             if (known.includes(remoteTokens.translation_model)) {
               setTranslationModel(remoteTokens.translation_model);
             } else {
@@ -368,7 +368,7 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 value={translationModel}
                 onChange={(e) => setTranslationModel(e.target.value)}
               >
-                <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
+                <option value="gemini-flash-lite-latest">gemini-flash-lite-latest</option>
                 <option value="gemma-4-26b-a4b-it">gemma-4-26b-a4b-it</option>
                 <option value="custom">personalizado...</option>
               </select>
@@ -394,7 +394,7 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                 value={titleModel}
                 onChange={(e) => setTitleModel(e.target.value)}
               >
-                <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
+                <option value="gemini-flash-lite-latest">gemini-flash-lite-latest</option>
                 <option value="gemma-4-26b-a4b-it">gemma-4-26b-a4b-it</option>
                 <option value="custom">personalizado...</option>
               </select>
