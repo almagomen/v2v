@@ -268,6 +268,21 @@ class TestQaGate(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertIn("speed_p95", [f["metric"] for f in report["failures"]])
 
+    def test_umbral_de_velocidad_es_1_20(self):
+        """1.20x es el techo aceptado; 1.21x ya se marca como apresurado."""
+        en_el_limite = summarize(
+            [self._rec(seg=i, tempo=1.20) for i in range(1, 21)],
+            expected_segments=20,
+        )
+        self.assertTrue(en_el_limite["passed"], en_el_limite["failures"])
+
+        por_encima = summarize(
+            [self._rec(seg=i, tempo=1.21) for i in range(1, 21)],
+            expected_segments=20,
+        )
+        self.assertFalse(por_encima["passed"])
+        self.assertIn("speed_p95", [f["metric"] for f in por_encima["failures"]])
+
     def test_recorte_de_silencio_no_cuenta_como_velocidad(self):
         """Un `✂️ -5%` acelera el clip pero no la voz: no debe tumbar el gate."""
         recs = [

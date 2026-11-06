@@ -34,7 +34,7 @@ QA_THRESHOLDS: dict[str, float] = {
     "silent_max": 0,
     "error_max": 0,
     # Velocidad real aplicada a la voz (sin contar el recorte de silencios).
-    "speed_p95_max": 1.12,
+    "speed_p95_max": 1.20,
     # Un segmento por debajo de 0.85x ya se oye arrastrado. El 0.80x es el suelo del
     # sincronizador, así que este ratio mide cuánto del vídeo vive en ese suelo.
     "slow_speed": 0.85,

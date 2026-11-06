@@ -56,13 +56,13 @@ class TestFormatReport(unittest.TestCase):
             segments=5,
             expected_segments=5,
             passed=False,
-            metrics={"speed_p95": 1.174},
-            failures=[{"metric": "speed_p95", "observed": 1.174, "limit": 1.12}],
+            metrics={"speed_p95": 1.234},
+            failures=[{"metric": "speed_p95", "observed": 1.234, "limit": 1.20}],
         )
         text = "\n".join(format_report(report))
 
-        self.assertIn("Velocidad de la voz (p95): 1.17x", text)
-        self.assertIn("máximo 1.12x", text)
+        self.assertIn("Velocidad de la voz (p95): 1.23x", text)
+        self.assertIn("máximo 1.20x", text)
         self.assertIn("puede sonar apresurado", text)
 
     def test_recorte_solo_aparece_si_hay_recorte(self):
