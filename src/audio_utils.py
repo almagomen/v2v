@@ -544,61 +544,30 @@ def get_audio_file_duration(file_path: Path | str, fallback: Optional[float] = N
     return fallback
 
 
-def trim_edge_silence(
-    arr: Any,
-    rate: int,
-    threshold_ratio: float = 0.01,
-    min_trim_sec: float = 0.12,
-    head_keep_sec: float = 0.08,
-    tail_keep_sec: float = 0.06,
-    min_keep_sec: float = 0.10,
-) -> Any:
-    """Recorta el aire sobrante al inicio y al final de un clip TTS.
+def pad_tail_silence(arr: Any, rate: int, target_sec: float) -> Any:
+    """Añade silencio real al final hasta que el clip dure `target_sec`.
 
-    Fish a veces devuelve ~1 s de silencio al final de un segmento largo. Ese
-    aire alargaba el clip en el timeline y desincronizaba el siguiente
-    segmento. Se conserva un margen mínimo para no cortar consonantes ni
-    respiraciones, y solo se recorta cuando el silencio supera `min_trim_sec`.
-    El máster ``_raw.wav`` se guarda antes de llamar aquí: esta función solo
-    afecta al audio final.
+    Se usa para que el TTS ocupe el mismo tramo que su clip original: si la voz
+    queda más corta, el hueco hasta el siguiente segmento se rellena con
+    silencio real dentro del propio clip (nunca falseando su duración). Así el
+    espacio entre clips en el timeline coincide con el del video original.
     """
-    if arr is None or not rate or rate <= 0:
+    if arr is None or not rate or rate <= 0 or target_sec <= 0:
         return arr
 
-    is_torch = torch is not None and isinstance(arr, torch.Tensor)
-    mono = arr[0] if getattr(arr, "ndim", 1) > 1 else arr
-    samples = mono.detach().cpu().numpy() if is_torch else np.asarray(mono)
-    if samples.size == 0:
+    target_samples = int(round(float(target_sec) * rate))
+    missing = target_samples - int(arr.shape[-1])
+    if missing <= 0:
         return arr
 
-    peak = float(np.max(np.abs(samples)))
-    if peak <= 0.0:
-        return arr
+    if torch is not None and isinstance(arr, torch.Tensor):
+        pad = torch.zeros(
+            (*arr.shape[:-1], missing), dtype=arr.dtype, device=arr.device
+        )
+        return torch.cat([arr, pad], dim=-1)
 
-    threshold = max(peak * threshold_ratio, 1e-4)
-    loud = np.flatnonzero(np.abs(samples) >= threshold)
-    if loud.size == 0:
-        return arr
-
-    total = int(samples.size)
-    head_silence = int(loud[0])
-    tail_silence = int(total - 1 - loud[-1])
-    min_trim = max(1, int(min_trim_sec * rate))
-    min_keep = max(1, int(min_keep_sec * rate))
-
-    start = 0
-    if head_silence > min_trim:
-        start = max(0, head_silence - int(head_keep_sec * rate))
-
-    end = total
-    if tail_silence > min_trim:
-        end = total - max(0, tail_silence - int(tail_keep_sec * rate))
-
-    if end - start < min_keep or (start == 0 and end == total):
-        return arr
-
-    sliced = arr[..., start:end]
-    return sliced.contiguous() if is_torch else np.ascontiguousarray(sliced)
+    pad = np.zeros((*arr.shape[:-1], missing), dtype=arr.dtype)
+    return np.concatenate([arr, pad], axis=-1)
 
 
 def synthesize_segment_audio(
@@ -677,9 +646,6 @@ def synthesize_segment_audio(
         raw_p.parent.mkdir(parents=True, exist_ok=True)
         torchaudio.save(str(raw_p), arr, sample_rate=rate)
 
-    # El máster queda intacto; el clip final pierde el aire de los extremos para
-    # no alargar el timeline ni empujar al segmento siguiente.
-    arr = trim_edge_silence(arr, rate)
     raw_dur = float(arr.shape[-1]) / float(rate)
 
     mode_tag = "✨ 1.00x (natural)"
@@ -778,6 +744,27 @@ def synthesize_segment_audio(
         metrics["speed"] = float(speed)
         mode_tag = f"🎛️ {speed:.2f}x (manual)"
         arr = adjust_audio_duration(arr, target_samples, rate)
+
+    # El TTS debe ocupar el mismo tramo que su clip original. Si la voz quedó más
+    # corta, se rellena la cola con silencio real: el hueco entre segmentos en el
+    # timeline vuelve a coincidir con el del video, sin falsear la duración del
+    # clip (el silencio existe físicamente en el archivo).
+    if (
+        sync_to_original
+        and orig_duration
+        and orig_duration > 0
+        and target_duration is None
+        and (speed is None or abs(speed - 1.0) <= 0.01)
+    ):
+        slot_dur = float(orig_duration)
+        if max_allowed_dur is not None:
+            slot_dur = min(slot_dur, float(max_allowed_dur))
+        current_dur = float(arr.shape[-1]) / float(rate)
+        if slot_dur > current_dur + 1e-3:
+            arr = pad_tail_silence(arr, rate, slot_dur)
+            tail_pad = float(arr.shape[-1]) / float(rate) - current_dur
+            metrics["padded"] = float(metrics.get("padded", 0.0)) + tail_pad
+            mode_tag = f"{mode_tag} +🔇{tail_pad:.2f}s"
 
     final_dur = float(arr.shape[-1]) / float(rate)
 

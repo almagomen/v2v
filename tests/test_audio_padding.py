@@ -3,7 +3,11 @@ import unittest
 
 import numpy as np
 
-from src.audio_utils import distribute_silence_padding, trim_edge_silence
+from src.audio_utils import (
+    distribute_silence_padding,
+    pad_tail_silence,
+    synthesize_segment_audio,
+)
 
 RATE = 1000  # 1 muestra = 1 ms; las ventanas de 40/20 ms siguen siendo válidas
 
@@ -119,54 +123,74 @@ class TestDistributeSilencePadding(unittest.TestCase):
         self.assertLessEqual(out.shape[-1], target)
 
 
-class TestTrimEdgeSilence(unittest.TestCase):
-    def test_recorta_aire_largo_al_inicio_y_al_final(self):
-        arr = np.concatenate([
-            _silence(0.50), _speech(2.0), _silence(1.00),
-        ], axis=-1)
+class TestPadTailSilence(unittest.TestCase):
+    def test_rellena_la_cola_hasta_la_duracion_objetivo(self):
+        arr = _speech(1.0)
 
-        out = trim_edge_silence(arr, RATE)
+        out = pad_tail_silence(arr, RATE, 1.5)
 
-        self.assertLess(out.shape[-1], arr.shape[-1])
-        # Queda voz y solo los márgenes de seguridad (80 ms + 60 ms).
-        expected = int((2.0 + 0.08 + 0.06) * RATE)
-        self.assertAlmostEqual(out.shape[-1], expected, delta=2)
+        self.assertEqual(out.shape[-1], int(1.5 * RATE))
+        self.assertTrue(np.all(out[..., -int(0.5 * RATE):] == 0.0))
+        self.assertTrue(np.all(out[..., :int(1.0 * RATE)] == 0.5))
 
-    def test_conserva_pausas_internas(self):
-        arr = np.concatenate([
-            _silence(0.50), _speech(1.0), _silence(0.80), _speech(1.0), _silence(0.50),
-        ], axis=-1)
+    def test_no_recorta_si_ya_es_mas_largo(self):
+        arr = _speech(2.0)
 
-        out = trim_edge_silence(arr, RATE)
-
-        runs = _silence_runs(out)
-        self.assertTrue(any(abs(run - 0.80) < 0.03 for run in runs), runs)
-
-    def test_no_recorta_silencios_menores_al_minimo(self):
-        arr = np.concatenate([
-            _silence(0.05), _speech(1.0), _silence(0.05),
-        ], axis=-1)
-
-        out = trim_edge_silence(arr, RATE)
+        out = pad_tail_silence(arr, RATE, 1.5)
 
         self.assertEqual(out.shape, arr.shape)
 
-    def test_no_recorta_un_clip_sin_voz(self):
-        arr = _silence(1.0)
+    def test_conserva_la_forma_estereo(self):
+        arr = np.concatenate([_speech(1.0), _speech(1.0)], axis=0)
 
-        out = trim_edge_silence(arr, RATE)
+        out = pad_tail_silence(arr, RATE, 1.5)
 
-        self.assertEqual(out.shape, arr.shape)
+        self.assertEqual(out.shape[0], 2)
+        self.assertEqual(out.shape[-1], int(1.5 * RATE))
+        self.assertTrue(np.all(out[:, -int(0.5 * RATE):] == 0.0))
 
-    def test_no_deja_un_clip_demasiado_corto(self):
-        arr = np.concatenate([
-            _silence(0.50), _speech(0.15), _silence(0.50),
-        ], axis=-1)
+    def test_no_hace_nada_con_objetivo_invalido(self):
+        arr = _speech(1.0)
 
-        out = trim_edge_silence(arr, RATE)
+        self.assertIs(pad_tail_silence(arr, RATE, 0), arr)
+        self.assertIs(pad_tail_silence(arr, 0, 1.5), arr)
 
-        self.assertGreaterEqual(out.shape[-1], int(0.10 * RATE))
-        self.assertGreater(out.shape[-1], 0)
+
+class TestSynthesizeTailPadding(unittest.TestCase):
+    def _synth(self, tts_seconds, orig_duration, max_allowed_dur=None):
+        def fake_tts(text, lang, speaker, **kwargs):
+            return _speech(tts_seconds), RATE
+
+        return synthesize_segment_audio(
+            text="Hola mundo.",
+            lang="es",
+            speaker="default",
+            orig_duration=orig_duration,
+            sync_to_original=True,
+            max_allowed_dur=max_allowed_dur,
+            tts_fn=fake_tts,
+        )
+
+    def test_rellena_el_hueco_cuando_el_tts_es_mas_corto(self):
+        arr, rate, raw_dur, final_dur, _tag = self._synth(1.90, 2.0, 2.0)
+
+        self.assertAlmostEqual(raw_dur, 1.90, places=3)
+        self.assertAlmostEqual(final_dur, 2.0, places=3)
+        self.assertEqual(arr.shape[-1], int(2.0 * RATE))
+        self.assertTrue(np.all(arr[..., -int(0.10 * RATE):] == 0.0))
+
+    def test_no_rellena_mas_alla_del_limite_del_siguiente_clip(self):
+        arr, rate, _raw_dur, final_dur, _tag = self._synth(1.90, 2.0, 1.95)
+
+        self.assertAlmostEqual(final_dur, 1.95, places=3)
+        self.assertEqual(arr.shape[-1], int(1.95 * RATE))
+
+    def test_no_rellena_si_el_tts_ya_es_mas_largo(self):
+        arr, rate, raw_dur, final_dur, _tag = self._synth(2.20, 2.0, 2.65)
+
+        self.assertAlmostEqual(raw_dur, 2.20, places=3)
+        self.assertAlmostEqual(final_dur, 2.20, places=3)
+        self.assertEqual(arr.shape[-1], int(2.20 * RATE))
 
 
 if __name__ == "__main__":
