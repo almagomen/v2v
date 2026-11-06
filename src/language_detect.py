@@ -5,6 +5,11 @@ identificar el idioma: al pedirle esos logits reparte la probabilidad entre
 decenas de idiomas (0.02 para casi todos). Whisper sí está entrenado para esa
 tarea, así que se resuelve el idioma aquí y se le pasa ya elegido.
 
+Para esta tarea se usa por defecto `whisper-tiny` (~39M parámetros), no el
+modelo de transcripción: promediar tres ventanas de 30 s sobre la voz separada
+basta para el idioma y ahorra ~1.5 GB de VRAM frente a `turbo`. El tamaño se
+puede cambiar con `WHISPER_LANG_MODEL` (`base`, `small`, …).
+
 El módulo no importa Whisper ni `src.stt` al cargarse: así los tests pueden
 usarlo sin arrastrar torch, google-genai ni el resto del pipeline.
 """
@@ -42,9 +47,9 @@ def detect_language_whisper(
     import whisper
 
     if model is None:
-        from src.stt import get_whisper_model
+        from src.stt import get_language_detector_model
 
-        model = get_whisper_model()
+        model = get_language_detector_model()
 
     audio = whisper.load_audio(str(media_path))
     span = int(whisper.audio.N_SAMPLES)

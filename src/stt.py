@@ -4,6 +4,7 @@ Transcripción STT con Whisper y procesamiento con diarización.
 import concurrent.futures
 import contextlib
 import io
+import os
 import re
 import time
 from pathlib import Path
@@ -38,16 +39,62 @@ if not WHISPER_DIR and KAGGLE_INPUT_DIR and KAGGLE_INPUT_DIR.exists():
             WHISPER_DIR = cand
             break
 
+# Para detectar idioma no hace falta el modelo de transcripción: Whisper "tiny"
+# (~39M parámetros frente a ~809M de turbo) acierta el idioma promediando tres
+# ventanas de 30 s sobre la voz ya separada. Se puede subir con WHISPER_LANG_MODEL
+# (p. ej. "base" o "small") si algún idioma cercano se confunde.
+WHISPER_LANG_MODEL = (os.getenv("WHISPER_LANG_MODEL", "tiny").strip() or "tiny")
+
+# El detector necesita su propio directorio: el de turbo puede ser de solo
+# lectura (dataset de Kaggle) y tiny aún no estar descargado. Si no hay ruta
+# propia se deja `None` para que Whisper use su caché escribible por defecto.
+WHISPER_LANG_DIR = DRIVE_DIR / "whisper_lang" if DRIVE_DIR else None
+if WHISPER_LANG_DIR is None and KAGGLE_INPUT_DIR and KAGGLE_INPUT_DIR.exists():
+    for cand in [
+        KAGGLE_INPUT_DIR / "whisper_tiny",
+        KAGGLE_INPUT_DIR / "whisper-tiny",
+        KAGGLE_INPUT_DIR / "v2v-models" / "whisper_tiny",
+    ]:
+        if cand.exists():
+            WHISPER_LANG_DIR = cand
+            break
+
 
 def get_whisper_model():
+    """Modelo de transcripción para el motor `stable` (turbo)."""
     return get_or_load_model(
         "whisper",
         stable_whisper.load_model,
         "turbo",
         device=DEVICE,
         download_root=WHISPER_DIR,
-        label="whisper-turbo (detector de idioma para CrisperWhisper)",
+        label="whisper-turbo (transcripción)",
     )
+
+
+def get_language_detector_model():
+    """Modelo ligero usado solo por la cabeza de idioma (CrisperWhisper)."""
+    size = WHISPER_LANG_MODEL
+    try:
+        return get_or_load_model(
+            f"whisper_lang_{size}",
+            stable_whisper.load_model,
+            size,
+            device=DEVICE,
+            download_root=WHISPER_LANG_DIR,
+            label=f"whisper-{size} (detector de idioma para CrisperWhisper)",
+        )
+    except Exception as exc:
+        if size == "turbo":
+            raise
+        # Si el checkpoint ligero no está disponible (p. ej. Kaggle sin Internet
+        # y dataset solo con turbo), se degrada al modelo de transcripción.
+        print(
+            f"⚠️ No se pudo cargar whisper-{size} para detectar idioma ({exc}); "
+            "se usa whisper-turbo.",
+            flush=True,
+        )
+        return get_whisper_model()
 
 
 def sanitize_whisper_raw(segments_obj: Any, detected_language: str = "") -> dict:

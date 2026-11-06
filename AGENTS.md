@@ -114,7 +114,7 @@ apps/web/src/v2v/
 1. **Cero Dependencias Binarias Propietarias (Sin Pickle)**: Toda inferencia se guarda en `result.json` en la carpeta del video (`drive_dir / out_dir / result.json`). Centralizado en `src/result_store.py`.
 2. **Indexación O(1) de URLs en Cola**: Mantenido en `Queue/url_index.json`.
 3. **Escritura por Lotes de Logs (`_LogBuffer`)**: `api/job_store.py` ejecuta flush cada 2s o 4KB, reduciendo la contención de disco.
-4. **Dual-GPU Pipeline**: Whisper Turbo en GPU 0 y Pyannote Diarization en GPU 1 en paralelo con `ThreadPoolExecutor` en `kaggle_launch.ipynb`.
+4. **Dual-GPU Pipeline**: CrisperWhisper (o Whisper Turbo en modo `stable`) y el detector de idioma Whisper `tiny` en GPU 0, y Pyannote Diarization en GPU 1, en paralelo con `ThreadPoolExecutor` en `kaggle_launch.ipynb`. El detector se puede cambiar con `WHISPER_LANG_MODEL`.
 5. **Transferencia Optimizada**: Instrumental (`no_vocals.m4a`), voz aislada (`vocals.m4a`), segmentos originales (`Seqs_src/*.m4a`) y segmentos sintetizados (`Seqs_trg/tts_*.m4a`) servidos en AAC/M4A 192k (ahorro del 90-94% de peso, reduciendo paquetes de segmentos de 27MB a ~2.5MB con fidelidad acústica de estudio) y TAR de segmentos cacheados en disco servidos vía `FileResponse` (primer byte <10ms) para transferencias instantáneas e ilimitadas a través de Cloudflare Tunnel.
 
 ---
