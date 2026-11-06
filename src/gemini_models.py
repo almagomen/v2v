@@ -97,19 +97,29 @@ def create_interaction(client: Any, call_kwargs: dict[str, Any]) -> Any:
 
     Se reintenta una sola vez con el modelo concreto más reciente de la familia.
     Cualquier otro error se propaga sin tocar el nombre del modelo.
+
+    Si el alias ya se resolvió en este proceso, se usa directamente el nombre
+    concreto: así el 404 (y su log) ocurre una sola vez, no en cada video.
     """
     kwargs = dict(call_kwargs)
-    model = str(kwargs.get("model") or "")
+    alias = str(kwargs.get("model") or "")
+    cached = _MODEL_ALIAS_CACHE.get(alias)
+    if cached:
+        kwargs["model"] = cached
+
     try:
         return client.interactions.create(**kwargs)
     except Exception as exc:
         if not is_model_not_found(exc):
             raise
-        resolved = resolve_latest_alias(client, model)
-        if not resolved or resolved == model:
+        if cached:
+            # El modelo concreto cacheado ya no existe (retirado): se vuelve a resolver.
+            _MODEL_ALIAS_CACHE.pop(alias, None)
+        resolved = resolve_latest_alias(client, alias)
+        if not resolved or resolved == kwargs.get("model"):
             raise
         print(
-            f"ℹ️ [Gemini] El alias '{model}' no existe en la API; "
+            f"ℹ️ [Gemini] El alias '{alias}' no existe en la API; "
             f"se usa '{resolved}' (última versión disponible).",
             flush=True,
         )

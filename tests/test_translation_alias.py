@@ -172,6 +172,46 @@ class TestCreateInteraction(unittest.TestCase):
         self.assertEqual(client.interactions.created[0]["model"], "gemini-flash-lite-latest")
         self.assertEqual(client.interactions.created[1]["model"], "gemini-3.5-flash-lite")
 
+    def test_alias_cacheado_no_repite_el_404(self):
+        gemini_models._MODEL_ALIAS_CACHE["gemini-flash-lite-latest"] = "gemini-3.5-flash-lite"
+        client = _FakeClient(
+            [_model("gemini-3.5-flash-lite", "2025-06-01T00:00:00Z")],
+            missing=("gemini-flash-lite-latest",),
+        )
+
+        with redirect_stdout(io.StringIO()) as log:
+            result = gemini_models.create_interaction(
+                client, {"model": "gemini-flash-lite-latest", "input": "hola"}
+            )
+
+        self.assertEqual(result.output_text, "ok")
+        self.assertEqual(len(client.interactions.created), 1)
+        self.assertEqual(client.interactions.created[0]["model"], "gemini-3.5-flash-lite")
+        self.assertEqual(client.models.calls, 0)
+        self.assertNotIn("no existe", log.getvalue())
+
+    def test_modelo_cacheado_retirado_se_vuelve_a_resolver(self):
+        gemini_models._MODEL_ALIAS_CACHE["gemini-flash-lite-latest"] = "gemini-3.5-flash-lite"
+        client = _FakeClient(
+            [_model("gemini-3.6-flash-lite", "2025-09-01T00:00:00Z")],
+            missing=("gemini-3.5-flash-lite",),
+        )
+
+        with redirect_stdout(io.StringIO()):
+            result = gemini_models.create_interaction(
+                client, {"model": "gemini-flash-lite-latest", "input": "hola"}
+            )
+
+        self.assertEqual(result.output_text, "ok")
+        self.assertEqual(
+            [c["model"] for c in client.interactions.created],
+            ["gemini-3.5-flash-lite", "gemini-3.6-flash-lite"],
+        )
+        self.assertEqual(
+            gemini_models._MODEL_ALIAS_CACHE["gemini-flash-lite-latest"],
+            "gemini-3.6-flash-lite",
+        )
+
     def test_error_distinto_de_404_no_reintenta(self):
         client = _FakeClient(
             [_model("gemini-3.5-flash-lite", "2025-06-01T00:00:00Z")],

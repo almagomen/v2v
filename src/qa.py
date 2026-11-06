@@ -407,7 +407,7 @@ def summarize(
 def _metric_text(metric: str, value: Any) -> str:
     """Formatea un valor de QA con la unidad que le corresponde."""
     if value is None:
-        return "—"
+        return "sin datos"
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -458,6 +458,18 @@ def format_report(report: dict[str, Any]) -> list[str]:
     excess = m.get("dead_air_excess")
     mid = m.get("dead_air_mid")
 
+    # `length_dev_over_p95` es None cuando ningún segmento desbordó (la lista de
+    # desbordes está vacía): eso es 0%, no falta de datos. `rms_std` es None con
+    # un solo segmento, donde la desviación no está definida.
+    over = m.get("length_dev_over_p95")
+    over_txt = _metric_text("length_dev_over_p95", 0.0 if over is None else over)
+    rms = m.get("rms_std")
+    if rms is None:
+        rms_txt, rms_note = "sin datos", "se necesita más de un segmento para medirla"
+    else:
+        rms_txt = _metric_text("rms_std", rms)
+        rms_note = "0 = todos al mismo nivel"
+
     lines = [
         header,
         "   Voz:",
@@ -470,13 +482,12 @@ def format_report(report: dict[str, Any]) -> list[str]:
         "   Sincronía con el video original:",
         f"     • Desvío de duración (p95): {_metric_text('length_dev_p95', m.get('length_dev_p95'))} — "
         "diferencia frente al hueco original",
-        f"     • Desborde (p95): {_metric_text('length_dev_over_p95', m.get('length_dev_over_p95'))} — "
+        f"     • Desborde (p95): {over_txt} — "
         "cuánto se pasó del hueco",
         f"     • Solapes: {m.get('overlap_count', 0)} clip(s) "
         f"({_metric_text('overlap_secs', m.get('overlap_secs'))}) — un clip que invade al siguiente",
         "   Volumen y contenido:",
-        f"     • Variación de volumen (σ RMS): {_metric_text('rms_std', m.get('rms_std'))} — "
-        "0 = todos al mismo nivel",
+        f"     • Variación de volumen (σ RMS): {rms_txt} — {rms_note}",
         f"     • Sin voz: {m.get('silent', 0)} · traducción de respaldo: {m.get('fallback', 0)} · "
         f"términos protegidos rotos: {m.get('entity_fail', 0)}",
     ]
