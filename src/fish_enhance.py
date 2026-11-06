@@ -148,18 +148,21 @@ def enhance_text(
         ver = version or "s2.1-pro"
 
     try:
-        from src.config import get_fish_api_key
+        from src.config import get_fish_enhance_token
 
-        api_key = get_fish_api_key()
+        token = get_fish_enhance_token()
     except Exception:
-        api_key = None
+        token = None
 
-    if not api_key:
-        _log("[auto-emociones] FISH_API_KEY no configurada: se usa el texto original.")
+    if not token:
+        _log(
+            "[auto-emociones] FISH_ENHANCE_TOKEN no configurado: se usa el texto "
+            "original. Añade el token de sesión del Studio de Fish para activarlo."
+        )
         return None
 
     headers = {
-        "Authorization": f"Bearer {api_key.strip()}",
+        "Authorization": f"Bearer {token.strip()}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
@@ -179,8 +182,8 @@ def enhance_text(
                 if getattr(response, "text", ""):
                     detail = f" | {str(response.text)[:300]}"
                 _disable(
-                    f"/enhance/text rechazó la clave (HTTP {status}){detail}. "
-                    "La API pública de Fish no expone este endpoint.",
+                    f"/enhance/text rechazó el token (HTTP {status}){detail}. "
+                    "Copia un token de sesión nuevo desde el Studio de Fish.",
                     _log,
                 )
                 return None
@@ -227,6 +230,112 @@ def enhance_text(
             return None
 
     return None
+
+
+def test_token(
+    token: Optional[str] = None,
+    version: Optional[str] = None,
+    timeout: int = 20,
+) -> dict:
+    """Prueba el token de sesión contra ``/enhance/text`` sin desactivar nada.
+
+    Devuelve un dict con ``ok``, ``status``, ``message`` y ``preview`` para que
+    el panel pueda avisar de un token caducado o inválido al instante.
+    """
+    token_val = (token or "").strip()
+    if not token_val:
+        try:
+            from src.config import get_fish_enhance_token
+
+            token_val = (get_fish_enhance_token() or "").strip()
+        except Exception:
+            token_val = ""
+
+    if not token_val:
+        return {
+            "ok": False,
+            "status": 0,
+            "message": "No hay FISH_ENHANCE_TOKEN configurado.",
+            "preview": None,
+        }
+
+    try:
+        from src.config import FISH_ENHANCE_VERSIONS
+    except Exception:
+        FISH_ENHANCE_VERSIONS = ("s2.1-pro", "drama-3")
+
+    try:
+        ver = (version or get_version()).strip().lower()
+    except Exception:
+        ver = "s2.1-pro"
+    if ver not in FISH_ENHANCE_VERSIONS:
+        ver = "s2.1-pro"
+
+    headers = {
+        "Authorization": f"Bearer {token_val}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    payload = {
+        "payload": {
+            "text": "Hola, esta es una prueba de conexión.",
+            "version": ver,
+        }
+    }
+
+    try:
+        response = requests.post(
+            FISH_ENHANCE_URL, headers=headers, json=payload, timeout=timeout
+        )
+    except requests.exceptions.RequestException as exc:
+        return {
+            "ok": False,
+            "status": 0,
+            "message": f"Error de red al probar el token: {exc}",
+            "preview": None,
+        }
+
+    status = int(getattr(response, "status_code", 0) or 0)
+    body = str(getattr(response, "text", "") or "")
+
+    if status == 200:
+        try:
+            data = response.json()
+        except Exception:
+            data = {}
+        enhanced = str(data.get("enhanced_script") or "").strip()
+        if enhanced:
+            return {
+                "ok": True,
+                "status": 200,
+                "message": "Token válido: /enhance/text responde correctamente.",
+                "preview": enhanced[:200],
+            }
+        return {
+            "ok": False,
+            "status": 200,
+            "message": "El token responde, pero Fish no devolvió texto mejorado.",
+            "preview": None,
+        }
+
+    if status in (401, 403):
+        return {
+            "ok": False,
+            "status": status,
+            "message": (
+                f"Token inválido o caducado (HTTP {status}). "
+                "Copia uno nuevo del Studio de Fish."
+            ),
+            "preview": None,
+        }
+
+    detail = f" | {body[:200]}" if body else ""
+    return {
+        "ok": False,
+        "status": status,
+        "message": f"HTTP {status}{detail}",
+        "preview": None,
+    }
 
 
 def enhance_texts(

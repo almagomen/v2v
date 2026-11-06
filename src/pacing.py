@@ -42,16 +42,18 @@ SPEECH_RATES: dict[str, float] = {
 }
 DEFAULT_RATE: float = 15.5
 
-# Banda de encaje aceptable: por debajo del 94% del slot el clip no lo llena
-# (aire muerto), por encima del 110% el TTS tendrá que acelerarse de forma audible.
+# Banda de encaje aceptable del texto traducido: por debajo del 94% del slot el
+# texto queda demasiado corto y sonará con aire muerto aunque el sincronizador
+# estire pausas o aplique atempo; por encima del 110% habrá que acelerar de forma
+# audible.
 FIT_MIN = 0.94
 FIT_MAX = 1.10
 
 # Desviación que dispara la reescritura acotada del texto. Asimétrica a propósito:
-# quedarse corto deja silencio muerto (el defecto que el espectador nota) mientras que
-# pasarse solo obliga a comprimir un poco, que es mucho menos audible. El umbral corto
-# se ajusta a `SYNC_TOLERANCE` de audio_utils (0.94): por debajo de -10% el clip ya se
-# estira de forma audible, así que merece otra pasada de texto.
+# quedarse corto deja aire muerto (el defecto que el espectador nota) mientras que
+# pasarse solo obliga a comprimir un poco, que es mucho menos audible. El umbral
+# corto (10%) evita reescribir por diferencias que el sincronizador ya resuelve
+# estirando pausas internas o con un atempo suave.
 REWRITE_SHORT = 0.10
 REWRITE_LONG = 0.25
 MIN_WORDS_TO_REWRITE = 3

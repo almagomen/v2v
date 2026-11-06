@@ -12,6 +12,8 @@ from api.schemas import (
     JobPollResponse,
     TokenSettingsRequest,
     TokenSettingsResponse,
+    FishEnhanceTestRequest,
+    FishEnhanceTestResponse,
 )
 from api.job_store import get_job
 from api.service import start_process
@@ -183,6 +185,7 @@ def get_tokens():
     from src.config import (
         get_raw_google_api_keys,
         get_fish_api_key,
+        get_fish_enhance_token,
         get_stt_engine,
         get_fish_auto_emotions,
         get_fish_enhance_version,
@@ -194,6 +197,7 @@ def get_tokens():
     )
     return TokenSettingsResponse(
         fish_api_key=get_fish_api_key() or "",
+        fish_enhance_token=get_fish_enhance_token() or "",
         google_api_key=get_raw_google_api_keys() or "",
         title_model=get_default_title_model(),
         translation_model=get_default_translation_model(),
@@ -211,6 +215,7 @@ def post_tokens(req: TokenSettingsRequest):
     from src.config import (
         set_google_api_keys,
         set_fish_api_key,
+        set_fish_enhance_token,
         get_stt_engine,
         set_stt_engine,
         get_fish_auto_emotions,
@@ -229,6 +234,10 @@ def post_tokens(req: TokenSettingsRequest):
     fish_api_val = (req.fish_api_key or "").strip()
     if req.fish_api_key is not None:
         set_fish_api_key(fish_api_val)
+
+    fish_enhance_val = (req.fish_enhance_token or "").strip()
+    if req.fish_enhance_token is not None:
+        set_fish_enhance_token(fish_enhance_val)
 
     google_api_val = (req.google_api_key or "").strip()
     if req.google_api_key is not None:
@@ -257,6 +266,7 @@ def post_tokens(req: TokenSettingsRequest):
         exists = env_path.exists()
         google_found = False
         fish_found = False
+        enhance_token_found = False
         title_found = False
         trans_found = False
         stt_found = False
@@ -272,6 +282,10 @@ def post_tokens(req: TokenSettingsRequest):
                     if fish_api_val:
                         lines[i] = f"FISH_API_KEY={fish_api_val}\n"
                     fish_found = True
+                elif line.strip().startswith("FISH_ENHANCE_TOKEN="):
+                    if req.fish_enhance_token is not None:
+                        lines[i] = f"FISH_ENHANCE_TOKEN={fish_enhance_val}\n"
+                    enhance_token_found = True
                 elif line.strip().startswith("GOOGLE_API_KEY="):
                     if google_api_val:
                         lines[i] = f"GOOGLE_API_KEY={google_api_val}\n"
@@ -302,6 +316,8 @@ def post_tokens(req: TokenSettingsRequest):
 
         if not fish_found and fish_api_val:
             lines.append(f"FISH_API_KEY={fish_api_val}\n")
+        if not enhance_token_found and req.fish_enhance_token is not None:
+            lines.append(f"FISH_ENHANCE_TOKEN={fish_enhance_val}\n")
         if not google_found and google_api_val:
             lines.append(f"GOOGLE_API_KEY={google_api_val}\n")
         if not title_found and req.title_model:
@@ -325,6 +341,7 @@ def post_tokens(req: TokenSettingsRequest):
 
     return TokenSettingsResponse(
         fish_api_key=fish_api_val or None,
+        fish_enhance_token=fish_enhance_val or None,
         google_api_key=google_api_val or None,
         title_model=get_default_title_model(),
         translation_model=get_default_translation_model(),
@@ -334,3 +351,12 @@ def post_tokens(req: TokenSettingsRequest):
         available_models=POPULAR_GEMINI_MODELS,
         message="Configuración de tokens y modelos actualizada en caliente",
     )
+
+
+@router.post("/settings/fish-enhance/test", response_model=FishEnhanceTestResponse)
+def test_fish_enhance_token(req: FishEnhanceTestRequest):
+    """Comprueba el token de ``/enhance/text`` y avisa si está caducado."""
+    from src.fish_enhance import test_token
+
+    result = test_token(token=req.token, version=req.version)
+    return FishEnhanceTestResponse(**result)

@@ -49,7 +49,7 @@ class TestFishEnhance(unittest.TestCase):
                 os.environ[key] = value
 
     def _enhance(self, text, script, version="s2.1-pro", log_fn=None):
-        with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+        with patch("src.config.get_fish_enhance_token", return_value="test-token"), patch(
             "src.fish_enhance.requests.post",
             return_value=FakeResponse(200, {"enhanced_script": script}),
         ):
@@ -87,7 +87,7 @@ class TestFishEnhance(unittest.TestCase):
         self.assertEqual(out, script)
 
     def test_siempre_llama_a_fish_sin_cache(self):
-        with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+        with patch("src.config.get_fish_enhance_token", return_value="test-token"), patch(
             "src.fish_enhance.requests.post",
             return_value=FakeResponse(200, {"enhanced_script": "[calm] Hola mundo."}),
         ) as post:
@@ -100,7 +100,7 @@ class TestFishEnhance(unittest.TestCase):
 
     def test_registra_el_fallo_en_el_log(self):
         logs: list[str] = []
-        with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+        with patch("src.config.get_fish_enhance_token", return_value="test-token"), patch(
             "src.fish_enhance.requests.post",
             return_value=FakeResponse(500),
         ):
@@ -112,7 +112,7 @@ class TestFishEnhance(unittest.TestCase):
 
     def test_401_desactiva_el_endpoint_una_sola_vez(self):
         logs: list[str] = []
-        with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+        with patch("src.config.get_fish_enhance_token", return_value="test-token"), patch(
             "src.fish_enhance.requests.post",
             return_value=FakeResponse(401, text="Invalid token"),
         ) as post:
@@ -133,7 +133,7 @@ class TestFishEnhance(unittest.TestCase):
     def test_403_y_404_tambien_desactivan(self):
         for status in (403, 404):
             fish_enhance.reset_disable_state()
-            with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+            with patch("src.config.get_fish_enhance_token", return_value="test-token"), patch(
                 "src.fish_enhance.requests.post",
                 return_value=FakeResponse(status),
             ) as post:
@@ -143,7 +143,7 @@ class TestFishEnhance(unittest.TestCase):
 
     def test_400_no_reintenta_ni_desactiva(self):
         logs: list[str] = []
-        with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+        with patch("src.config.get_fish_enhance_token", return_value="test-token"), patch(
             "src.fish_enhance.requests.post",
             return_value=FakeResponse(400, text="bad payload"),
         ) as post:
@@ -154,7 +154,7 @@ class TestFishEnhance(unittest.TestCase):
         self.assertEqual(post.call_count, 1)
         self.assertTrue(any("HTTP 400" in msg for msg in logs))
 
-        with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+        with patch("src.config.get_fish_enhance_token", return_value="test-token"), patch(
             "src.fish_enhance.requests.post",
             return_value=FakeResponse(200, {"enhanced_script": "[calm] Hola."}),
         ) as post_ok:
@@ -162,14 +162,14 @@ class TestFishEnhance(unittest.TestCase):
         self.assertEqual(out, "[calm] Hola.")
         self.assertEqual(post_ok.call_count, 1)
 
-    def test_registra_el_fallo_sin_api_key(self):
+    def test_registra_el_fallo_sin_token(self):
         logs: list[str] = []
-        with patch("src.config.get_fish_api_key", return_value=None):
+        with patch("src.config.get_fish_enhance_token", return_value=None):
             out = fish_enhance.enhance_text(
                 "Hola mundo.", max_retries=0, log_fn=logs.append
             )
         self.assertIsNone(out)
-        self.assertTrue(any("FISH_API_KEY" in msg for msg in logs))
+        self.assertTrue(any("FISH_ENHANCE_TOKEN" in msg for msg in logs))
 
     def test_no_llama_a_fish_si_solo_hay_etiquetas(self):
         with patch("src.fish_enhance.requests.post") as post:
@@ -227,6 +227,76 @@ class TestFishEnhance(unittest.TestCase):
 
             saved = load_result(folder)
             self.assertEqual(saved["segments"][0]["text"], "[happy] Hola mundo.")
+
+
+class TestFishEnhanceToken(unittest.TestCase):
+    """El botón «Probar token» debe avisar de tokens válidos y caducados."""
+
+    def setUp(self):
+        fish_enhance.reset_disable_state()
+
+    def tearDown(self):
+        fish_enhance.reset_disable_state()
+
+    def test_token_valido_devuelve_ok_y_preview(self):
+        with patch(
+            "src.fish_enhance.requests.post",
+            return_value=FakeResponse(200, {"enhanced_script": "[calm] Hola."}),
+        ) as post:
+            res = fish_enhance.test_token(token="abc", version="drama-3")
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["status"], 200)
+        self.assertEqual(res["preview"], "[calm] Hola.")
+        payload = post.call_args.kwargs["json"]["payload"]
+        self.assertEqual(payload["version"], "drama-3")
+        headers = post.call_args.kwargs["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer abc")
+
+    def test_token_caducado_avisa_sin_desactivar_el_endpoint(self):
+        with patch(
+            "src.fish_enhance.requests.post",
+            return_value=FakeResponse(401, text="unauthorized"),
+        ):
+            res = fish_enhance.test_token(token="caducado")
+
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["status"], 401)
+        self.assertIn("caducado", res["message"].lower())
+        self.assertIsNone(fish_enhance._disabled_reason())
+
+    def test_sin_token_devuelve_mensaje_claro_sin_llamar_a_fish(self):
+        with patch("src.config.get_fish_enhance_token", return_value=None), patch(
+            "src.fish_enhance.requests.post"
+        ) as post:
+            res = fish_enhance.test_token()
+
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["status"], 0)
+        self.assertIn("FISH_ENHANCE_TOKEN", res["message"])
+        post.assert_not_called()
+
+    def test_error_de_red_no_marca_el_token_como_caducado(self):
+        with patch(
+            "src.fish_enhance.requests.post",
+            side_effect=requests.ConnectionError("boom"),
+        ):
+            res = fish_enhance.test_token(token="abc")
+
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["status"], 0)
+        self.assertIn("red", res["message"].lower())
+
+    def test_guardar_token_reactiva_el_endpoint(self):
+        from src.config import set_fish_enhance_token
+
+        fish_enhance._disable("HTTP 401", lambda _msg: None)
+        self.assertIsNotNone(fish_enhance._disabled_reason())
+
+        with patch.dict(os.environ, {}, clear=False):
+            set_fish_enhance_token("nuevo-token")
+            self.assertIsNone(fish_enhance._disabled_reason())
+            self.assertEqual(os.environ.get("FISH_ENHANCE_TOKEN"), "nuevo-token")
 
 
 if __name__ == "__main__":

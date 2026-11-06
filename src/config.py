@@ -205,24 +205,73 @@ def rotate_google_api_key() -> str | None:
     return next_key
 
 
-def get_fish_api_key() -> str | None:
-    """Retorna la API Key de Fish Audio desde variables de entorno o Colab."""
-    # 1. Variable de entorno (env o cargada previamente en la celda inicial)
-    env_key = os.getenv("FISH_API_KEY")
-    if env_key and env_key.strip():
-        return env_key.strip()
-
-    # 2. Colab Secrets (userdata)
+def _get_platform_secret(name: str) -> str | None:
+    """Lee un secreto de Colab userdata o Kaggle Secrets, en ese orden."""
     try:
         from google.colab import userdata
-        val = userdata.get("FISH_API_KEY")
+
+        val = userdata.get(name)
         if val and str(val).strip():
-            os.environ["FISH_API_KEY"] = str(val).strip()
+            return str(val).strip()
+    except Exception:
+        pass
+
+    try:
+        from kaggle_secrets import UserSecretsClient
+
+        val = UserSecretsClient().get_secret(name)
+        if val and str(val).strip():
             return str(val).strip()
     except Exception:
         pass
 
     return None
+
+
+def get_fish_api_key() -> str | None:
+    """Retorna la API Key de Fish Audio desde variables de entorno, Colab o Kaggle."""
+    # 1. Variable de entorno (env o cargada previamente en la celda inicial)
+    env_key = os.getenv("FISH_API_KEY")
+    if env_key and env_key.strip():
+        return env_key.strip()
+
+    # 2. Secretos de la plataforma (Colab userdata / Kaggle Secrets)
+    val = _get_platform_secret("FISH_API_KEY")
+    if val:
+        os.environ["FISH_API_KEY"] = val
+    return val
+
+
+def get_fish_enhance_token() -> str | None:
+    """Token de sesión web de Fish para ``/enhance/text``.
+
+    Es independiente de ``FISH_API_KEY``: la API key pública no autentica el
+    endpoint interno del Studio. Se lee del entorno o de los secretos de
+    Colab/Kaggle (``FISH_ENHANCE_TOKEN``).
+    """
+    env_token = os.getenv("FISH_ENHANCE_TOKEN")
+    if env_token and env_token.strip():
+        return env_token.strip()
+
+    val = _get_platform_secret("FISH_ENHANCE_TOKEN")
+    if val:
+        os.environ["FISH_ENHANCE_TOKEN"] = val
+    return val
+
+
+def set_fish_enhance_token(token_str: str | None) -> None:
+    """Actualiza el token de ``/enhance/text`` y reactiva el endpoint."""
+    val = (token_str or "").strip()
+    if val:
+        os.environ["FISH_ENHANCE_TOKEN"] = val
+    else:
+        os.environ.pop("FISH_ENHANCE_TOKEN", None)
+    try:
+        from src import fish_enhance
+
+        fish_enhance.reset_disable_state()
+    except Exception:
+        pass
 
 
 def set_fish_api_key(key_str: str | None) -> None:

@@ -82,6 +82,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
 
   const [backendUrl, setBackendUrl] = React.useState<string>(() => v2vApi.getBackendUrl());
   const [fishApiKey, setFishApiKey] = React.useState("");
+  const [fishEnhanceToken, setFishEnhanceToken] = React.useState("");
   const [googleApiKey, setGoogleApiKey] = React.useState("");
   const [titleModel, setTitleModel] = React.useState<string>("gemini-flash-lite-latest");
   const [customTitleModel, setCustomTitleModel] = React.useState<string>("");
@@ -118,6 +119,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     try {
       const res = await v2vApi.getTokens();
       if (res.fish_api_key !== undefined) setFishApiKey(res.fish_api_key || "");
+      if (res.fish_enhance_token !== undefined) setFishEnhanceToken(res.fish_enhance_token || "");
       if (res.google_api_key !== undefined) setGoogleApiKey(res.google_api_key || "");
 
       const knownModels = ["gemini-flash-lite-latest", "gemma-4-26b-a4b-it"];
@@ -191,7 +193,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
         effTrans,
         sttEngine,
         fishAutoEmotions,
-        fishEnhanceVersion
+        fishEnhanceVersion,
+        fishEnhanceToken
       );
 
       // Sincronizar también con colab-export-store para exportación coherente
@@ -210,7 +213,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     } finally {
       setIsSavingTokens(false);
     }
-  }, [fishApiKey, googleApiKey, titleModel, customTitleModel, translationModel, customTranslationModel, sttEngine, fishAutoEmotions, fishEnhanceVersion]);
+  }, [fishApiKey, fishEnhanceToken, googleApiKey, titleModel, customTitleModel, translationModel, customTranslationModel, sttEngine, fishAutoEmotions, fishEnhanceVersion]);
 
   // Sincroniza el estado de V2V con el proyecto activo en OpenReel:
   // Si es un proyecto nuevo, el panel inicia 100% limpio.
@@ -477,6 +480,8 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
             setBackendUrl={setBackendUrl}
             fishApiKey={fishApiKey}
             setFishApiKey={setFishApiKey}
+            fishEnhanceToken={fishEnhanceToken}
+            setFishEnhanceToken={setFishEnhanceToken}
             googleApiKey={googleApiKey}
             setGoogleApiKey={setGoogleApiKey}
             titleModel={titleModel}

@@ -1,13 +1,10 @@
 """Pruebas del reparto de silencio en los valles internos del TTS."""
 import unittest
+from unittest import mock
 
 import numpy as np
 
-from src.audio_utils import (
-    distribute_silence_padding,
-    pad_tail_silence,
-    synthesize_segment_audio,
-)
+from src.audio_utils import distribute_silence_padding, synthesize_segment_audio
 
 RATE = 1000  # 1 muestra = 1 ms; las ventanas de 40/20 ms siguen siendo válidas
 
@@ -123,74 +120,79 @@ class TestDistributeSilencePadding(unittest.TestCase):
         self.assertLessEqual(out.shape[-1], target)
 
 
-class TestPadTailSilence(unittest.TestCase):
-    def test_rellena_la_cola_hasta_la_duracion_objetivo(self):
-        arr = _speech(1.0)
+class TestSyncToOriginal(unittest.TestCase):
+    """El clip TTS debe ocupar el mismo tramo que su clip original, sin ceros."""
 
-        out = pad_tail_silence(arr, RATE, 1.5)
+    @staticmethod
+    def _fake_stretch(audio, target_samples, rate):
+        """Simula atempo interpolando la voz, sin añadir silencio."""
+        n = int(audio.shape[-1])
+        idx = np.linspace(0, n - 1, int(target_samples))
+        stretched = np.interp(idx, np.arange(n), np.asarray(audio)[0])
+        return stretched.reshape(1, -1).astype(np.asarray(audio).dtype)
 
-        self.assertEqual(out.shape[-1], int(1.5 * RATE))
-        self.assertTrue(np.all(out[..., -int(0.5 * RATE):] == 0.0))
-        self.assertTrue(np.all(out[..., :int(1.0 * RATE)] == 0.5))
-
-    def test_no_recorta_si_ya_es_mas_largo(self):
-        arr = _speech(2.0)
-
-        out = pad_tail_silence(arr, RATE, 1.5)
-
-        self.assertEqual(out.shape, arr.shape)
-
-    def test_conserva_la_forma_estereo(self):
-        arr = np.concatenate([_speech(1.0), _speech(1.0)], axis=0)
-
-        out = pad_tail_silence(arr, RATE, 1.5)
-
-        self.assertEqual(out.shape[0], 2)
-        self.assertEqual(out.shape[-1], int(1.5 * RATE))
-        self.assertTrue(np.all(out[:, -int(0.5 * RATE):] == 0.0))
-
-    def test_no_hace_nada_con_objetivo_invalido(self):
-        arr = _speech(1.0)
-
-        self.assertIs(pad_tail_silence(arr, RATE, 0), arr)
-        self.assertIs(pad_tail_silence(arr, 0, 1.5), arr)
-
-
-class TestSynthesizeTailPadding(unittest.TestCase):
-    def _synth(self, tts_seconds, orig_duration, max_allowed_dur=None):
+    def _synth(self, tts_arr, orig_duration, max_allowed_dur=None, patch_stretch=True):
         def fake_tts(text, lang, speaker, **kwargs):
-            return _speech(tts_seconds), RATE
+            return tts_arr, RATE
 
-        return synthesize_segment_audio(
-            text="Hola mundo.",
-            lang="es",
-            speaker="default",
-            orig_duration=orig_duration,
-            sync_to_original=True,
-            max_allowed_dur=max_allowed_dur,
-            tts_fn=fake_tts,
+        cm = mock.patch(
+            "src.audio_utils.adjust_audio_duration", new=self._fake_stretch
+        ) if patch_stretch else mock.patch(
+            "src.audio_utils.adjust_audio_duration",
+            new=mock.Mock(side_effect=AssertionError("no debía estirar")),
         )
+        with cm:
+            return synthesize_segment_audio(
+                text="Hola mundo.",
+                lang="es",
+                speaker="default",
+                orig_duration=orig_duration,
+                sync_to_original=True,
+                max_allowed_dur=max_allowed_dur,
+                tts_fn=fake_tts,
+            )
 
-    def test_rellena_el_hueco_cuando_el_tts_es_mas_corto(self):
-        arr, rate, raw_dur, final_dur, _tag = self._synth(1.90, 2.0, 2.0)
+    def test_estira_hasta_igualar_el_original_sin_anadir_silencio(self):
+        arr, _rate, raw_dur, final_dur, _tag = self._synth(_speech(1.90), 2.0, 2.0)
 
         self.assertAlmostEqual(raw_dur, 1.90, places=3)
         self.assertAlmostEqual(final_dur, 2.0, places=3)
         self.assertEqual(arr.shape[-1], int(2.0 * RATE))
-        self.assertTrue(np.all(arr[..., -int(0.10 * RATE):] == 0.0))
+        # La cola sigue siendo voz estirada, no una cola de ceros.
+        self.assertNotEqual(float(arr[..., -1][0]), 0.0)
 
-    def test_no_rellena_mas_alla_del_limite_del_siguiente_clip(self):
-        arr, rate, _raw_dur, final_dur, _tag = self._synth(1.90, 2.0, 1.95)
-
-        self.assertAlmostEqual(final_dur, 1.95, places=3)
-        self.assertEqual(arr.shape[-1], int(1.95 * RATE))
-
-    def test_no_rellena_si_el_tts_ya_es_mas_largo(self):
-        arr, rate, raw_dur, final_dur, _tag = self._synth(2.20, 2.0, 2.65)
+    def test_no_toca_el_audio_si_ya_es_mas_largo_pero_cabe(self):
+        arr, _rate, raw_dur, final_dur, _tag = self._synth(
+            _speech(2.20), 2.0, 2.65, patch_stretch=False
+        )
 
         self.assertAlmostEqual(raw_dur, 2.20, places=3)
         self.assertAlmostEqual(final_dur, 2.20, places=3)
         self.assertEqual(arr.shape[-1], int(2.20 * RATE))
+
+    def test_usa_las_pausas_internas_antes_de_estirar(self):
+        # 0.8s voz + 0.5s pausa + 0.8s voz = 2.1s; el original son 2.4s.
+        # La pausa interna puede crecer 0.3s y llenar el hueco sin atempo.
+        tts = np.concatenate(
+            [_speech(0.8), _silence(0.5), _speech(0.8)], axis=-1
+        )
+
+        arr, _rate, _raw_dur, final_dur, _tag = self._synth(
+            tts, 2.4, 2.4, patch_stretch=False
+        )
+
+        self.assertAlmostEqual(final_dur, 2.4, places=3)
+        self.assertEqual(arr.shape[-1], int(2.4 * RATE))
+        self.assertNotEqual(float(arr[..., -1][0]), 0.0)
+
+    def test_suelo_de_estiramiento_sin_relleno_artificial(self):
+        # 1.0s de voz para un hueco de 2.0s: el suelo 0.80x solo llega a 1.25s.
+        # Se prefiere dejar el hueco real antes que inventar silencio.
+        arr, _rate, _raw_dur, final_dur, _tag = self._synth(_speech(1.0), 2.0, 2.0)
+
+        self.assertAlmostEqual(final_dur, 1.25, places=3)
+        self.assertEqual(arr.shape[-1], int(1.25 * RATE))
+        self.assertNotEqual(float(arr[..., -1][0]), 0.0)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,6 @@ from src.qa import evaluate_segment, format_report, levels_from_pcm, save_report
 from src.pacing import ends_sentence, visible_text
 
 # Estrategia de sincronía del doblaje (no configurables por API: describen el criterio).
-SYNC_TOLERANCE = 0.94   # por debajo de este ratio se rellena con pausas internas
 STRETCH_FLOOR = 0.80    # estiramiento máximo al alargar un clip (nunca por debajo)
 SILENCE_RATE = 24000    # sample rate del silencio cuando no hay audio del que copiarlo
 
@@ -161,21 +160,21 @@ def adjust_audio_duration(
     tempo = audio.shape[-1] / target_duration_samples
     safe_tempo = max(min(tempo, max_tempo), min_tempo)
 
-    # Si la diferencia es imperceptible (<=4%), no alterar con atempo para no degradar el timbre:
-    # aplicar micro-trim suave con fade-out o micro-pad de silencio
+    # Si la diferencia es imperceptible (<=4%), recortar es inocuo, pero alargar
+    # nunca debe rellenarse con ceros: se estira con atempo para que el clip ocupe
+    # el mismo tramo que el original. El silencio de cola falsearía el timeline.
     if abs(safe_tempo - 1.0) <= 0.04:
         if audio.shape[-1] > target_duration_samples:
-            trimmed = audio[:, :target_duration_samples].clone()
+            trimmed = audio[..., :target_duration_samples]
             fade_len = max(16, min(int(0.005 * sample_rate), target_duration_samples))
-            if torch is not None and fade_len > 0:
-                fade = torch.linspace(1.0, 0.0, fade_len, device=trimmed.device)
-                trimmed[:, -fade_len:] *= fade
+            if torch is not None and isinstance(trimmed, torch.Tensor):
+                trimmed = trimmed.clone()
+                if fade_len > 0:
+                    fade = torch.linspace(1.0, 0.0, fade_len, device=trimmed.device)
+                    trimmed[..., -fade_len:] *= fade
             return trimmed
-        elif audio.shape[-1] < target_duration_samples:
-            pad_len = target_duration_samples - audio.shape[-1]
-            if torch is not None:
-                return torch.nn.functional.pad(audio, (0, pad_len))
-        return audio
+        if audio.shape[-1] == target_duration_samples:
+            return audio
 
     filter_str = _build_atempo_filter(safe_tempo)
 
@@ -544,32 +543,6 @@ def get_audio_file_duration(file_path: Path | str, fallback: Optional[float] = N
     return fallback
 
 
-def pad_tail_silence(arr: Any, rate: int, target_sec: float) -> Any:
-    """Añade silencio real al final hasta que el clip dure `target_sec`.
-
-    Se usa para que el TTS ocupe el mismo tramo que su clip original: si la voz
-    queda más corta, el hueco hasta el siguiente segmento se rellena con
-    silencio real dentro del propio clip (nunca falseando su duración). Así el
-    espacio entre clips en el timeline coincide con el del video original.
-    """
-    if arr is None or not rate or rate <= 0 or target_sec <= 0:
-        return arr
-
-    target_samples = int(round(float(target_sec) * rate))
-    missing = target_samples - int(arr.shape[-1])
-    if missing <= 0:
-        return arr
-
-    if torch is not None and isinstance(arr, torch.Tensor):
-        pad = torch.zeros(
-            (*arr.shape[:-1], missing), dtype=arr.dtype, device=arr.device
-        )
-        return torch.cat([arr, pad], dim=-1)
-
-    pad = np.zeros((*arr.shape[:-1], missing), dtype=arr.dtype)
-    return np.concatenate([arr, pad], axis=-1)
-
-
 def synthesize_segment_audio(
     text: str,
     lang: str,
@@ -601,7 +574,7 @@ def synthesize_segment_audio(
     `metrics_out`, si se pasa, se rellena con lo que el QA necesita para no confundir
     tres cosas distintas: `speed` (cambio real de tempo aplicado a la voz, 1.0 = sin
     tocar), `compaction` (fracción de la duración cruda recortada como silencio) y
-    `padded` (segundos de silencio añadidos para llenar el hueco).
+    `padded` (segundos de pausas internas expandidas para igualar la duración original).
     """
     if tts_fn is None:
         from src.tts import model_tts
@@ -685,16 +658,21 @@ def synthesize_segment_audio(
             diff_pct = int(round((ratio_slow - 1.0) * 100))
             diff_str = f"+{diff_pct}%" if diff_pct > 0 else f"{diff_pct}%" if diff_pct < 0 else "0%"
 
-            # Margen Neutro y fidelidad temporal en Timeline:
-            # Si ratio_slow >= SYNC_TOLERANCE: mantener el audio intacto a 1.00x, sin estirar ni colas de silencio
-            if ratio_slow >= SYNC_TOLERANCE:
+            # Fidelidad temporal exacta: si el TTS quedó más corto que su clip
+            # original, se alarga hasta ocupar el mismo tramo. Primero se expanden
+            # los valles de silencio internos (pausas reales); si no basta, se
+            # estira la voz con atempo hasta el suelo STRETCH_FLOOR. Nunca se
+            # añaden ceros al final: el hueco del timeline debe ser silencio entre
+            # clips, no relleno artificial dentro del clip.
+            if ratio_slow >= 1.0:
                 mode_tag = f"✨ 1.00x ({diff_str})"
             else:
-                # Sub-duración (< SYNC_TOLERANCE):
-                # 1. Expandir los valles internos de silencio por prioridad:
-                #    primero los respiros largos (hasta 0.60 s cada uno y como
-                #    máximo 1.6x su duración natural), sin tocar la cola final.
-                target_samples = int(orig_duration * rate)
+                # El objetivo es el tramo del clip original, sin invadir el
+                # siguiente si los clips se solapan.
+                slot_dur = float(orig_duration)
+                if max_allowed_dur is not None:
+                    slot_dur = min(slot_dur, float(max_allowed_dur))
+                target_samples = int(slot_dur * rate)
                 arr_expanded = distribute_silence_padding(
                     arr,
                     target_samples,
@@ -705,19 +683,20 @@ def synthesize_segment_audio(
                     valley_growth=1.6,
                 )
                 expanded_dur = float(arr_expanded.shape[-1]) / float(rate)
-                expanded_ratio = expanded_dur / orig_duration
+                expanded_ratio = expanded_dur / slot_dur
 
                 metrics["padded"] = max(0.0, expanded_dur - raw_dur)
 
-                if expanded_ratio >= SYNC_TOLERANCE:
+                if expanded_ratio >= 1.0 - 1e-6:
                     arr = arr_expanded
-                    mode_tag = f"✨ 1.00x (pausas +{int(round((expanded_ratio - ratio_slow) * 100))}%)"
+                    mode_tag = f"✨ 1.00x (pausas +{int(round((expanded_dur / orig_duration - ratio_slow) * 100))}%)"
                 else:
                     arr = arr_expanded
-                    # 2. Si tras expandir pausas internas sigue por debajo de SYNC_TOLERANCE, piso de STRETCH_FLOOR
-                    # (estiramiento suave imperceptible; nunca colas de ceros)
-                    min_allowed_speed = STRETCH_FLOOR
-                    effective_speed = max(min_allowed_speed, expanded_ratio)
+                    # Si tras expandir pausas internas sigue por debajo, se estira
+                    # con atempo (nunca colas de ceros). El suelo STRETCH_FLOOR
+                    # evita voces arrastradas; por debajo de él queda un hueco
+                    # real, que es preferible a falsear la duración del clip.
+                    effective_speed = max(STRETCH_FLOOR, expanded_ratio)
                     metrics["speed"] = effective_speed
                     mode_tag = f"🔉 {effective_speed:.2f}x"
                     stretch_samples = int(arr.shape[-1] / effective_speed)
@@ -744,27 +723,6 @@ def synthesize_segment_audio(
         metrics["speed"] = float(speed)
         mode_tag = f"🎛️ {speed:.2f}x (manual)"
         arr = adjust_audio_duration(arr, target_samples, rate)
-
-    # El TTS debe ocupar el mismo tramo que su clip original. Si la voz quedó más
-    # corta, se rellena la cola con silencio real: el hueco entre segmentos en el
-    # timeline vuelve a coincidir con el del video, sin falsear la duración del
-    # clip (el silencio existe físicamente en el archivo).
-    if (
-        sync_to_original
-        and orig_duration
-        and orig_duration > 0
-        and target_duration is None
-        and (speed is None or abs(speed - 1.0) <= 0.01)
-    ):
-        slot_dur = float(orig_duration)
-        if max_allowed_dur is not None:
-            slot_dur = min(slot_dur, float(max_allowed_dur))
-        current_dur = float(arr.shape[-1]) / float(rate)
-        if slot_dur > current_dur + 1e-3:
-            arr = pad_tail_silence(arr, rate, slot_dur)
-            tail_pad = float(arr.shape[-1]) / float(rate) - current_dur
-            metrics["padded"] = float(metrics.get("padded", 0.0)) + tail_pad
-            mode_tag = f"{mode_tag} +🔇{tail_pad:.2f}s"
 
     final_dur = float(arr.shape[-1]) / float(rate)
 

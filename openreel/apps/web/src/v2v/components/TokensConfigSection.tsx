@@ -29,6 +29,8 @@ export interface TokensConfigSectionProps {
   setBackendUrl: (url: string) => void;
   fishApiKey: string;
   setFishApiKey: (key: string) => void;
+  fishEnhanceToken: string;
+  setFishEnhanceToken: (token: string) => void;
   googleApiKey: string;
   setGoogleApiKey: (key: string) => void;
   titleModel: string;
@@ -55,6 +57,8 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
   setBackendUrl,
   fishApiKey,
   setFishApiKey,
+  fishEnhanceToken,
+  setFishEnhanceToken,
   googleApiKey,
   setGoogleApiKey,
   titleModel,
@@ -76,9 +80,16 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
   onClose,
 }) => {
   const [showFishApiKey, setShowFishApiKey] = useState(false);
+  const [showFishEnhanceToken, setShowFishEnhanceToken] = useState(false);
   const [showGoogleApiKey, setShowGoogleApiKey] = useState(false);
   const [isTestingBackend, setIsTestingBackend] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [isTestingEnhance, setIsTestingEnhance] = useState(false);
+  const [enhanceTestResult, setEnhanceTestResult] = useState<{
+    ok: boolean;
+    message: string;
+    preview?: string | null;
+  } | null>(null);
 
   const [importingTrackKey, setImportingTrackKey] = useState<string | null>(null);
 
@@ -132,6 +143,10 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
             setFishApiKey(remoteTokens.fish_api_key);
             syncedCount++;
           }
+          if (remoteTokens.fish_enhance_token !== undefined) {
+            setFishEnhanceToken(remoteTokens.fish_enhance_token || "");
+            if (remoteTokens.fish_enhance_token) syncedCount++;
+          }
           if (remoteTokens.google_api_key) {
             setGoogleApiKey(remoteTokens.google_api_key);
             syncedCount++;
@@ -171,6 +186,27 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
       setTestResult({ ok: false, message: e?.message || "Error al conectar con la URL" });
     } finally {
       setIsTestingBackend(false);
+    }
+  };
+
+  const handleTestEnhance = async () => {
+    setIsTestingEnhance(true);
+    setEnhanceTestResult(null);
+    try {
+      v2vApi.setBackendUrl(backendUrl);
+      const res = await v2vApi.testFishEnhance(fishEnhanceToken, fishEnhanceVersion);
+      setEnhanceTestResult({
+        ok: res.ok,
+        message: res.message,
+        preview: res.preview || null,
+      });
+    } catch (e: any) {
+      setEnhanceTestResult({
+        ok: false,
+        message: e?.message || "Error al probar el token de Fish",
+      });
+    } finally {
+      setIsTestingEnhance(false);
     }
   };
 
@@ -258,6 +294,76 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
         </div>
 
         <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[9px] text-text-muted font-medium">
+              FISH_ENHANCE_TOKEN
+            </label>
+            <button
+              type="button"
+              onClick={handleTestEnhance}
+              disabled={isTestingEnhance || !fishEnhanceToken.trim()}
+              className="px-2 py-0.5 rounded text-[10px] font-medium bg-background-tertiary border border-border hover:bg-background-secondary text-text-primary transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isTestingEnhance ? (
+                <>
+                  <Loader2 size={10} className="animate-spin text-primary" />
+                  Probando...
+                </>
+              ) : (
+                "Probar token"
+              )}
+            </button>
+          </div>
+          <div className="relative flex items-center">
+            <input
+              type={showFishEnhanceToken ? "text" : "password"}
+              className="w-full px-2.5 py-1.5 pr-8 text-[11px] font-mono bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
+              placeholder="Token de sesión del Studio de Fish (DevTools)..."
+              value={fishEnhanceToken}
+              onChange={(e) => {
+                setFishEnhanceToken(e.target.value);
+                setEnhanceTestResult(null);
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowFishEnhanceToken(!showFishEnhanceToken)}
+              className="absolute right-2.5 text-text-muted hover:text-text-primary transition-colors focus:outline-none"
+            >
+              {showFishEnhanceToken ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+          <p className="text-[9px] text-text-muted mt-1 leading-normal">
+            Solo para <span className="font-mono">/enhance/text</span> (etiquetas de emoción).
+            Es independiente de la API key de TTS; caduca, así que usa «Probar token» para
+            comprobarlo. También se lee de los secretos de Kaggle/Colab.
+          </p>
+          {enhanceTestResult && (
+            <div
+              className={`mt-1.5 flex flex-col gap-1 text-[10px] p-1.5 rounded-md ${
+                enhanceTestResult.ok
+                  ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                  : "bg-red-500/10 text-red-400 border border-red-500/20"
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                {enhanceTestResult.ok ? (
+                  <CheckCircle2 size={12} className="shrink-0" />
+                ) : (
+                  <XCircle size={12} className="shrink-0" />
+                )}
+                <span>{enhanceTestResult.message}</span>
+              </div>
+              {enhanceTestResult.preview && (
+                <span className="font-mono text-[9px] opacity-80 break-words">
+                  {enhanceTestResult.preview}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div>
           <label className="text-[9px] text-text-muted block mb-1 font-medium">
             LLM_API_KEY
           </label>
@@ -312,19 +418,22 @@ export const TokensConfigSection: React.FC<TokensConfigSectionProps> = ({
                   Etiquetado automático de emociones
                 </span>
                 <span className="text-[9px] text-text-muted block">
-                  Fish añade [emoción], [emphasis] y pausas al texto antes del TTS
+                  {fishEnhanceToken.trim()
+                    ? "Fish añade [emoción], [emphasis] y pausas al texto antes del TTS"
+                    : "Configura FISH_ENHANCE_TOKEN arriba para activarlo"}
                 </span>
               </div>
             </div>
             <input
               type="checkbox"
               checked={fishAutoEmotions}
+              disabled={!fishEnhanceToken.trim()}
               onChange={(e) => setFishAutoEmotions(e.target.checked)}
-              className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary"
+              className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer accent-primary disabled:opacity-40 disabled:cursor-not-allowed"
             />
           </div>
 
-          {fishAutoEmotions && (
+          {fishAutoEmotions && fishEnhanceToken.trim() && (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-background/50 border border-border/70 text-[10px]">
                 <span className="text-text-muted">Modelo de etiquetado:</span>

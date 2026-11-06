@@ -238,6 +238,9 @@ class RetranslateSegmentsResponse(BaseModel):
 
 class TokenSettingsRequest(BaseModel):
     fish_api_key: Optional[str] = Field(None, description="Nuevo valor para FISH_API_KEY")
+    fish_enhance_token: Optional[str] = Field(
+        None, description="Token de sesión web de Fish para /enhance/text (FISH_ENHANCE_TOKEN)"
+    )
     google_api_key: Optional[str] = Field(None, description="Nuevo valor para GOOGLE_API_KEY")
     title_model: Optional[str] = Field(None, description="Modelo de Gemini por defecto para títulos virales")
     translation_model: Optional[str] = Field(None, description="Modelo de Gemini por defecto para traducción")
@@ -254,6 +257,7 @@ class TokenSettingsRequest(BaseModel):
 
 class TokenSettingsResponse(BaseModel):
     fish_api_key: Optional[str] = None
+    fish_enhance_token: Optional[str] = None
     google_api_key: Optional[str] = None
     title_model: Optional[str] = None
     translation_model: Optional[str] = None
@@ -262,6 +266,22 @@ class TokenSettingsResponse(BaseModel):
     fish_enhance_version: Optional[Literal["s2.1-pro", "drama-3"]] = None
     available_models: list[str] = Field(default_factory=list)
     message: str = "Configuración actualizada exitosamente"
+
+
+class FishEnhanceTestRequest(BaseModel):
+    token: Optional[str] = Field(
+        None, description="Token a probar; si se omite, usa el configurado"
+    )
+    version: Optional[Literal["s2.1-pro", "drama-3"]] = Field(
+        None, description="Versión del modelo para la prueba"
+    )
+
+
+class FishEnhanceTestResponse(BaseModel):
+    ok: bool
+    status: int = 0
+    message: str
+    preview: Optional[str] = None
 
 
 class RegenerateTitleRequest(BaseModel):

@@ -385,6 +385,7 @@ export interface GeminiModelsResponse {
 
 export interface TokenSettingsResponse {
   fish_api_key?: string;
+  fish_enhance_token?: string;
   google_api_key?: string;
   title_model?: string;
   translation_model?: string;
@@ -393,6 +394,13 @@ export interface TokenSettingsResponse {
   fish_enhance_version?: "s2.1-pro" | "drama-3";
   available_models?: string[];
   message?: string;
+}
+
+export interface FishEnhanceTestResponse {
+  ok: boolean;
+  status: number;
+  message: string;
+  preview?: string | null;
 }
 
 export interface RegenerateTitlePayload {
@@ -1115,13 +1123,15 @@ export const v2vApi = {
     translationModel?: string,
     sttEngine?: "stable" | "crisper",
     fishAutoEmotions?: boolean,
-    fishEnhanceVersion?: "s2.1-pro" | "drama-3"
+    fishEnhanceVersion?: "s2.1-pro" | "drama-3",
+    fishEnhanceToken?: string
   ): Promise<TokenSettingsResponse> {
     const res = await fetch(url("/api/settings/tokens"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         fish_api_key: fishApiKey || null,
+        fish_enhance_token: fishEnhanceToken ?? null,
         google_api_key: googleApiKey || null,
         title_model: titleModel || null,
         translation_model: translationModel || null,
@@ -1135,6 +1145,25 @@ export const v2vApi = {
       throw new Error(err.detail || "Error al actualizar la configuración de tokens y modelos");
     }
     return readJsonOrThrow(res);
+  },
+
+  async testFishEnhance(
+    token?: string,
+    version?: "s2.1-pro" | "drama-3"
+  ): Promise<FishEnhanceTestResponse> {
+    const res = await fetch(url("/api/settings/fish-enhance/test"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: token || null,
+        version: version || null,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al probar el token de Fish");
+    }
+    return readJsonOrThrow<FishEnhanceTestResponse>(res);
   },
 
   async getGeminiModels(): Promise<GeminiModelsResponse> {
