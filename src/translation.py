@@ -49,12 +49,12 @@ from src.review import (
 )
 
 
-# Modelos recomendados: gemini-flash-lite-latest (alta velocidad, sin errores 503) y gemma-4-26b-a4b-it como respaldo
-DEFAULT_TITLE_MODEL = os.environ.get("DEFAULT_TITLE_MODEL", "gemini-flash-lite-latest")
-DEFAULT_TRANSLATION_MODEL = os.environ.get("DEFAULT_TRANSLATION_MODEL", "gemini-flash-lite-latest")
+# Modelos recomendados: gemini-3.5-flash-lite (alta velocidad, sin errores 503) y gemma-4-26b-a4b-it como respaldo
+DEFAULT_TITLE_MODEL = os.environ.get("DEFAULT_TITLE_MODEL", "gemini-3.5-flash-lite")
+DEFAULT_TRANSLATION_MODEL = os.environ.get("DEFAULT_TRANSLATION_MODEL", "gemini-3.5-flash-lite")
 
 POPULAR_GEMINI_MODELS = [
-    "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
     "gemma-4-26b-a4b-it",
 ]
 

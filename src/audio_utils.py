@@ -544,6 +544,63 @@ def get_audio_file_duration(file_path: Path | str, fallback: Optional[float] = N
     return fallback
 
 
+def trim_edge_silence(
+    arr: Any,
+    rate: int,
+    threshold_ratio: float = 0.01,
+    min_trim_sec: float = 0.12,
+    head_keep_sec: float = 0.08,
+    tail_keep_sec: float = 0.06,
+    min_keep_sec: float = 0.10,
+) -> Any:
+    """Recorta el aire sobrante al inicio y al final de un clip TTS.
+
+    Fish a veces devuelve ~1 s de silencio al final de un segmento largo. Ese
+    aire alargaba el clip en el timeline y desincronizaba el siguiente
+    segmento. Se conserva un margen mínimo para no cortar consonantes ni
+    respiraciones, y solo se recorta cuando el silencio supera `min_trim_sec`.
+    El máster ``_raw.wav`` se guarda antes de llamar aquí: esta función solo
+    afecta al audio final.
+    """
+    if arr is None or not rate or rate <= 0:
+        return arr
+
+    is_torch = torch is not None and isinstance(arr, torch.Tensor)
+    mono = arr[0] if getattr(arr, "ndim", 1) > 1 else arr
+    samples = mono.detach().cpu().numpy() if is_torch else np.asarray(mono)
+    if samples.size == 0:
+        return arr
+
+    peak = float(np.max(np.abs(samples)))
+    if peak <= 0.0:
+        return arr
+
+    threshold = max(peak * threshold_ratio, 1e-4)
+    loud = np.flatnonzero(np.abs(samples) >= threshold)
+    if loud.size == 0:
+        return arr
+
+    total = int(samples.size)
+    head_silence = int(loud[0])
+    tail_silence = int(total - 1 - loud[-1])
+    min_trim = max(1, int(min_trim_sec * rate))
+    min_keep = max(1, int(min_keep_sec * rate))
+
+    start = 0
+    if head_silence > min_trim:
+        start = max(0, head_silence - int(head_keep_sec * rate))
+
+    end = total
+    if tail_silence > min_trim:
+        end = total - max(0, tail_silence - int(tail_keep_sec * rate))
+
+    if end - start < min_keep or (start == 0 and end == total):
+        return arr
+
+    sliced = arr[..., start:end]
+    return sliced.contiguous() if is_torch else np.ascontiguousarray(sliced)
+
+
 def synthesize_segment_audio(
     text: str,
     lang: str,
@@ -615,12 +672,15 @@ def synthesize_segment_audio(
     metrics["compaction"] = 0.0
     metrics["padded"] = 0.0
 
-    raw_dur = float(arr.shape[-1]) / float(rate)
-
     if raw_audio_path and torchaudio is not None:
         raw_p = Path(raw_audio_path)
         raw_p.parent.mkdir(parents=True, exist_ok=True)
         torchaudio.save(str(raw_p), arr, sample_rate=rate)
+
+    # El máster queda intacto; el clip final pierde el aire de los extremos para
+    # no alargar el timeline ni empujar al segmento siguiente.
+    arr = trim_edge_silence(arr, rate)
+    raw_dur = float(arr.shape[-1]) / float(rate)
 
     mode_tag = "✨ 1.00x (natural)"
 

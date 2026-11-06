@@ -83,9 +83,9 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
   const [backendUrl, setBackendUrl] = React.useState<string>(() => v2vApi.getBackendUrl());
   const [fishApiKey, setFishApiKey] = React.useState("");
   const [googleApiKey, setGoogleApiKey] = React.useState("");
-  const [titleModel, setTitleModel] = React.useState<string>("gemini-flash-lite-latest");
+  const [titleModel, setTitleModel] = React.useState<string>("gemini-3.5-flash-lite");
   const [customTitleModel, setCustomTitleModel] = React.useState<string>("");
-  const [translationModel, setTranslationModel] = React.useState<string>("gemini-flash-lite-latest");
+  const [translationModel, setTranslationModel] = React.useState<string>("gemini-3.5-flash-lite");
   const [customTranslationModel, setCustomTranslationModel] = React.useState<string>("");
   const [sttEngine, setSttEngine] = React.useState<"stable" | "crisper">("stable");
   const [fishAutoEmotions, setFishAutoEmotions] = React.useState(true);
@@ -120,7 +120,7 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
       if (res.fish_api_key !== undefined) setFishApiKey(res.fish_api_key || "");
       if (res.google_api_key !== undefined) setGoogleApiKey(res.google_api_key || "");
 
-      const knownModels = ["gemini-flash-lite-latest", "gemma-4-26b-a4b-it"];
+      const knownModels = ["gemini-3.5-flash-lite", "gemma-4-26b-a4b-it"];
 
       if (res.title_model) {
         if (knownModels.includes(res.title_model)) {
@@ -177,10 +177,10 @@ export const V2VPanel: React.FC<{ embedInDrawer?: boolean }> = ({
     setIsSavingTokens(true);
     try {
       const effTitle = titleModel === "custom"
-        ? (customTitleModel.trim() || "gemini-flash-lite-latest")
+        ? (customTitleModel.trim() || "gemini-3.5-flash-lite")
         : titleModel;
       const effTrans = translationModel === "custom"
-        ? (customTranslationModel.trim() || "gemini-flash-lite-latest")
+        ? (customTranslationModel.trim() || "gemini-3.5-flash-lite")
         : translationModel;
 
       v2vApi.setBackendUrl(backendUrl);

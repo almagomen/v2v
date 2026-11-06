@@ -17,9 +17,10 @@ from src.config import (
 
 
 class FakeResponse:
-    def __init__(self, status_code=200, data=None):
+    def __init__(self, status_code=200, data=None, text=""):
         self.status_code = status_code
         self._data = data or {}
+        self.text = text
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -35,6 +36,7 @@ class TestFishEnhance(unittest.TestCase):
         self._old_version = os.environ.get("V2V_FISH_ENHANCE_VERSION")
         os.environ.pop("V2V_FISH_AUTO_EMOTIONS", None)
         os.environ.pop("V2V_FISH_ENHANCE_VERSION", None)
+        fish_enhance.reset_disable_state()
 
     def tearDown(self):
         for key, value in (
@@ -107,6 +109,58 @@ class TestFishEnhance(unittest.TestCase):
             )
         self.assertIsNone(out)
         self.assertTrue(any("Falló /enhance/text" in msg for msg in logs))
+
+    def test_401_desactiva_el_endpoint_una_sola_vez(self):
+        logs: list[str] = []
+        with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+            "src.fish_enhance.requests.post",
+            return_value=FakeResponse(401, text="Invalid token"),
+        ) as post:
+            first = fish_enhance.enhance_text(
+                "Hola mundo.", max_retries=2, log_fn=logs.append
+            )
+            second = fish_enhance.enhance_text(
+                "Otra frase.", max_retries=2, log_fn=logs.append
+            )
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(post.call_count, 1)
+        disabled_logs = [msg for msg in logs if "desactivado" in msg]
+        self.assertEqual(len(disabled_logs), 1)
+        self.assertTrue(any("HTTP 401" in msg for msg in logs))
+
+    def test_403_y_404_tambien_desactivan(self):
+        for status in (403, 404):
+            fish_enhance.reset_disable_state()
+            with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+                "src.fish_enhance.requests.post",
+                return_value=FakeResponse(status),
+            ) as post:
+                fish_enhance.enhance_text("Hola mundo.", max_retries=2)
+                fish_enhance.enhance_text("Otra frase.", max_retries=2)
+            self.assertEqual(post.call_count, 1, f"status {status}")
+
+    def test_400_no_reintenta_ni_desactiva(self):
+        logs: list[str] = []
+        with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+            "src.fish_enhance.requests.post",
+            return_value=FakeResponse(400, text="bad payload"),
+        ) as post:
+            first = fish_enhance.enhance_text(
+                "Hola mundo.", max_retries=2, log_fn=logs.append
+            )
+        self.assertIsNone(first)
+        self.assertEqual(post.call_count, 1)
+        self.assertTrue(any("HTTP 400" in msg for msg in logs))
+
+        with patch("src.config.get_fish_api_key", return_value="test-key"), patch(
+            "src.fish_enhance.requests.post",
+            return_value=FakeResponse(200, {"enhanced_script": "[calm] Hola."}),
+        ) as post_ok:
+            out = fish_enhance.enhance_text("Hola mundo.", max_retries=0)
+        self.assertEqual(out, "[calm] Hola.")
+        self.assertEqual(post_ok.call_count, 1)
 
     def test_registra_el_fallo_sin_api_key(self):
         logs: list[str] = []

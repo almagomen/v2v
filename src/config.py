@@ -232,6 +232,14 @@ def set_fish_api_key(key_str: str | None) -> None:
         os.environ["FISH_API_KEY"] = val
     else:
         os.environ.pop("FISH_API_KEY", None)
+    # Si /enhance/text se había desactivado por un 401, una clave nueva merece
+    # otro intento sin reiniciar el backend.
+    try:
+        from src import fish_enhance
+
+        fish_enhance.reset_disable_state()
+    except Exception:
+        pass
 
 
 def get_hf_token() -> str | None:

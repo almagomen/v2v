@@ -39,7 +39,7 @@ Este documento es la **fuente de verdad única** de arquitectura, reglas de aisl
      - **Prohibido generar `.wav` sincronizados redundantes**: solo existen el máster `_raw.wav` y el sincronizado `.m4a`.
    - **Pre-caching en Background Instantáneo**: El paquete `audio_segments.tar.gz` se genera al terminar la síntesis TTS empaquetando directamente los `.m4a` existentes en disco (tiempo <150ms, tamaño ~2.5MB, 90% de ahorro de ancho de banda).
    - Todo endpoint de transferencia masiva (TAR de segmentos, videos largos, películas) debe **servirse directamente desde disco con `FileResponse`** (`sendfile()`) para emitir el primer byte en <10ms.
-   - En el cliente (`v2v-api.ts`), transferencias masivas usan `timeoutMs = 0` (sin límite arbitrario) y descompresión nativa `DecompressionStream("gzip")`.
+   - En el cliente (`v2v-api.ts`), transferencias masivas no tienen tope total: usan una guarda de 30 s hasta las cabeceras y otra de 45 s sin recibir datos (watchdog de estancamiento), más descompresión nativa `DecompressionStream("gzip")`.
    - **TTS Concurrente**: La síntesis con Fish Audio se paraleliza con `ThreadPoolExecutor(max_workers=5)` con reintento exponencial ante HTTP 429 para acelerar 4x la generación.
    - En fallbacks individuales de red, **prohibido `Promise.all` masivo** sin control de concurrencia; usar lotes concurrentes (máximo 5) con reintentos para evitar saturación de sockets en Chromium (error 429/502).
    - **Fidelidad Temporal en Timeline (Sin Duración Forzada de Fallback)**: La duración en timeline de los clips TTS y originales refleja siempre su duración física real; prohibido aplicar fallbacks que fuercen la duración del audio original sobre el TTS o viceversa.
@@ -159,8 +159,8 @@ Al comunicar el cliente OpenReel con el backend a través de Cloudflare Tunnel (
      - Se sirve mediante `FileResponse` utilizando `sendfile()` del kernel: el primer byte se transmite en <10ms hacia Cloudflare, lo cual **desactiva el timeout de 100s** y permite transferir películas de 2 horas sin interrupciones.
      - Caché en disco con validación por `mtime` de los segmentos para entrega instantánea en reimportaciones.
 
-2. **Cero Límites Artificiales y Descompresión Nativa en el Cliente (`timeoutMs = 0`)**:
-   - `fetchAudioSegmentsTar` usa `timeoutMs = 0` por defecto. El cliente nunca aborta prematuramente descargas de videos largos; el control de cancelación queda reservado al `AbortSignal` manual del usuario.
+2. **Cero Límites Artificiales y Descompresión Nativa en el Cliente**:
+   - `fetchAudioSegmentsTar` y `fetchSrcAudioSegmentsTar` no imponen un tope total de descarga. Usan `fetchTarBuffer`: 30 s máximo para recibir cabeceras y 45 s máximo sin datos entre chunks. Una transferencia lenta pero viva puede terminar; una conexión colgada falla con un error claro en vez de dejar la importación bloqueada. La cancelación manual sigue disponible vía `AbortSignal`.
    - Detección automática de magic bytes gzip (`0x1f, 0x8b`) y descompresión en memoria mediante la API nativa de Chromium `DecompressionStream("gzip")`.
 
 3. **Control de Concurrencia en Fallback de Descargas (Anti-Saturación de Sockets)**:

@@ -101,7 +101,7 @@ export const useColabExportStore = create<ColabExportState>((set, get) => ({
   isBatch: initialSettings.isBatch ?? false,
   uploadToCatbox: initialSettings.uploadToCatbox ?? false,
   deselectedProjectIds: initialSettings.deselectedProjectIds ?? [],
-  geminiModel: initialSettings.geminiModel ?? "gemini-flash-lite-latest",
+  geminiModel: initialSettings.geminiModel ?? "gemini-3.5-flash-lite",
   customGeminiModel: initialSettings.customGeminiModel ?? "",
 
   status: "idle",
@@ -172,7 +172,7 @@ export const useColabExportStore = create<ColabExportState>((set, get) => ({
     if (geminiModel === "custom" && customGeminiModel.trim()) {
       return customGeminiModel.trim();
     }
-    return geminiModel || "gemini-flash-lite-latest";
+    return geminiModel || "gemini-3.5-flash-lite";
   },
 
 

@@ -20,6 +20,7 @@ except ImportError:
 
 from src.config import DEVICE, DRIVE_DIR, KAGGLE_INPUT_DIR, get_stt_engine
 from src.models import get_or_load_model
+from src.language_detect import detect_language_whisper
 from src.stt_crisper import get_crisper_model, transcribe_with_crisper
 from src.diarization import get_diarization_model, speaker_diarization, process_audio
 from src.translation import translate_text_list, generate_tiktok_title
@@ -110,7 +111,11 @@ def transcribe_and_process(
             t0 = time.perf_counter()
             if stt_engine == "crisper":
                 whisper_model = get_crisper_model()
-                res = transcribe_with_crisper(whisper_model, media_path)
+                res = transcribe_with_crisper(
+                    whisper_model,
+                    media_path,
+                    language_detector=detect_language_whisper,
+                )
             else:
                 whisper_model = get_whisper_model()
                 res = whisper_model.transcribe(str(media_path), verbose=None)

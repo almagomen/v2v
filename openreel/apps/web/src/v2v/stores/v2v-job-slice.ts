@@ -541,6 +541,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                     srcAudioSegs = srcAudioSegs.filter((as, i, a) => a.findIndex(t => t.seg === as.seg) === i);
                   } catch (e) {
                     console.warn(`[V2V] No se pudo obtener lista src-audio-segments para video ${v.index}:`, e);
+                    if (urlForLog) {
+                      get().appendUrlLog(urlForLog, `⚠️ No se pudo listar los segmentos originales de video ${v.index}: ${e instanceof Error ? e.message : String(e)}`);
+                    }
                   }
                   // Si el backend no devolvió segmentos o falló, construir la lista fiel desde v.segments (result.json)
                   if (srcAudioSegs.length === 0 && v.segments && v.segments.length > 0) {
@@ -662,6 +665,12 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                       return { asset, blob };
                     } catch (e) {
                       console.warn(`[V2V] Asset opcional no disponible: ${asset.serverFn || asset.id}`, e);
+                      if (urlForLog) {
+                        get().appendUrlLog(
+                          urlForLog,
+                          `⚠️ No se pudo descargar ${asset.id} (${asset.serverFn || "sin archivo"}): ${e instanceof Error ? e.message : String(e)}`
+                        );
+                      }
                       return null;
                     }
                   };
@@ -733,6 +742,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                         }
                       } catch (e) {
                         console.warn(`[V2V] Fallback a descargas individuales de audio para ${folder}:`, e);
+                        if (urlForLog) {
+                          get().appendUrlLog(urlForLog, `⚠️ Paquete TAR de TTS no disponible: ${e instanceof Error ? e.message : String(e)}`);
+                        }
                       }
 
                       if (urlForLog) {
@@ -762,6 +774,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                         individualResults.push(...chunkResults);
                       }
                       const res = individualResults.filter((d): d is { isSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } => d !== null);
+                      if (urlForLog && res.length < audioSegs.length) {
+                        get().appendUrlLog(urlForLog, `⚠️ ${audioSegs.length - res.length}/${audioSegs.length} audios TTS no se pudieron descargar.`);
+                      }
                       return res;
                     })(),
                     (async () => {
@@ -809,6 +824,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                         }
                       } catch (e) {
                         console.warn(`[V2V] Fallback a descargas individuales de audio original para ${folder}:`, e);
+                        if (urlForLog) {
+                          get().appendUrlLog(urlForLog, `⚠️ Paquete TAR de segmentos originales no disponible: ${e instanceof Error ? e.message : String(e)}`);
+                        }
                       }
 
                       const CONCURRENCY_LIMIT = 5;
@@ -833,7 +851,11 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                         );
                         individualSrcResults.push(...chunkResults);
                       }
-                      return individualSrcResults.filter((d): d is { isSrcSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } => d !== null);
+                      const srcRes = individualSrcResults.filter((d): d is { isSrcSegment: true; seg: AudioSegmentItem; logicalName: string; blob: Blob } => d !== null);
+                      if (urlForLog && srcRes.length < targetSrcList.length) {
+                        get().appendUrlLog(urlForLog, `⚠️ ${targetSrcList.length - srcRes.length}/${targetSrcList.length} audios originales no se pudieron descargar.`);
+                      }
+                      return srcRes;
                     })()
                   ]);
 
@@ -1233,6 +1255,12 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
                 console.error("V2V Background import error:", err);
                 const state = get();
                 const pendingKeys = Object.keys(state.importStatusByKey).filter(k => state.importStatusByKey[k] === "in_progress");
+                const message = err instanceof Error ? err.message : String(err);
+                state.videos.forEach(v => {
+                  if (v.url && pendingKeys.includes(importKeyFor(v.url, v.index))) {
+                    get().appendUrlLog(v.url, `❌ Importación fallida para video ${v.index}: ${message}`);
+                  }
+                });
                 if (pendingKeys.length > 0) {
                   set((st) => {
                     const newStatus = { ...st.importStatusByKey };
@@ -1511,10 +1539,14 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
           const audioSegs = await v2vApi.getAudioSegments(jobId, v.index);
           const tarMap = await v2vApi.fetchAudioSegmentsTar(jobId, v.index);
           const ttsMediaItems: MediaItem[] = [];
+          let missingSegments = 0;
           for (const seg of audioSegs) {
             const segPad = String(seg.seg).padStart(3, "0");
             const entry = Array.from(tarMap.entries()).find(([k]) => k.includes(`_${segPad}.m4a`) || k.includes(`_${segPad}.wav`));
-            if (!entry) continue;
+            if (!entry) {
+              missingSegments++;
+              continue;
+            }
             const [tarName, blob] = entry;
             const logicalName = tarName.split("/").pop() || `tts_${segPad}.m4a`;
             const isM4A = logicalName.endsWith(".m4a");
@@ -1541,6 +1573,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
             };
             ttsMediaItems.push(item);
             saveMediaBlob(workingProject.id, itemId, blob, meta).catch(() => {});
+          }
+          if (missingSegments > 0 && v.url) {
+            get().appendUrlLog(v.url, `⚠️ ${missingSegments}/${audioSegs.length} audios TTS no están en el paquete TAR.`);
           }
           workingProject = {
             ...workingProject,
@@ -1576,13 +1611,31 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
           const { project: p3 } = await addMultipleClipsToDetachedProject(workingProject, allClips);
           workingProject = p3;
         } else if (trackKey === "original_segments") {
-          const srcSegs = await v2vApi.getSrcAudioSegments(jobId, v.index).catch(() => []);
-          const tarMap = await v2vApi.fetchSrcAudioSegmentsTar(jobId, v.index).catch(() => new Map());
+          let srcSegs: AudioSegmentItem[] = [];
+          try {
+            srcSegs = await v2vApi.getSrcAudioSegments(jobId, v.index);
+          } catch (e) {
+            if (v.url) {
+              get().appendUrlLog(v.url, `⚠️ No se pudo listar los segmentos originales: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+          let tarMap = new Map<string, Blob>();
+          try {
+            tarMap = await v2vApi.fetchSrcAudioSegmentsTar(jobId, v.index);
+          } catch (e) {
+            if (v.url) {
+              get().appendUrlLog(v.url, `❌ No se pudo descargar el paquete de segmentos originales: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
           const srcMediaItems: MediaItem[] = [];
+          let missingSrcSegments = 0;
           for (const seg of srcSegs) {
             const segPad = String(seg.seg).padStart(3, "0");
             const entry = Array.from(tarMap.entries()).find(([k]) => k.includes(`_${segPad}.m4a`) || k.includes(`_${segPad}.wav`));
-            if (!entry) continue;
+            if (!entry) {
+              missingSrcSegments++;
+              continue;
+            }
             const [tarName, blob] = entry;
             const logicalName = tarName.split("/").pop() || `vocals_${segPad}.m4a`;
             const isM4A = logicalName.endsWith(".m4a");
@@ -1609,6 +1662,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
             };
             srcMediaItems.push(item);
             saveMediaBlob(workingProject.id, itemId, blob, meta).catch(() => {});
+          }
+          if (missingSrcSegments > 0 && v.url) {
+            get().appendUrlLog(v.url, `⚠️ ${missingSrcSegments}/${srcSegs.length} audios originales no están en el paquete TAR.`);
           }
           workingProject = {
             ...workingProject,
@@ -1645,6 +1701,9 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
         return true;
       } catch (err: any) {
         console.error(`[V2V] Error importando pista ${trackKey}:`, err);
+        if (v.url) {
+          get().appendUrlLog(v.url, `❌ Error importando la pista ${trackKey}: ${err?.message || String(err)}`);
+        }
         toast.error("Error al importar pista", err?.message || "Ocurrió un error");
         return false;
       }

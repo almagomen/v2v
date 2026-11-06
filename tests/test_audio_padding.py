@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from src.audio_utils import distribute_silence_padding
+from src.audio_utils import distribute_silence_padding, trim_edge_silence
 
 RATE = 1000  # 1 muestra = 1 ms; las ventanas de 40/20 ms siguen siendo válidas
 
@@ -117,6 +117,56 @@ class TestDistributeSilencePadding(unittest.TestCase):
         )
 
         self.assertLessEqual(out.shape[-1], target)
+
+
+class TestTrimEdgeSilence(unittest.TestCase):
+    def test_recorta_aire_largo_al_inicio_y_al_final(self):
+        arr = np.concatenate([
+            _silence(0.50), _speech(2.0), _silence(1.00),
+        ], axis=-1)
+
+        out = trim_edge_silence(arr, RATE)
+
+        self.assertLess(out.shape[-1], arr.shape[-1])
+        # Queda voz y solo los márgenes de seguridad (80 ms + 60 ms).
+        expected = int((2.0 + 0.08 + 0.06) * RATE)
+        self.assertAlmostEqual(out.shape[-1], expected, delta=2)
+
+    def test_conserva_pausas_internas(self):
+        arr = np.concatenate([
+            _silence(0.50), _speech(1.0), _silence(0.80), _speech(1.0), _silence(0.50),
+        ], axis=-1)
+
+        out = trim_edge_silence(arr, RATE)
+
+        runs = _silence_runs(out)
+        self.assertTrue(any(abs(run - 0.80) < 0.03 for run in runs), runs)
+
+    def test_no_recorta_silencios_menores_al_minimo(self):
+        arr = np.concatenate([
+            _silence(0.05), _speech(1.0), _silence(0.05),
+        ], axis=-1)
+
+        out = trim_edge_silence(arr, RATE)
+
+        self.assertEqual(out.shape, arr.shape)
+
+    def test_no_recorta_un_clip_sin_voz(self):
+        arr = _silence(1.0)
+
+        out = trim_edge_silence(arr, RATE)
+
+        self.assertEqual(out.shape, arr.shape)
+
+    def test_no_deja_un_clip_demasiado_corto(self):
+        arr = np.concatenate([
+            _silence(0.50), _speech(0.15), _silence(0.50),
+        ], axis=-1)
+
+        out = trim_edge_silence(arr, RATE)
+
+        self.assertGreaterEqual(out.shape[-1], int(0.10 * RATE))
+        self.assertGreater(out.shape[-1], 0)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ se conservan y sustituyen a las que devuelva Fish en esa misma posición.
 from __future__ import annotations
 
 import re
+import threading
 import time
 from typing import Callable, Optional
 
@@ -21,8 +22,42 @@ import requests
 
 FISH_ENHANCE_URL = "https://api.fish.audio/enhance/text"
 
+# Códigos que indican que la clave o la ruta privada no sirven para este
+# proceso. Reintentar segmento a segmento solo llenaría el log de 401.
+_FATAL_STATUS = (401, 403, 404)
+
 _TAG_RE = re.compile(r"\[[^\]]*\]")
 _LEADING_TAGS_RE = re.compile(r"^(?:\s*\[[^\]]*\]\s*)+")
+
+_DISABLED_REASON: Optional[str] = None
+_DISABLED_LOCK = threading.Lock()
+
+
+def _disable(reason: str, log_fn: Callable[[str], None]) -> None:
+    """Desactiva ``/enhance/text`` para el resto del proceso (una sola vez)."""
+    global _DISABLED_REASON
+    with _DISABLED_LOCK:
+        already = _DISABLED_REASON is not None
+        if not already:
+            _DISABLED_REASON = reason
+    if not already:
+        log_fn(f"[auto-emociones] {reason}")
+        log_fn(
+            "[auto-emociones] /enhance/text desactivado para este proceso: "
+            "se usará el texto original sin reintentos."
+        )
+
+
+def _disabled_reason() -> Optional[str]:
+    with _DISABLED_LOCK:
+        return _DISABLED_REASON
+
+
+def reset_disable_state() -> None:
+    """Reactiva el endpoint (útil para tests o tras cambiar la clave)."""
+    global _DISABLED_REASON
+    with _DISABLED_LOCK:
+        _DISABLED_REASON = None
 
 
 def _config():
@@ -97,6 +132,9 @@ def enhance_text(
     if not _has_visible_text(text):
         return None
 
+    if _disabled_reason():
+        return None
+
     try:
         ver = (version or get_version()).strip().lower()
     except Exception:
@@ -135,7 +173,18 @@ def enhance_text(
                 json=payload,
                 timeout=timeout,
             )
-            if response.status_code == 429:
+            status = getattr(response, "status_code", 0)
+            if status in _FATAL_STATUS:
+                detail = ""
+                if getattr(response, "text", ""):
+                    detail = f" | {str(response.text)[:300]}"
+                _disable(
+                    f"/enhance/text rechazó la clave (HTTP {status}){detail}. "
+                    "La API pública de Fish no expone este endpoint.",
+                    _log,
+                )
+                return None
+            if status == 429:
                 wait = 2.0 * (attempt + 1)
                 _log(
                     "[auto-emociones] Rate limit de Fish (429): "
@@ -143,6 +192,15 @@ def enhance_text(
                 )
                 time.sleep(wait)
                 continue
+            if 400 <= status < 500:
+                detail = ""
+                if getattr(response, "text", ""):
+                    detail = f" | {str(response.text)[:300]}"
+                _log(
+                    f"[auto-emociones] /enhance/text rechazó el texto "
+                    f"(HTTP {status}){detail}: se usa el texto original."
+                )
+                return None
             response.raise_for_status()
             data = response.json()
             enhanced = str(data.get("enhanced_script") or "").strip()

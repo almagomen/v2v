@@ -69,6 +69,113 @@ async function readJsonOrThrow<T>(res: Response): Promise<T> {
   throw new Error(`Respuesta no JSON (${res.status}). Primeros caracteres: ${preview}`);
 }
 
+const METADATA_TIMEOUT_MS = 30_000;
+const MEDIA_TIMEOUT_MS = 60_000;
+const TAR_HEADER_TIMEOUT_MS = 30_000;
+const TAR_STALL_TIMEOUT_MS = 45_000;
+
+function timeoutError(message: string): Error {
+  return new DOMException(message, "TimeoutError");
+}
+
+/**
+ * Señal de aborto con límite de tiempo y encadenamiento al AbortSignal externo.
+ * El llamador debe ejecutar `cleanup()` en un `finally`.
+ */
+function createTimeoutSignal(
+  timeoutMs: number,
+  externalSignal?: AbortSignal,
+  message = `Tiempo de espera agotado (${timeoutMs / 1000}s)`
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(timeoutError(message)), timeoutMs);
+  const onExternalAbort = () => controller.abort(externalSignal?.reason);
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort(externalSignal.reason);
+    else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
+    },
+  };
+}
+
+/**
+ * Descarga un TAR con dos guardas: tiempo máximo hasta las cabeceras y tiempo
+ * máximo sin recibir datos. No impone un tope total, así que una transferencia
+ * lenta pero viva puede terminar; una conexión colgada falla con un error claro.
+ */
+async function fetchTarBuffer(
+  target: string,
+  externalSignal?: AbortSignal
+): Promise<ArrayBuffer> {
+  const controller = new AbortController();
+  const abortWith = (message: string) => controller.abort(timeoutError(message));
+
+  let headerTimer: ReturnType<typeof setTimeout> | null = setTimeout(
+    () => abortWith(`El servidor no respondió en ${TAR_HEADER_TIMEOUT_MS / 1000}s`),
+    TAR_HEADER_TIMEOUT_MS
+  );
+  const onExternalAbort = () => controller.abort(externalSignal?.reason);
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort(externalSignal.reason);
+    else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
+
+  try {
+    const res = await fetch(target, { signal: controller.signal });
+    if (headerTimer) {
+      clearTimeout(headerTimer);
+      headerTimer = null;
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Error al descargar paquete TAR (${res.status})`);
+    }
+    if (!res.body) return await res.arrayBuffer();
+
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+
+    for (;;) {
+      let stallTimer: ReturnType<typeof setTimeout> | undefined;
+      const stall = new Promise<never>((_, reject) => {
+        stallTimer = setTimeout(() => {
+          const message = `Descarga detenida: sin datos durante ${TAR_STALL_TIMEOUT_MS / 1000}s`;
+          abortWith(message);
+          reject(new Error(message));
+        }, TAR_STALL_TIMEOUT_MS);
+      });
+
+      try {
+        const result = await Promise.race([reader.read(), stall]);
+        if (result.done) break;
+        if (result.value) {
+          chunks.push(result.value);
+          total += result.value.length;
+        }
+      } finally {
+        if (stallTimer) clearTimeout(stallTimer);
+      }
+    }
+
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return merged.buffer;
+  } finally {
+    if (headerTimer) clearTimeout(headerTimer);
+    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
+  }
+}
+
 export interface ProcessUrlsResponse {
   job_id: string;
   message: string;
@@ -432,18 +539,28 @@ export const v2vApi = {
   },
 
   async getJobStatus(jobId: string): Promise<JobStatusResponse> {
-    const res = await fetch(url(`/api/job/${jobId}/status`));
-    if (!res.ok) throw new Error("Error al obtener estado");
-    return readJsonOrThrow<JobStatusResponse>(res);
+    const { signal, cleanup } = createTimeoutSignal(METADATA_TIMEOUT_MS);
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/status`), { signal });
+      if (!res.ok) throw new Error("Error al obtener estado");
+      return await readJsonOrThrow<JobStatusResponse>(res);
+    } finally {
+      cleanup();
+    }
   },
 
   async getJobResult(jobId: string): Promise<JobResultResponse> {
-    const res = await fetch(url(`/api/job/${jobId}/result`));
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al obtener resultado");
+    const { signal, cleanup } = createTimeoutSignal(METADATA_TIMEOUT_MS);
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/result`), { signal });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Error al obtener resultado");
+      }
+      return await readJsonOrThrow<JobResultResponse>(res);
+    } finally {
+      cleanup();
     }
-    return readJsonOrThrow<JobResultResponse>(res);
   },
 
   getFileUrl(jobId: string, videoIndex: number, filename: string): string {
@@ -659,12 +776,17 @@ export const v2vApi = {
   },
 
   async getAudioSegments(jobId: string, videoIndex: number): Promise<AudioSegmentItem[]> {
-    const res = await fetch(url(`/api/job/${jobId}/audio-segments/${videoIndex}`));
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al listar segmentos de audio");
+    const { signal, cleanup } = createTimeoutSignal(METADATA_TIMEOUT_MS);
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/audio-segments/${videoIndex}`), { signal });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Error al listar segmentos de audio");
+      }
+      return await readJsonOrThrow<AudioSegmentItem[]>(res);
+    } finally {
+      cleanup();
     }
-    return readJsonOrThrow<AudioSegmentItem[]>(res);
   },
 
   audioSegmentUrl(jobId: string, videoIndex: number, seg: number): string {
@@ -672,12 +794,19 @@ export const v2vApi = {
   },
 
   async fetchAudioSegmentBlob(jobId: string, videoIndex: number, seg: number): Promise<Blob> {
-    const res = await fetch(url(`/api/job/${jobId}/audio-segments/${videoIndex}/${seg}`));
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `Error al descargar segmento ${seg}`);
+    const { signal, cleanup } = createTimeoutSignal(MEDIA_TIMEOUT_MS);
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/audio-segments/${videoIndex}/${seg}`), {
+        signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Error al descargar segmento ${seg}`);
+      }
+      return await res.blob();
+    } finally {
+      cleanup();
     }
-    return res.blob();
   },
 
   /**
@@ -687,63 +816,58 @@ export const v2vApi = {
   async fetchAudioSegmentsTar(
     jobId: string,
     videoIndex: number,
-    timeoutMs = 0,
     externalSignal?: AbortSignal
   ): Promise<Map<string, Blob>> {
-    const controller = new AbortController();
-    const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    let buffer = await fetchTarBuffer(
+      url(`/api/job/${jobId}/audio-segments-tar/${videoIndex}`),
+      externalSignal
+    );
 
-    if (externalSignal) {
-      if (externalSignal.aborted) controller.abort();
-      else externalSignal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
-
-    try {
-      const res = await fetch(url(`/api/job/${jobId}/audio-segments-tar/${videoIndex}`), {
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `Error al descargar paquete TAR de segmentos (${res.status})`);
-      }
-      let buffer = await res.arrayBuffer();
-
-      // Si el buffer aún tiene magic bytes de gzip (0x1f, 0x8b), lo descomprimimos nativamente
-      const head = new Uint8Array(buffer, 0, Math.min(2, buffer.byteLength));
-      if (head.length >= 2 && head[0] === 0x1f && head[1] === 0x8b) {
-        if (typeof DecompressionStream !== "undefined") {
-          try {
-            const ds = new DecompressionStream("gzip");
-            const decompressedRes = new Response(new Blob([buffer]).stream().pipeThrough(ds));
-            buffer = await decompressedRes.arrayBuffer();
-          } catch (e) {
-            console.warn("[V2V] Error descomprimiendo gzip de TAR:", e);
-          }
+    // Si el buffer aún tiene magic bytes de gzip (0x1f, 0x8b), lo descomprimimos nativamente
+    const head = new Uint8Array(buffer, 0, Math.min(2, buffer.byteLength));
+    if (head.length >= 2 && head[0] === 0x1f && head[1] === 0x8b) {
+      if (typeof DecompressionStream !== "undefined") {
+        try {
+          const ds = new DecompressionStream("gzip");
+          const decompressedRes = new Response(new Blob([buffer]).stream().pipeThrough(ds));
+          buffer = await decompressedRes.arrayBuffer();
+        } catch (e) {
+          console.warn("[V2V] Error descomprimiendo gzip de TAR:", e);
         }
       }
-
-      return parseTarArchive(buffer);
-    } finally {
-      if (timer) clearTimeout(timer);
     }
+
+    return parseTarArchive(buffer);
   },
 
   async getSrcAudioSegments(jobId: string, videoIndex: number): Promise<AudioSegmentItem[]> {
-    const res = await fetch(url(`/api/job/${jobId}/src-audio-segments/${videoIndex}`));
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al listar segmentos de audio originales");
+    const { signal, cleanup } = createTimeoutSignal(METADATA_TIMEOUT_MS);
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/src-audio-segments/${videoIndex}`), { signal });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Error al listar segmentos de audio originales");
+      }
+      return await readJsonOrThrow<AudioSegmentItem[]>(res);
+    } finally {
+      cleanup();
     }
-    return readJsonOrThrow<AudioSegmentItem[]>(res);
   },
 
   async fetchSrcAudioSegmentBlob(jobId: string, videoIndex: number, seg: number): Promise<Blob> {
-    const res = await fetch(url(`/api/job/${jobId}/src-audio-segments/${videoIndex}/${seg}`));
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `Error al descargar segmento original ${seg}`);
+    const { signal, cleanup } = createTimeoutSignal(MEDIA_TIMEOUT_MS);
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/src-audio-segments/${videoIndex}/${seg}`), {
+        signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Error al descargar segmento original ${seg}`);
+      }
+      return await res.blob();
+    } finally {
+      cleanup();
     }
-    return res.blob();
   },
 
   /**
@@ -752,44 +876,27 @@ export const v2vApi = {
   async fetchSrcAudioSegmentsTar(
     jobId: string,
     videoIndex: number,
-    timeoutMs = 0,
     externalSignal?: AbortSignal
   ): Promise<Map<string, Blob>> {
-    const controller = new AbortController();
-    const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    let buffer = await fetchTarBuffer(
+      url(`/api/job/${jobId}/src-audio-segments-tar/${videoIndex}`),
+      externalSignal
+    );
 
-    if (externalSignal) {
-      if (externalSignal.aborted) controller.abort();
-      else externalSignal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
-
-    try {
-      const res = await fetch(url(`/api/job/${jobId}/src-audio-segments-tar/${videoIndex}`), {
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `Error al descargar paquete TAR de segmentos originales (${res.status})`);
-      }
-      let buffer = await res.arrayBuffer();
-
-      const head = new Uint8Array(buffer, 0, Math.min(2, buffer.byteLength));
-      if (head.length >= 2 && head[0] === 0x1f && head[1] === 0x8b) {
-        if (typeof DecompressionStream !== "undefined") {
-          try {
-            const ds = new DecompressionStream("gzip");
-            const decompressedRes = new Response(new Blob([buffer]).stream().pipeThrough(ds));
-            buffer = await decompressedRes.arrayBuffer();
-          } catch (e) {
-            console.warn("[V2V] Error descomprimiendo gzip de TAR original:", e);
-          }
+    const head = new Uint8Array(buffer, 0, Math.min(2, buffer.byteLength));
+    if (head.length >= 2 && head[0] === 0x1f && head[1] === 0x8b) {
+      if (typeof DecompressionStream !== "undefined") {
+        try {
+          const ds = new DecompressionStream("gzip");
+          const decompressedRes = new Response(new Blob([buffer]).stream().pipeThrough(ds));
+          buffer = await decompressedRes.arrayBuffer();
+        } catch (e) {
+          console.warn("[V2V] Error descomprimiendo gzip de TAR original:", e);
         }
       }
-
-      return parseTarArchive(buffer);
-    } finally {
-      if (timer) clearTimeout(timer);
     }
+
+    return parseTarArchive(buffer);
   },
 
   async downloadZipBlob(jobId: string): Promise<Blob> {
@@ -959,12 +1066,17 @@ export const v2vApi = {
   },
 
   async poll(jobId: string): Promise<PollResponse> {
-    const res = await fetch(url(`/api/job/${jobId}/poll`));
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al sincronizar estado del job");
+    const { signal, cleanup } = createTimeoutSignal(METADATA_TIMEOUT_MS);
+    try {
+      const res = await fetch(url(`/api/job/${jobId}/poll`), { signal });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Error al sincronizar estado del job");
+      }
+      return await readJsonOrThrow<PollResponse>(res);
+    } finally {
+      cleanup();
     }
-    return readJsonOrThrow<PollResponse>(res);
   },
 
   async reconcileJobs(): Promise<{ jobs: Array<{ job_id: string; status: string; message: string; video_count: number; videos: any[] }> }> {
@@ -1029,9 +1141,9 @@ export const v2vApi = {
     const res = await fetch(url("/api/render/gemini-models"));
     if (!res.ok) {
       return {
-        default_model: "gemini-flash-lite-latest",
+        default_model: "gemini-3.5-flash-lite",
         models: [
-          "gemini-flash-lite-latest",
+          "gemini-3.5-flash-lite",
           "gemma-4-26b-a4b-it",
         ],
       };

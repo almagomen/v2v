@@ -6,7 +6,6 @@ Ejecutar desde la raíz del repo:
 from __future__ import annotations
 
 import os
-import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -18,13 +17,12 @@ from src.config import (
     set_stt_engine,
 )
 from src.stt_crisper import (
-    VERBATIM_TAGS,
     _crisper_result_to_segments,
-    _language_scores,
-    _load_audio_windows,
+    _normalize_detection,
     _split_device,
-    detect_language_crisper,
+    transcribe_with_crisper,
 )
+from src.language_detect import select_audio_windows
 
 
 class TestSttEngineSetting(unittest.TestCase):
@@ -139,170 +137,92 @@ class TestCrisperResultToSegments(unittest.TestCase):
         self.assertEqual(payload["segments"], [])
 
 
-class TestCrisperLanguageDetection(unittest.TestCase):
-    def test_scores_elige_el_mayor_y_normaliza(self):
-        lang_ids = {"en": 0, "es": 1, "pt": 2}
-        language, probability = _language_scores([1.0, 3.0, 2.0], lang_ids)
+class TestCrisperLanguageHandling(unittest.TestCase):
+    def test_normaliza_codigo_simple(self):
+        self.assertEqual(_normalize_detection("ES"), ("es", None, ""))
 
-        self.assertEqual(language, "es")
-        self.assertGreater(probability, 0.5)
-        self.assertLessEqual(probability, 1.0)
-
-    def test_scores_rechaza_ids_fuera_del_vocabulario(self):
-        with self.assertRaises(RuntimeError):
-            _language_scores([1.0, 2.0], {"en": 5})
-
-    def test_scores_usa_el_ultimo_paso_del_prefill(self):
-        """`prefill` devuelve [1, pasos, vocab]; el idioma es el último paso."""
-        import numpy as np
-
-        logits = np.array([[[9.0, 0.0, 0.0], [0.0, 9.0, 0.0]]])
-        language, probability = _language_scores(logits, {"en": 0, "es": 1, "pt": 2})
-
-        self.assertEqual(language, "es")
-        self.assertGreater(probability, 0.9)
-
-    def test_scores_mueve_la_vista_ct2_a_cpu(self):
-        """Regresión: `StorageView` en GPU no expone `__array_interface__`."""
-        import numpy as np
-
-        class FakeStorageView:
-            def __init__(self, values, device="cuda"):
-                self.values = values
-                self.device = device
-
-            def to(self, dtype):
-                return FakeStorageView(self.values, self.device)
-
-            def to_device(self, device):
-                return FakeStorageView(self.values, "cpu")
-
-            @property
-            def __array_interface__(self):
-                if self.device != "cpu":
-                    raise AttributeError(
-                        "Cannot get __array_interface__ when the StorageView "
-                        "is viewing a CUDA array"
-                    )
-                return np.asarray(self.values, dtype=np.float32).__array_interface__
-
-        ctranslate2 = SimpleNamespace(
-            DataType=SimpleNamespace(float32="float32"),
-            Device=SimpleNamespace(cpu="cpu"),
+    def test_normaliza_tupla_con_probabilidad_y_detalle(self):
+        language, probability, detail = _normalize_detection(
+            ("es", 0.93, " · alternativas: fr 0.04")
         )
-        lang_ids = {"en": 0, "es": 1, "pt": 2}
-
-        with patch.dict(sys.modules, {"ctranslate2": ctranslate2}):
-            language, probability = _language_scores(
-                FakeStorageView([0.0, 5.0, 1.0]), lang_ids
-            )
-
         self.assertEqual(language, "es")
-        self.assertGreater(probability, 0.5)
+        self.assertAlmostEqual(probability, 0.93)
+        self.assertIn("alternativas", detail)
 
-    def test_detecta_con_prefill_sin_depender_de_detect_language(self):
-        """Regresión: el config.json CT2 pierde lang_ids y detect_language revienta."""
-
-        class RawModel:
+    def test_transcribe_usa_el_idioma_resuelto(self):
+        class FakeModel:
             def __init__(self):
-                self.prompts = []
+                self.calls = []
 
-            def detect_language(self, features):
-                raise RuntimeError(
-                    "[json.exception.type_error.302] type must be number, but is number"
+            def transcribe(self, audio, **kwargs):
+                self.calls.append((audio, kwargs))
+                return SimpleNamespace(
+                    text="Hola mundo.",
+                    words=[
+                        SimpleNamespace(word="Hola", start=0.0, end=0.4),
+                        SimpleNamespace(word=" mundo.", start=0.5, end=0.9),
+                    ],
                 )
 
-            def prefill(self, features, prompt):
-                self.prompts.append((features, prompt))
-                return object(), [0.0, 4.0, 1.0]
+        model = FakeModel()
+        payload = transcribe_with_crisper(model, "vocals.wav", language="es")
 
-        class Engine:
-            _lang_ids = {"en": 0, "es": 1, "pt": 2}
-            sot_id = 50258
+        self.assertEqual(payload["language"], "es")
+        self.assertEqual(payload["text"], "Hola mundo.")
+        self.assertEqual(len(model.calls), 1)
+        audio, kwargs = model.calls[0]
+        self.assertEqual(audio, "vocals.wav")
+        self.assertEqual(kwargs["language"], "es")
+        self.assertEqual(kwargs["mode"], "verbatim")
+        self.assertTrue(kwargs["word_timestamps"])
 
-            def __init__(self):
-                self.model = RawModel()
-                self.audio = []
-                self.encoded = []
+    def test_transcribe_usa_detector_externo_y_lo_registra(self):
+        class FakeModel:
+            def transcribe(self, audio, **kwargs):
+                return SimpleNamespace(text="Hola", words=[])
 
-            def encode_text(self, text):
-                self.encoded.append(text)
-                return [900, 901, 902, 903, 904]
+        with patch("builtins.print") as fake_print:
+            payload = transcribe_with_crisper(
+                FakeModel(),
+                "vocals.wav",
+                language_detector=lambda path: ("es", 0.88, ""),
+            )
 
-            def extract_features(self, audio):
-                self.audio.append(audio)
-                return "features"
+        self.assertEqual(payload["language"], "es")
+        printed = " ".join(str(call) for call in fake_print.call_args_list)
+        self.assertIn("Idioma detectado: es", printed)
 
-        engine = Engine()
-        model = SimpleNamespace(_engine=engine)
-
-        with (
-            patch("src.stt_crisper._load_audio_windows", return_value=["audio"]),
-            patch("builtins.print"),
-        ):
-            language = detect_language_crisper(model, "vocals.wav")
-
-        # Código limpio, sin los marcadores <|...|>.
-        self.assertEqual(language, "es")
-        self.assertEqual(engine.audio, ["audio"])
-        self.assertEqual(engine.encoded, [VERBATIM_TAGS])
-        # El prefijo debe imitar al de entrenamiento: etiquetas + [sot].
-        self.assertEqual(
-            engine.model.prompts, [("features", [900, 901, 902, 903, 904, 50258])]
-        )
-
-    def test_falla_sin_decoder_ct2(self):
-        model = SimpleNamespace(_engine=SimpleNamespace(_lang_ids={}, sot_id=None))
+    def test_transcribe_sin_idioma_ni_detector_lanza(self):
         with self.assertRaises(RuntimeError):
-            detect_language_crisper(model, "vocals.wav")
+            transcribe_with_crisper(SimpleNamespace(), "vocals.wav")
+
+    def test_transcribe_rechaza_detector_vacio(self):
+        with self.assertRaises(RuntimeError):
+            transcribe_with_crisper(
+                SimpleNamespace(),
+                "vocals.wav",
+                language_detector=lambda path: "",
+            )
 
 
-class TestAudioWindows(unittest.TestCase):
-    def _windows(self, total_seconds):
-        import numpy as np
-
-        reads = []
-
-        class Info:
-            samplerate = 16000
-            frames = int(total_seconds * 16000)
-
-        def read(path, start=0, frames=None, **kwargs):
-            reads.append(start)
-            return np.zeros(frames, dtype=np.float32), Info.samplerate
-
-        soundfile = SimpleNamespace(info=lambda path: Info(), read=read)
-        audio_module = SimpleNamespace(load_audio=lambda audio, sr: audio)
-        crisperwhisper = SimpleNamespace(audio=audio_module)
-
-        with patch.dict(
-            sys.modules,
-            {
-                "soundfile": soundfile,
-                "crisperwhisper": crisperwhisper,
-                "crisperwhisper.audio": audio_module,
-            },
-        ):
-            windows = _load_audio_windows("vocals.wav")
-        return windows, reads
-
+class TestSelectAudioWindows(unittest.TestCase):
     def test_audio_corto_usa_una_ventana(self):
-        windows, reads = self._windows(10)
-
-        self.assertEqual(len(windows), 1)
-        self.assertEqual(reads, [0])
+        self.assertEqual(select_audio_windows(10 * 16000, 30 * 16000), [0])
 
     def test_audio_largo_reparte_tres_ventanas(self):
-        windows, reads = self._windows(90)
-
-        self.assertEqual(len(windows), 3)
-        self.assertEqual(reads, [0, 30 * 16000, 60 * 16000])
+        windows = select_audio_windows(90 * 16000, 30 * 16000)
+        self.assertEqual(windows, [0, 30 * 16000, 60 * 16000])
 
     def test_audio_mediano_no_repite_ventanas(self):
-        windows, reads = self._windows(40)
+        self.assertEqual(select_audio_windows(40 * 16000, 30 * 16000), [0])
 
-        self.assertEqual(len(windows), 1)
-        self.assertEqual(reads, [0])
+    def test_audio_muy_largo_cubre_inicio_y_final(self):
+        total = 300 * 16000
+        span = 30 * 16000
+        windows = select_audio_windows(total, span)
+        self.assertEqual(len(windows), 3)
+        self.assertEqual(windows[0], 0)
+        self.assertEqual(windows[-1], total - span)
 
 
 if __name__ == "__main__":
