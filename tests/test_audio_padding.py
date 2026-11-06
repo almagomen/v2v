@@ -4,7 +4,11 @@ from unittest import mock
 
 import numpy as np
 
-from src.audio_utils import distribute_silence_padding, synthesize_segment_audio
+from src.audio_utils import (
+    _format_aligned_segment_texts,
+    distribute_silence_padding,
+    synthesize_segment_audio,
+)
 
 RATE = 1000  # 1 muestra = 1 ms; las ventanas de 40/20 ms siguen siendo válidas
 
@@ -193,6 +197,65 @@ class TestSyncToOriginal(unittest.TestCase):
         self.assertAlmostEqual(final_dur, 1.25, places=3)
         self.assertEqual(arr.shape[-1], int(1.25 * RATE))
         self.assertNotEqual(float(arr[..., -1][0]), 0.0)
+
+
+class TestAlignedSegmentTexts(unittest.TestCase):
+    """El log no debe repetir la misma frase cuando no hubo traducción."""
+
+    ORIG = (
+        "Si tienes una prenda con el escote demasiado holgado, primero identifica "
+        "las costuras de los hombros."
+    )
+    ENHANCED = (
+        "[excited] Si tienes una prenda con el escote demasiado holgado, "
+        "[short pause] [emphasis] primero identifica las costuras de los hombros."
+    )
+
+    def test_sin_traduccion_emite_una_sola_linea_con_el_enhance(self):
+        lines = _format_aligned_segment_texts(
+            orig_text=self.ORIG,
+            final_text=self.ENHANCED,
+            source_lang="es",
+            target_lang="es",
+        )
+
+        self.assertEqual(lines, [self.ENHANCED])
+
+    def test_mismo_texto_con_etiquetas_no_se_confunde_con_traduccion(self):
+        # Las etiquetas dejan espacios dobles al quitarlas; sin normalizar,
+        # el mismo texto parecía una traducción distinta.
+        lines = _format_aligned_segment_texts(
+            orig_text=self.ORIG,
+            final_text=self.ENHANCED,
+            source_lang=None,
+            target_lang=None,
+        )
+
+        self.assertEqual(lines, [self.ENHANCED])
+
+    def test_traduccion_real_muestra_original_y_final(self):
+        lines = _format_aligned_segment_texts(
+            orig_text="Se o decote estiver largo, marque as costuras.",
+            final_text="[excited] Si el escote queda largo, marca las costuras.",
+            source_lang="pt",
+            target_lang="es",
+        )
+
+        self.assertEqual(len(lines), 2)
+        self.assertIn("[pt]", lines[0])
+        self.assertIn("Se o decote estiver largo", lines[0])
+        self.assertIn("[excited]", lines[1])
+        self.assertIn("Si el escote queda largo", lines[1])
+
+    def test_idioma_desconocido_compara_el_texto(self):
+        lines = _format_aligned_segment_texts(
+            orig_text="Hola mundo.",
+            final_text="Hola mundo.",
+            source_lang=None,
+            target_lang=None,
+        )
+
+        self.assertEqual(lines, ["Hola mundo."])
 
 
 if __name__ == "__main__":

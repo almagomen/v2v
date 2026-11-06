@@ -8,6 +8,7 @@ from typing import Optional, Tuple, Any
 import numpy as np
 
 from src.qa import evaluate_segment, format_report, levels_from_pcm, save_report, summarize
+from src.lang_utils import same_language
 from src.pacing import ends_sentence, visible_text
 
 # Estrategia de sincronía del doblaje (no configurables por API: describen el criterio).
@@ -60,19 +61,33 @@ def _format_aligned_segment_texts(
     final_text: str,
     source_lang: Optional[str] = None,
     indent: str = "",
+    target_lang: Optional[str] = None,
 ) -> list[str]:
     """
     Formatea las líneas de texto del segmento (original y traducido/sintetizado).
+
     Alinea a la derecha las etiquetas iniciales ([idioma] y [emoción]) para que los
     corchetes de cierre concuerden en la misma columna vertical y los textos arranquen alineados.
+
+    Si el segmento no se tradujo (mismo idioma o mismo texto), se emite una sola
+    línea: el texto que realmente va al TTS, con sus etiquetas de emoción si el
+    enhancer las añadió. Duplicar la misma frase en el log solo confunde.
     """
-    clean_curr = re.sub(r"\[.*?\]", "", final_text).strip()
-    clean_orig = re.sub(r"\[.*?\]", "", orig_text).strip()
-    is_translation = bool(clean_orig and clean_orig.lower() != clean_curr.lower())
+    def _normalize(text: str) -> str:
+        # Quitar etiquetas deja espacios dobles ("holgado,  [emphasis] primero");
+        # sin normalizarlos, el mismo texto parecía una traducción distinta.
+        without_tags = re.sub(r"\[.*?\]", "", text or "")
+        return re.sub(r"\s+", " ", without_tags).strip()
+
+    clean_curr = _normalize(final_text)
+    clean_orig = _normalize(orig_text)
+    same_text = bool(clean_orig) and clean_orig.lower() == clean_curr.lower()
+    same_lang = bool(source_lang and target_lang) and same_language(source_lang, target_lang)
+    is_translation = bool(clean_orig) and not same_text and not same_lang
 
     tag_final, cont_final = _extract_emotion_prefix(final_text)
 
-    # Si no es traducción, solo emitir final_text tal cual
+    # Si no es traducción, solo emitir final_text tal cual (conserva el enhance).
     if not is_translation:
         return [f"{indent}{final_text}"]
 
@@ -1045,6 +1060,7 @@ def clone_voice_segments(
             orig_text=orig_text,
             final_text=text,
             source_lang=src_lang,
+            target_lang=language,
         )
         for line in aligned_lines:
             print(line)

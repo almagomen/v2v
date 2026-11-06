@@ -10,6 +10,7 @@ def get_or_load_model(
     model_key: str,
     loader_fn: Callable[..., Any],
     *args: Any,
+    label: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """
@@ -17,13 +18,14 @@ def get_or_load_model(
     Args:
         model_key: Identificador único del modelo.
         loader_fn: Función que carga el modelo.
+        label: Nombre legible para el log (por defecto, `model_key`).
         *args, **kwargs: Argumentos que se pasan al loader_fn.
     """
     global MODELS
     if model_key not in MODELS:
         try:
             MODELS[model_key] = loader_fn(*args, **kwargs)
-            print(f"✅ Modelo '{model_key}' cargado")
+            print(f"✅ Modelo '{label or model_key}' cargado")
         except Exception as e:
-            raise RuntimeError(f"⚠️ Error al cargar modelo '{model_key}': {e}") from e
+            raise RuntimeError(f"⚠️ Error al cargar modelo '{label or model_key}': {e}") from e
     return MODELS[model_key]

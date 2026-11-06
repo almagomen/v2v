@@ -46,6 +46,7 @@ def get_whisper_model():
         "turbo",
         device=DEVICE,
         download_root=WHISPER_DIR,
+        label="whisper-turbo (detector de idioma para CrisperWhisper)",
     )
 
 

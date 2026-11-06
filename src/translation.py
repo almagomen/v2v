@@ -17,6 +17,7 @@ from src.entities import (
     restore_text,
     split_terms,
 )
+from src.gemini_models import create_interaction
 from src.lang_utils import language_name, same_language, shared_tokens
 from src.pacing import (
     FIT_MIN_GAIN,
@@ -127,7 +128,7 @@ def _call_model(client, model: str, is_gemma: bool, prompt_text: str) -> str:
     if not is_gemma:
         call_kwargs["response_format"] = [{"type": "text", "mime_type": "application/json"}]
     try:
-        interaction = client.interactions.create(**call_kwargs)
+        interaction = create_interaction(client, call_kwargs)
     except Exception as e_rf:
         err_text = str(e_rf).lower()
         if ("response_format" in err_text or "schema" in err_text) and not any(
@@ -135,7 +136,7 @@ def _call_model(client, model: str, is_gemma: bool, prompt_text: str) -> str:
         ):
             print(f"⚠️ [Fallback Traducción] '{model}' no soporta response_format JSON estricto, reintentando en modo texto...", flush=True)
             call_kwargs.pop("response_format", None)
-            interaction = client.interactions.create(**call_kwargs)
+            interaction = create_interaction(client, call_kwargs)
         else:
             raise
     return getattr(interaction, "output_text", None) or ""
@@ -1133,12 +1134,12 @@ def _call_json_map(client, model: str, is_gemma: bool, prompt: str, log_tag: str
         call_kwargs["response_format"] = [{"type": "text", "mime_type": "application/json"}]
 
     try:
-        interaction = client.interactions.create(**call_kwargs)
+        interaction = create_interaction(client, call_kwargs)
     except Exception as e_rf:
         err_text = str(e_rf).lower()
         if "response_format" in err_text or "schema" in err_text:
             call_kwargs.pop("response_format", None)
-            interaction = client.interactions.create(**call_kwargs)
+            interaction = create_interaction(client, call_kwargs)
         else:
             raise
 
@@ -1457,7 +1458,7 @@ IMPORTANTE: Devuelve **solo el título final**, sin explicaciones ni opciones ad
                     "input": actual_input,
                 }
 
-                interaction = client.interactions.create(**call_kwargs)
+                interaction = create_interaction(client, call_kwargs)
                 raw_title = getattr(interaction, "output_text", None) or ""
                 duration = time.perf_counter() - t_start
 

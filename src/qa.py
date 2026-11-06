@@ -404,48 +404,123 @@ def summarize(
     }
 
 
+def _metric_text(metric: str, value: Any) -> str:
+    """Formatea un valor de QA con la unidad que le corresponde."""
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if metric in ("slow_ratio", "compaction_p95", "dead_air_ratio", "dead_air_excess", "dead_air_mid"):
+        return f"{number * 100:.1f}%"
+    if metric in ("speed_p95", "tempo_p95"):
+        return f"{number:.2f}x"
+    if metric in ("rms_std", "rms_median"):
+        return f"{number:.2f} dB"
+    if metric == "length_dev_p95" or metric == "length_dev_over_p95":
+        return f"{number * 100:.0f}%"
+    if metric == "chars_per_sec":
+        return f"{number:.1f} caracteres/s"
+    if metric in ("overlap_secs",):
+        return f"{number:.1f} s"
+    if metric in ("overlap_count", "entity_fail", "fallback", "silent", "residue", "tts_error"):
+        return f"{int(round(number))}"
+    return f"{number:g}"
+
+
+_FAILURE_HELP: dict[str, tuple[str, str]] = {
+    "entity_fail": ("Términos protegidos alterados", "nombres o marcas que debían quedar intactos"),
+    "fallback": ("Traducciones de respaldo", "el modelo principal no pudo traducir esos segmentos"),
+    "silent": ("Clips sin voz audible", "nivel por debajo de -50 dBFS"),
+    "tts_error": ("Segmentos sin audio generado", "falló la síntesis o falta el clip"),
+    "speed_p95": ("Velocidad de la voz (p95)", "el 5% más rápido supera el máximo y puede sonar apresurado"),
+    "slow_ratio": ("Clips ralentizados", "voz arrastrada por debajo de 0.85x"),
+    "compaction_p95": ("Recorte de silencios (p95)", "recortar más de un cuarto del clip deja la locución entrecortada"),
+    "overlap": ("Clips que invaden al siguiente", "un clip más largo que su hueco se come la línea siguiente"),
+    "rms_std": ("Desigualdad de volumen (σ RMS)", "diferencia de nivel entre segmentos"),
+    "dead_air_ratio": ("Aire muerto total", "silencio acumulado en el timeline"),
+    "dead_air_excess": ("Aire muerto añadido sobre el original", "pausas que no existían en la fuente"),
+}
+
+
 def format_report(report: dict[str, Any]) -> list[str]:
-    """Líneas para el log del job. Sin tablas ni sangrías de más de 3 espacios."""
+    """Líneas para el log del job, agrupadas por área y con unidades explícitas."""
     m = report.get("metrics") or {}
+    segments = report.get("segments", 0)
+    expected = report.get("expected_segments")
+    header = f"🩺 [QA] {segments}/{expected or '?'} segmentos analizados"
+
     rate = m.get("chars_per_sec")
     slow = m.get("slow_ratio")
-    slow_txt = f" | lentos {(slow or 0) * 100:.0f}%" if slow is not None else ""
-    lines = [
-        f"🩺 [QA] {report.get('segments', 0)}/{report.get('expected_segments') or '?'} segmentos | "
-        f"velocidad p95 {m.get('speed_p95') or 0:.2f}x | "
-        f"tempo bruto {m.get('tempo_p95') or 0:.2f}x{slow_txt} | "
-        f"desvío p95 {(m.get('length_dev_p95') or 0) * 100:.0f}% "
-        f"(desborde {(m.get('length_dev_over_p95') or 0) * 100:.0f}%) | "
-        f"rms σ {m.get('rms_std') or 0:.2f} dB | "
-        f"fallback {m.get('fallback', 0)} | entidades {m.get('entity_fail', 0)} | "
-        f"silencios {m.get('silent', 0)} | solapes {m.get('overlap_count', 0)} ({(m.get('overlap_secs') or 0):.1f}s)"
-    ]
     comp = m.get("compaction_p95")
-    if comp is not None and comp >= 0.05:
-        lines.append(
-            f"   recorte de silencios: p95 {comp * 100:.0f}% del clip (no cambia la velocidad)"
-        )
-    if rate:
-        lines.append(f"   ritmo medido: {rate:.1f} chars/s a 1.0x (tabla de presupuesto: ajustar si difiere >10%)")
     dead = m.get("dead_air_ratio")
     excess = m.get("dead_air_excess")
     mid = m.get("dead_air_mid")
-    if dead is not None:
-        mid_txt = f" | a mitad de frase {(mid or 0) * 100:.1f}%" if mid is not None else ""
+
+    lines = [
+        header,
+        "   Voz:",
+        f"     • Velocidad aplicada (p95): {_metric_text('speed_p95', m.get('speed_p95'))} "
+        f"(máximo permitido {_metric_text('speed_p95', QA_THRESHOLDS['speed_p95_max'])}) — "
+        "1.00x = voz sin tocar",
+        f"     • Tempo bruto (p95): {_metric_text('tempo_p95', m.get('tempo_p95'))} — "
+        "incluye aceleración y recorte de silencios",
+        f"     • Clips ralentizados (<0.85x): {_metric_text('slow_ratio', slow)}",
+        "   Sincronía con el video original:",
+        f"     • Desvío de duración (p95): {_metric_text('length_dev_p95', m.get('length_dev_p95'))} — "
+        "diferencia frente al hueco original",
+        f"     • Desborde (p95): {_metric_text('length_dev_over_p95', m.get('length_dev_over_p95'))} — "
+        "cuánto se pasó del hueco",
+        f"     • Solapes: {m.get('overlap_count', 0)} clip(s) "
+        f"({_metric_text('overlap_secs', m.get('overlap_secs'))}) — un clip que invade al siguiente",
+        "   Volumen y contenido:",
+        f"     • Variación de volumen (σ RMS): {_metric_text('rms_std', m.get('rms_std'))} — "
+        "0 = todos al mismo nivel",
+        f"     • Sin voz: {m.get('silent', 0)} · traducción de respaldo: {m.get('fallback', 0)} · "
+        f"términos protegidos rotos: {m.get('entity_fail', 0)}",
+    ]
+
+    if comp is not None and comp >= 0.05:
         lines.append(
-            f"   aire muerto: {dead * 100:.1f}% del timeline | añadido sobre el original "
-            f"{(excess or 0) * 100:.1f}%{mid_txt} | referencia: YouTube 25.0%, original 18.0%"
+            f"   Silencios: recorte aplicado (p95) {_metric_text('compaction_p95', comp)} del clip "
+            "— no cambia la velocidad de la voz"
         )
+    if dead is not None:
+        mid_txt = f" · a mitad de frase {_metric_text('dead_air_mid', mid)}" if mid is not None else ""
+        lines.append(
+            f"   Silencios: aire muerto {_metric_text('dead_air_ratio', dead)} del timeline · "
+            f"añadido sobre el original {_metric_text('dead_air_excess', excess)}{mid_txt}"
+        )
+        lines.append("     Referencia: doblaje de YouTube 25.0% · original 18.0%")
+    if rate:
+        lines.append(
+            f"   Ritmo: {_metric_text('chars_per_sec', rate)} a 1.0x — si difiere >10% de la tabla, "
+            "el presupuesto de texto queda corto"
+        )
+
     if report.get("passed"):
         lines.append("✅ [QA] pasa los umbrales")
     else:
-        lines.append(f"❌ [QA] {len(report.get('failures') or [])} fallo(s)")
-        for f in report.get("failures") or []:
+        failures = report.get("failures") or []
+        lines.append(f"❌ [QA] {len(failures)} fallo(s):")
+        for f in failures:
+            metric = str(f.get("metric") or "")
+            label, help_txt = _FAILURE_HELP.get(metric, (metric, ""))
+            observed = _metric_text(metric, f.get("observed"))
+            limit = _metric_text(metric, f.get("limit"))
             detail = f" → segs {f['segments']}" if f.get("segments") else ""
-            lines.append(f"   • {f['metric']}: {f['observed']} (máx {f['limit']}){detail}")
+            suffix = f" — {help_txt}" if help_txt else ""
+            lines.append(f"   • {label}: {observed} (máximo {limit}){suffix}{detail}")
+
     for w in report.get("warnings") or []:
+        metric = str(w.get("metric") or "")
+        label, help_txt = _FAILURE_HELP.get(metric, (metric, ""))
         detail = f" → segs {w['segments']}" if w.get("segments") else ""
-        lines.append(f"   ⚠️ {w['metric']}: {w['observed']} (aviso, no bloquea){detail}")
+        suffix = f" — {help_txt}" if help_txt else ""
+        lines.append(
+            f"   ⚠️ Aviso (no bloquea) · {label}: {_metric_text(metric, w.get('observed'))}{suffix}{detail}"
+        )
     return lines
 
 
