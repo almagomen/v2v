@@ -642,28 +642,41 @@ export const createJobSlice: StateCreator<V2VState, [], [], JobSlice> = (set, ge
 
                   const fetchAssetBlob = async (asset: V2VAssetDef) => {
                     if (!asset.enabled) return null;
+                    const attempts: string[] = [];
+                    const errMsg = (err: unknown) =>
+                      err instanceof Error ? err.message : String(err);
                     try {
                       let blob: Blob | null = null;
                       try {
                         blob = await v2vApi.fetchAssetBlob(jobId, v.index, asset.assetKey);
-                      } catch {
+                      } catch (eAsset) {
+                        attempts.push(`asset: ${errMsg(eAsset)}`);
                         if (asset.id === 'video_only') {
                           try {
                             blob = await v2vApi.fetchOutputVideoBlob(jobId, v.index);
-                          } catch {}
+                          } catch (eIndex) {
+                            attempts.push(`files/index: ${errMsg(eIndex)}`);
+                          }
                         }
                         if (!blob && asset.serverFn) {
-                          blob = await v2vApi.fetchFileBlob(jobId, v.index, asset.serverFn);
+                          try {
+                            blob = await v2vApi.fetchFileBlob(jobId, v.index, asset.serverFn);
+                          } catch (eFile) {
+                            attempts.push(`file: ${errMsg(eFile)}`);
+                          }
                         }
                       }
-                      if (!blob) throw new Error(`No se pudo obtener el blob de ${asset.id}`);
+                      if (!blob) {
+                        throw new Error(`No se pudo obtener el blob de ${asset.id}`);
+                      }
                       return { asset, blob };
                     } catch (e) {
                       console.warn(`[V2V] Asset opcional no disponible: ${asset.serverFn || asset.id}`, e);
                       if (urlForLog) {
+                        const detail = attempts.length ? ` [${attempts.join(" · ")}]` : "";
                         get().appendUrlLog(
                           urlForLog,
-                          `⚠️ No se pudo descargar ${asset.id} (${asset.serverFn || "sin archivo"}): ${e instanceof Error ? e.message : String(e)}`
+                          `⚠️ No se pudo descargar ${asset.id} (${asset.serverFn || "sin archivo"}): ${errMsg(e)}${detail}`
                         );
                       }
                       return null;

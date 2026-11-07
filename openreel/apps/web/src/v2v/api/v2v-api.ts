@@ -71,8 +71,11 @@ async function readJsonOrThrow<T>(res: Response): Promise<T> {
 
 const METADATA_TIMEOUT_MS = 30_000;
 const MEDIA_TIMEOUT_MS = 60_000;
-const TAR_HEADER_TIMEOUT_MS = 30_000;
-const TAR_STALL_TIMEOUT_MS = 45_000;
+// Transferencias grandes (video_only, merged, TAR): sin tope total. Un MP4 de
+// 40 MB puede tardar minutos por un túnel lento; abortar por tiempo total era
+// un falso fallo. Solo se vigila el primer byte y los periodos sin datos.
+const STREAM_HEADER_TIMEOUT_MS = 30_000;
+const STREAM_STALL_TIMEOUT_MS = 45_000;
 
 function timeoutError(message: string): Error {
   return new DOMException(message, "TimeoutError");
@@ -103,21 +106,43 @@ function createTimeoutSignal(
   };
 }
 
+interface BufferedDownload {
+  buffer: ArrayBuffer;
+  contentType: string;
+  bytes: number;
+}
+
 /**
- * Descarga un TAR con dos guardas: tiempo máximo hasta las cabeceras y tiempo
+ * Descarga binaria con dos guardas: tiempo máximo hasta las cabeceras y tiempo
  * máximo sin recibir datos. No impone un tope total, así que una transferencia
  * lenta pero viva puede terminar; una conexión colgada falla con un error claro.
+ *
+ * La usan tanto el TAR de segmentos como los activos de video grandes. El tope
+ * total de 60 s que había antes abortaba `video_only` en cuanto el MP4 pasaba
+ * de ~25 MB en un túnel lento.
  */
-async function fetchTarBuffer(
+async function fetchBufferWithGuards(
   target: string,
-  externalSignal?: AbortSignal
-): Promise<ArrayBuffer> {
+  options: {
+    externalSignal?: AbortSignal;
+    label?: string;
+    headerTimeoutMs?: number;
+    stallTimeoutMs?: number;
+  } = {}
+): Promise<BufferedDownload> {
+  const {
+    externalSignal,
+    label = "archivo",
+    headerTimeoutMs = STREAM_HEADER_TIMEOUT_MS,
+    stallTimeoutMs = STREAM_STALL_TIMEOUT_MS,
+  } = options;
+
   const controller = new AbortController();
   const abortWith = (message: string) => controller.abort(timeoutError(message));
 
   let headerTimer: ReturnType<typeof setTimeout> | null = setTimeout(
-    () => abortWith(`El servidor no respondió en ${TAR_HEADER_TIMEOUT_MS / 1000}s`),
-    TAR_HEADER_TIMEOUT_MS
+    () => abortWith(`El servidor no envió '${label}' en ${headerTimeoutMs / 1000}s`),
+    headerTimeoutMs
   );
   const onExternalAbort = () => controller.abort(externalSignal?.reason);
   if (externalSignal) {
@@ -132,10 +157,22 @@ async function fetchTarBuffer(
       headerTimer = null;
     }
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `Error al descargar paquete TAR (${res.status})`);
+      const raw = await res.text().catch(() => "");
+      let detail = "";
+      try {
+        const parsed = JSON.parse(raw);
+        detail = typeof parsed?.detail === "string" ? parsed.detail : "";
+      } catch {
+        // La respuesta de error no era JSON; el status ya es suficiente.
+      }
+      throw new Error(detail || `Error al descargar '${label}' (${res.status})`);
     }
-    if (!res.body) return await res.arrayBuffer();
+
+    const contentType = res.headers.get("content-type") || "";
+    if (!res.body) {
+      const buffer = await res.arrayBuffer();
+      return { buffer, contentType, bytes: buffer.byteLength };
+    }
 
     const reader = res.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -145,10 +182,10 @@ async function fetchTarBuffer(
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
       const stall = new Promise<never>((_, reject) => {
         stallTimer = setTimeout(() => {
-          const message = `Descarga detenida: sin datos durante ${TAR_STALL_TIMEOUT_MS / 1000}s`;
+          const message = `Descarga de '${label}' detenida: sin datos durante ${stallTimeoutMs / 1000}s`;
           abortWith(message);
           reject(new Error(message));
-        }, TAR_STALL_TIMEOUT_MS);
+        }, stallTimeoutMs);
       });
 
       try {
@@ -169,11 +206,22 @@ async function fetchTarBuffer(
       merged.set(chunk, offset);
       offset += chunk.length;
     }
-    return merged.buffer;
+    return { buffer: merged.buffer, contentType, bytes: total };
   } finally {
     if (headerTimer) clearTimeout(headerTimer);
     if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
   }
+}
+
+async function fetchTarBuffer(
+  target: string,
+  externalSignal?: AbortSignal
+): Promise<ArrayBuffer> {
+  const { buffer } = await fetchBufferWithGuards(target, {
+    externalSignal,
+    label: "paquete TAR",
+  });
+  return buffer;
 }
 
 export interface ProcessUrlsResponse {
@@ -574,57 +622,34 @@ export const v2vApi = {
   async fetchAssetBlob(
     jobId: string,
     videoIndex: number,
-    assetKey: string,
-    timeoutMs = 60000
+    assetKey: string
   ): Promise<Blob> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(url(`/api/job/${jobId}/asset/${videoIndex}/${assetKey}`), {
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        throw new Error(`Error al descargar activo ${assetKey}: ${res.status}`);
-      }
-      return await res.blob();
-    } finally {
-      clearTimeout(timer);
-    }
+    const { buffer, contentType } = await fetchBufferWithGuards(
+      url(`/api/job/${jobId}/asset/${videoIndex}/${assetKey}`),
+      { label: `activo '${assetKey}'` }
+    );
+    return new Blob([buffer], { type: contentType || "application/octet-stream" });
   },
 
   async fetchFileBlob(
     jobId: string,
     videoIndex: number,
-    filename: string,
-    timeoutMs = 60000
+    filename: string
   ): Promise<Blob> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(
-        url(`/api/job/${jobId}/files/${videoIndex}/${encodeURIComponent(filename)}`),
-        { signal: controller.signal }
-      );
-      if (!res.ok) throw new Error(`Error al descargar ${filename} (${res.status})`);
-      return await res.blob();
-    } finally {
-      clearTimeout(timer);
-    }
+    const { buffer, contentType } = await fetchBufferWithGuards(
+      url(`/api/job/${jobId}/files/${videoIndex}/${encodeURIComponent(filename)}`),
+      { label: filename }
+    );
+    return new Blob([buffer], { type: contentType || "application/octet-stream" });
   },
 
-  async fetchOutputVideoBlob(jobId: string, videoIndex: number, timeoutMs = 60000): Promise<Blob> {
+  async fetchOutputVideoBlob(jobId: string, videoIndex: number): Promise<Blob> {
     // Endpoint nuevo: evita pasar `filename` (unicode/largo) en la URL.
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(url(`/api/job/${jobId}/files/${videoIndex}`), {
-        signal: controller.signal,
-      });
-      if (!res.ok) throw new Error(`Error al descargar el video (${videoIndex})`);
-      return await res.blob();
-    } finally {
-      clearTimeout(timer);
-    }
+    const { buffer, contentType } = await fetchBufferWithGuards(
+      url(`/api/job/${jobId}/files/${videoIndex}`),
+      { label: `video ${videoIndex + 1}` }
+    );
+    return new Blob([buffer], { type: contentType || "video/mp4" });
   },
 
   async getSpeakers(): Promise<SpeakerOption[]> {
