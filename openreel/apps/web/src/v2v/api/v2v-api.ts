@@ -112,6 +112,311 @@ interface BufferedDownload {
   bytes: number;
 }
 
+// Transferencias grandes: varias conexiones en paralelo para aprovechar el
+// ancho de banda del túnel. Cloudflare limita el caudal por conexión, así que
+// 4 rangos simultáneos suelen ir bastante más rápido que un único flujo.
+// Solo se activa cuando el servidor confirma soporte de HTTP Range.
+const PARALLEL_RANGE_MAX = 4;
+const PARALLEL_RANGE_BYTES = 8 * 1024 * 1024;
+const PARALLEL_RANGE_ATTEMPTS = 3;
+
+interface GuardedResponse {
+  res: Response;
+  controller: AbortController;
+  /** Libera el temporizador de cabeceras y el listener de cancelación. */
+  cleanup: () => void;
+}
+
+/**
+ * Lanza la petición y vigila solo el tiempo hasta las cabeceras. El consumidor
+ * del cuerpo aplica después la guarda de estancamiento.
+ */
+async function fetchWithHeaderGuard(
+  target: string,
+  options: {
+    label: string;
+    method?: string;
+    headers?: Record<string, string>;
+    signal?: AbortSignal;
+    headerTimeoutMs?: number;
+  }
+): Promise<GuardedResponse> {
+  const {
+    label,
+    method,
+    headers,
+    signal,
+    headerTimeoutMs = STREAM_HEADER_TIMEOUT_MS,
+  } = options;
+
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(timeoutError(`El servidor no envió '${label}' en ${headerTimeoutMs / 1000}s`)),
+    headerTimeoutMs
+  );
+  const onAbort = () => controller.abort(signal?.reason);
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+  const cleanup = () => {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", onAbort);
+  };
+
+  try {
+    const res = await fetch(target, { method, signal: controller.signal, headers });
+    clearTimeout(timer);
+    return { res, controller, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
+/**
+ * Lee el tamaño total con un HEAD. `Content-Length` y `Content-Type` son
+ * cabeceras safelisted, así que se pueden leer también en cross-origin
+ * (modo Desktop) sin configurar `Access-Control-Expose-Headers`.
+ * Devuelve null si el servidor no responde al HEAD o no informa del tamaño.
+ */
+async function headDownloadSize(
+  target: string,
+  options: {
+    label: string;
+    signal?: AbortSignal;
+    headerTimeoutMs: number;
+  }
+): Promise<{ total: number; contentType: string } | null> {
+  try {
+    const { res, cleanup } = await fetchWithHeaderGuard(target, {
+      label: options.label,
+      method: "HEAD",
+      signal: options.signal,
+      headerTimeoutMs: options.headerTimeoutMs,
+    });
+    cleanup();
+    if (!res.ok) return null;
+    const length = Number(res.headers.get("content-length"));
+    if (!Number.isFinite(length) || length <= 0) return null;
+    return {
+      total: length,
+      contentType: res.headers.get("content-type") || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function responseError(res: Response, label: string): Promise<Error> {
+  const type = (res.headers.get("content-type") || "").toLowerCase();
+  let detail = "";
+
+  if (type.includes("application/json") || type.startsWith("text/")) {
+    const raw = await res.text().catch(() => "");
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.detail === "string") detail = parsed.detail;
+    } catch {
+      // La respuesta de error no era JSON; el status ya es suficiente.
+    }
+  } else {
+    // No descargamos un cuerpo binario enorme solo para leer el error.
+    await res.body?.cancel().catch(() => {});
+  }
+
+  return new Error(detail || `Error al descargar '${label}' (${res.status})`);
+}
+
+/**
+ * Consume el cuerpo con la guarda de estancamiento. Si se pasa `write`, los
+ * trozos se escriben directamente en el buffer destino (sin acumular copias),
+ * que es lo que usa la descarga por rangos.
+ */
+async function consumeBodyWithStallGuard(
+  res: Response,
+  controller: AbortController,
+  label: string,
+  stallTimeoutMs: number,
+  write?: (chunk: Uint8Array, offset: number) => void
+): Promise<{ buffer: ArrayBuffer; bytes: number }> {
+  const abortWith = (message: string) => controller.abort(timeoutError(message));
+
+  if (!res.body) {
+    const buffer = await res.arrayBuffer();
+    if (write) write(new Uint8Array(buffer), 0);
+    return { buffer: write ? new ArrayBuffer(0) : buffer, bytes: buffer.byteLength };
+  }
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  for (;;) {
+    let stallTimer: ReturnType<typeof setTimeout> | undefined;
+    const stall = new Promise<never>((_, reject) => {
+      stallTimer = setTimeout(() => {
+        const message = `Descarga de '${label}' detenida: sin datos durante ${stallTimeoutMs / 1000}s`;
+        abortWith(message);
+        reject(new Error(message));
+      }, stallTimeoutMs);
+    });
+
+    try {
+      const result = await Promise.race([reader.read(), stall]);
+      if (result.done) break;
+      if (result.value) {
+        if (write) write(result.value, total);
+        else chunks.push(result.value);
+        total += result.value.length;
+      }
+    } finally {
+      if (stallTimer) clearTimeout(stallTimer);
+    }
+  }
+
+  if (write) return { buffer: new ArrayBuffer(0), bytes: total };
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return { buffer: merged.buffer, bytes: total };
+}
+
+/** Combina señales de cancelación (externa + aborto compartido de rangos). */
+function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const present = signals.filter((s): s is AbortSignal => !!s);
+  if (present.length === 0) return undefined;
+  if (present.length === 1) return present[0];
+
+  const controller = new AbortController();
+  const onAbort = () => {
+    const reason = present.find((s) => s.aborted)?.reason;
+    controller.abort(reason);
+  };
+  for (const s of present) {
+    if (s.aborted) {
+      controller.abort(s.reason);
+      break;
+    }
+    s.addEventListener("abort", onAbort, { once: true });
+  }
+  return controller.signal;
+}
+
+async function fetchRangeInto(
+  target: string,
+  start: number,
+  end: number,
+  sink: Uint8Array,
+  options: {
+    label: string;
+    signal?: AbortSignal;
+    headerTimeoutMs: number;
+    stallTimeoutMs: number;
+  }
+): Promise<void> {
+  const expected = end - start + 1;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= PARALLEL_RANGE_ATTEMPTS; attempt++) {
+    const rangeLabel =
+      attempt === 1 ? options.label : `${options.label} (reintento ${attempt - 1})`;
+    let cleanup: (() => void) | null = null;
+
+    try {
+      const guarded = await fetchWithHeaderGuard(target, {
+        label: rangeLabel,
+        headers: { Range: `bytes=${start}-${end}` },
+        signal: options.signal,
+        headerTimeoutMs: options.headerTimeoutMs,
+      });
+      cleanup = guarded.cleanup;
+
+      if (guarded.res.status !== 206) {
+        throw await responseError(guarded.res, rangeLabel);
+      }
+      const { bytes } = await consumeBodyWithStallGuard(
+        guarded.res,
+        guarded.controller,
+        rangeLabel,
+        options.stallTimeoutMs,
+        (chunk, offset) => sink.set(chunk, start + offset)
+      );
+      if (bytes !== expected) {
+        throw new Error(`Rango incompleto en '${rangeLabel}': ${bytes}/${expected} bytes`);
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      // Si el conjunto se canceló, no tiene sentido reintentar.
+      if (options.signal?.aborted) break;
+    } finally {
+      cleanup?.();
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+/**
+ * Descarga un archivo troceado en rangos paralelos. `total` viene del HEAD y
+ * cada trozo se escribe directo en su posición del buffer final.
+ */
+async function downloadByRanges(
+  target: string,
+  total: number,
+  options: {
+    label: string;
+    signal?: AbortSignal;
+    headerTimeoutMs: number;
+    stallTimeoutMs: number;
+    contentType: string;
+  }
+): Promise<BufferedDownload> {
+  const chunkCount = Math.max(
+    1,
+    Math.min(PARALLEL_RANGE_MAX, Math.ceil(total / PARALLEL_RANGE_BYTES))
+  );
+  const chunkSize = Math.ceil(total / chunkCount);
+  const merged = new Uint8Array(total);
+  const shared = new AbortController();
+  const signal = anySignal(options.signal, shared.signal);
+
+  const ranges: Array<{ index: number; start: number; end: number }> = [];
+  for (let i = 0; i < chunkCount; i++) {
+    const start = i * chunkSize;
+    const end = Math.min(total - 1, start + chunkSize - 1);
+    if (start <= end) ranges.push({ index: i, start, end });
+  }
+
+  try {
+    await Promise.all(
+      ranges.map(({ index, start, end }) =>
+        fetchRangeInto(target, start, end, merged, {
+          label: `${options.label} (${index + 1}/${ranges.length})`,
+          signal,
+          headerTimeoutMs: options.headerTimeoutMs,
+          stallTimeoutMs: options.stallTimeoutMs,
+        })
+      )
+    );
+  } catch (error) {
+    // Si un trozo falla de forma definitiva, cancelamos los que sigan vivos.
+    shared.abort(error);
+    throw error;
+  }
+
+  return {
+    buffer: merged.buffer,
+    contentType: options.contentType,
+    bytes: total,
+  };
+}
+
 /**
  * Descarga binaria con dos guardas: tiempo máximo hasta las cabeceras y tiempo
  * máximo sin recibir datos. No impone un tope total, así que una transferencia
@@ -120,6 +425,13 @@ interface BufferedDownload {
  * La usan tanto el TAR de segmentos como los activos de video grandes. El tope
  * total de 60 s que había antes abortaba `video_only` en cuanto el MP4 pasaba
  * de ~25 MB en un túnel lento.
+ *
+ * Con `parallelRanges`, primero consulta el tamaño con un HEAD y luego sondea
+ * con `Range: bytes=0-0`:
+ *  - 206 → descarga en trozos paralelos (si el archivo es grande).
+ *  - 200 → el servidor ignoró Range; esa misma respuesta ya es el archivo
+ *          completo y se consume sin repetir la descarga.
+ *  - 416 → sin rangos válidos; se hace un GET normal.
  */
 async function fetchBufferWithGuards(
   target: string,
@@ -128,6 +440,7 @@ async function fetchBufferWithGuards(
     label?: string;
     headerTimeoutMs?: number;
     stallTimeoutMs?: number;
+    parallelRanges?: boolean;
   } = {}
 ): Promise<BufferedDownload> {
   const {
@@ -135,81 +448,91 @@ async function fetchBufferWithGuards(
     label = "archivo",
     headerTimeoutMs = STREAM_HEADER_TIMEOUT_MS,
     stallTimeoutMs = STREAM_STALL_TIMEOUT_MS,
+    parallelRanges = false,
   } = options;
 
-  const controller = new AbortController();
-  const abortWith = (message: string) => controller.abort(timeoutError(message));
+  const contentTypeOf = (res: Response) => res.headers.get("content-type") || "";
 
-  let headerTimer: ReturnType<typeof setTimeout> | null = setTimeout(
-    () => abortWith(`El servidor no envió '${label}' en ${headerTimeoutMs / 1000}s`),
-    headerTimeoutMs
-  );
-  const onExternalAbort = () => controller.abort(externalSignal?.reason);
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort(externalSignal.reason);
-    else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  if (parallelRanges) {
+    const head = await headDownloadSize(target, {
+      label,
+      signal: externalSignal,
+      headerTimeoutMs,
+    });
+
+    if (head && head.total >= PARALLEL_RANGE_BYTES) {
+      let probe: GuardedResponse | null = null;
+      try {
+        probe = await fetchWithHeaderGuard(target, {
+          label,
+          headers: { Range: "bytes=0-0" },
+          signal: externalSignal,
+          headerTimeoutMs,
+        });
+      } catch (error) {
+        // Si el sondeo falla, probamos la descarga normal de una conexión.
+        if (externalSignal?.aborted) throw error;
+      }
+
+      if (probe) {
+        try {
+          if (probe.res.status === 206) {
+            // Liberamos el byte de sondeo antes de abrir las conexiones paralelas.
+            await probe.res.body?.cancel().catch(() => {});
+            try {
+              return await downloadByRanges(target, head.total, {
+                label,
+                signal: externalSignal,
+                headerTimeoutMs,
+                stallTimeoutMs,
+                contentType: head.contentType,
+              });
+            } catch (error) {
+              if (externalSignal?.aborted) throw error;
+              // Si los rangos fallan (túnel que limita conexiones, etc.),
+              // último intento con un único flujo antes de rendirnos.
+              console.warn(
+                `[V2V] Descarga por rangos falló para '${label}'; reintentando en un flujo único.`,
+                error
+              );
+            }
+          } else if (probe.res.status === 200) {
+            // Range ignorado: la respuesta abierta es el archivo completo.
+            const { buffer, bytes } = await consumeBodyWithStallGuard(
+              probe.res,
+              probe.controller,
+              label,
+              stallTimeoutMs
+            );
+            return { buffer, contentType: contentTypeOf(probe.res), bytes };
+          } else if (probe.res.status !== 416) {
+            throw await responseError(probe.res, label);
+          }
+        } finally {
+          probe.cleanup();
+        }
+      }
+    }
   }
 
+  const single = await fetchWithHeaderGuard(target, {
+    label,
+    signal: externalSignal,
+    headerTimeoutMs,
+  });
   try {
-    const res = await fetch(target, { signal: controller.signal });
-    if (headerTimer) {
-      clearTimeout(headerTimer);
-      headerTimer = null;
+    if (!single.res.ok) {
+      throw await responseError(single.res, label);
     }
-    if (!res.ok) {
-      const raw = await res.text().catch(() => "");
-      let detail = "";
-      try {
-        const parsed = JSON.parse(raw);
-        detail = typeof parsed?.detail === "string" ? parsed.detail : "";
-      } catch {
-        // La respuesta de error no era JSON; el status ya es suficiente.
-      }
-      throw new Error(detail || `Error al descargar '${label}' (${res.status})`);
-    }
-
-    const contentType = res.headers.get("content-type") || "";
-    if (!res.body) {
-      const buffer = await res.arrayBuffer();
-      return { buffer, contentType, bytes: buffer.byteLength };
-    }
-
-    const reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-
-    for (;;) {
-      let stallTimer: ReturnType<typeof setTimeout> | undefined;
-      const stall = new Promise<never>((_, reject) => {
-        stallTimer = setTimeout(() => {
-          const message = `Descarga de '${label}' detenida: sin datos durante ${stallTimeoutMs / 1000}s`;
-          abortWith(message);
-          reject(new Error(message));
-        }, stallTimeoutMs);
-      });
-
-      try {
-        const result = await Promise.race([reader.read(), stall]);
-        if (result.done) break;
-        if (result.value) {
-          chunks.push(result.value);
-          total += result.value.length;
-        }
-      } finally {
-        if (stallTimer) clearTimeout(stallTimer);
-      }
-    }
-
-    const merged = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return { buffer: merged.buffer, contentType, bytes: total };
+    const { buffer, bytes } = await consumeBodyWithStallGuard(
+      single.res,
+      single.controller,
+      label,
+      stallTimeoutMs
+    );
+    return { buffer, contentType: contentTypeOf(single.res), bytes };
   } finally {
-    if (headerTimer) clearTimeout(headerTimer);
-    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
+    single.cleanup();
   }
 }
 
@@ -626,7 +949,7 @@ export const v2vApi = {
   ): Promise<Blob> {
     const { buffer, contentType } = await fetchBufferWithGuards(
       url(`/api/job/${jobId}/asset/${videoIndex}/${assetKey}`),
-      { label: `activo '${assetKey}'` }
+      { label: `activo '${assetKey}'`, parallelRanges: true }
     );
     return new Blob([buffer], { type: contentType || "application/octet-stream" });
   },
@@ -638,7 +961,7 @@ export const v2vApi = {
   ): Promise<Blob> {
     const { buffer, contentType } = await fetchBufferWithGuards(
       url(`/api/job/${jobId}/files/${videoIndex}/${encodeURIComponent(filename)}`),
-      { label: filename }
+      { label: filename, parallelRanges: true }
     );
     return new Blob([buffer], { type: contentType || "application/octet-stream" });
   },
@@ -647,7 +970,7 @@ export const v2vApi = {
     // Endpoint nuevo: evita pasar `filename` (unicode/largo) en la URL.
     const { buffer, contentType } = await fetchBufferWithGuards(
       url(`/api/job/${jobId}/files/${videoIndex}`),
-      { label: `video ${videoIndex + 1}` }
+      { label: `video ${videoIndex + 1}`, parallelRanges: true }
     );
     return new Blob([buffer], { type: contentType || "video/mp4" });
   },
