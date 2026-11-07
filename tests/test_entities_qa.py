@@ -12,7 +12,6 @@ import unittest
 from src.entities import (
     PLACEHOLDER_TMPL,
     check_entities,
-    collapse_repeats,
     collect_known_terms,
     lock_text,
     normalize_asr_casing,
@@ -151,24 +150,6 @@ class TestEntidadesOtrosAlfabetos(unittest.TestCase):
         known = collect_known_terms(["Usa el ГПС del sistema.", "El ГПС no falla."])
         self.assertIn("ГПС", known)
 
-    def test_collapse_repeats_en_cirilico(self):
-        self.assertEqual(
-            collapse_repeats("Открой Москва Москва Москва ahora."),
-            "Открой Москва ahora.",
-        )
-
-
-class TestCollapseRepeats(unittest.TestCase):
-    def test_colapsa_tres_o_mas_capitalizadas(self):
-        self.assertEqual(
-            collapse_repeats("Instala Maribyte Maribyte Maribyte ahora."),
-            "Instala Maribyte ahora.",
-        )
-
-    def test_no_toca_dos_repeticiones_ni_minusculas(self):
-        self.assertEqual(collapse_repeats("Don Don llegó."), "Don Don llegó.")
-        self.assertEqual(collapse_repeats("no no no"), "no no no")
-
 
 class TestEntityCheck(unittest.TestCase):
     def test_ok_si_conserva_tokens_y_numeros(self):
@@ -213,6 +194,21 @@ class TestEntityCheck(unittest.TestCase):
         verdict = check_entities(locked, "Abre el ⟦E1⟧ y el ⟦E2⟧.")
         self.assertFalse(verdict["ok"])
         self.assertEqual(verdict["extra"], [2])
+
+    def test_motivo_incluye_el_termino_perdido(self):
+        """El log debe decir qué entidad se perdió, no solo el número del marcador."""
+        locked, mapping = lock_text("Instala o Ghidra hoje.")
+        verdict = check_entities(locked, "Instala o programa hoje.", mapping)
+        self.assertFalse(verdict["ok"])
+        self.assertIn("Ghidra", " ".join(verdict["reasons"]))
+
+    def test_motivo_incluye_el_termino_duplicado(self):
+        locked, mapping = lock_text("Abre o Ghidra hoje.")
+        marker = PLACEHOLDER_TMPL.format(1)
+        verdict = check_entities(locked, f"Abre o {marker} e o {marker} hoje.", mapping)
+        self.assertFalse(verdict["ok"])
+        self.assertEqual(verdict["duplicated"], [1])
+        self.assertIn("Ghidra", " ".join(verdict["reasons"]))
 
 
 class TestQaGate(unittest.TestCase):

@@ -13,7 +13,7 @@ palabras que el ASR capitaliza, así que aquí no hay ninguna.
 
 import re
 from collections import Counter
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 from src.lang_utils import SENTENCE_END_CHARS
 
@@ -195,29 +195,6 @@ def split_terms(sentences: Sequence[str]) -> tuple[set[str], set[str]]:
     return structural, ambiguous
 
 
-# El ASR repite una palabra cuando titubea (`Maribyte Maribyte Maribyte`). La
-# repetición viaja como entidad protegida y se locuta tal cual, así que se colapsa
-# antes de bloquear. Solo con 3+ repeticiones y con mayúscula inicial: `no no no`
-# puede ser intencional y `Don Don` es un tartamudeo de dos que no vale la pena tocar.
-_REPEATED_CAP_RE = re.compile(
-    r"\b([^\W\d_][\w'’.-]{2,})((?:[ \t,;]+(?:\1)){2,})",
-    re.UNICODE,
-)
-
-
-def collapse_repeats(text: str) -> str:
-    """Colapsa una palabra capitalizada repetida 3+ veces seguidas."""
-    if not text:
-        return text
-
-    def _one(match: re.Match[str]) -> str:
-        # La mayúscula se comprueba con `str.isupper`, no con un rango latino:
-        # el ASR también titubea en cirílico, griego o cualquier otro alfabeto.
-        return match.group(1) if match.group(1)[:1].isupper() else match.group(0)
-
-    return _REPEATED_CAP_RE.sub(_one, text)
-
-
 def collect_known_terms(sentences: Sequence[str]) -> set[str]:
     """
     Reúne las entidades del lote: formas estructurales y palabras que nunca
@@ -339,7 +316,17 @@ def _significant(nums: Sequence[str]) -> list[str]:
     return [n for n in nums if sum(c.isdigit() for c in n) >= 3 or "." in n or "," in n]
 
 
-def check_entities(locked_source: str, translated: str) -> dict[str, object]:
+def _marker_label(index: int, mapping: Optional[dict[int, str]] = None) -> str:
+    """Etiqueta legible de un marcador: `⟦E2⟧ «Ghidra»` o solo `⟦E2⟧`."""
+    term = (mapping or {}).get(index)
+    return f"⟦E{index}⟧ «{term}»" if term else f"⟦E{index}⟧"
+
+
+def check_entities(
+    locked_source: str,
+    translated: str,
+    mapping: Optional[dict[int, str]] = None,
+) -> dict[str, object]:
     """
     Verifica que la traducción conservó los placeholders y compara las cifras.
 
@@ -348,6 +335,10 @@ def check_entities(locked_source: str, translated: str) -> dict[str, object]:
     aparte porque el destino puede escribirlas en palabras (`1326` → `trece
     veintiséis`), que es la forma correcta de doblarlas y no un error; solo se
     comparan las que tienen valor inequívoco y el desvío se reporta como aviso.
+
+    `mapping` es el diccionario `{id: término}` que devolvió `lock_text()`. Sirve
+    solo para que los motivos digan qué entidad se perdió, no para decidir el
+    veredicto: la comprobación sigue siendo mecánica sobre los marcadores.
 
     Returns:
         {"ok": bool, "missing": [...], "extra": [...], "duplicated": [...],
@@ -367,11 +358,11 @@ def check_entities(locked_source: str, translated: str) -> dict[str, object]:
 
     reasons: list[str] = []
     if missing:
-        reasons.append(f"entidades perdidas {missing}")
+        reasons.append("pierde " + ", ".join(_marker_label(i, mapping) for i in missing))
     if extra:
-        reasons.append(f"entidades inventadas {extra}")
+        reasons.append("inventa " + ", ".join(_marker_label(i, mapping) for i in extra))
     if duplicated:
-        reasons.append(f"entidades duplicadas {duplicated}")
+        reasons.append("duplica " + ", ".join(_marker_label(i, mapping) for i in duplicated))
 
     warnings: list[str] = []
     if number_mismatch:

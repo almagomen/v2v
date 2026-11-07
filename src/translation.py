@@ -11,7 +11,6 @@ from google import genai
 from src.config import get_google_api_keys, rotate_google_api_key
 from src.entities import (
     check_entities,
-    collapse_repeats,
     lock_text,
     normalize_asr_casing,
     restore_text,
@@ -135,6 +134,21 @@ def _call_model(client, model: str, is_gemma: bool, prompt_text: str) -> str:
     return getattr(interaction, "output_text", None) or ""
 
 
+# Los logs de entidades muestran la frase real, no solo el número de marcador.
+# El recorte evita que una frase de 40 segundos ocupe media consola.
+_PREVIEW_LIMIT = 180
+
+
+def _preview(text: str, mapping: Optional[dict[int, str]] = None, limit: int = _PREVIEW_LIMIT) -> str:
+    """Restaura los marcadores conocidos y recorta el texto para el log."""
+    shown = restore_text(text or "", mapping or {})
+    shown = re.sub(r"\s+", " ", shown).strip()
+    if len(shown) <= limit:
+        return shown
+    cut = shown[:limit].rsplit(" ", 1)[0]
+    return f"{cut}…"
+
+
 def translate_text_list(
     list_sentences: list[str],
     target_lang: str,
@@ -183,8 +197,9 @@ def translate_text_list(
     # ─── Entity lock: congelar términos técnicos antes de tocar el prompt ───
     # Las mayúsculas del ASR no distinguen nombres propios de ortografía de pausa:
     # se normalizan antes de bloquear, o el modelo las lee como marcas y no las traduce.
-    # El ASR repite una palabra cuando titubea; si viaja como entidad, se locuta.
-    source_texts = [collapse_repeats(s or "") for s in list_sentences]
+    # Las repeticiones del ASR se conservan tal cual: pueden ser habla real y el texto
+    # final debe reflejar lo que se dijo, aunque la palabra esté repetida.
+    source_texts = [s or "" for s in list_sentences]
     structural, doubtful = split_terms(source_texts)
 
     # Las formas estructurales (rutas, versiones, camelCase, siglas) se bloquean sin
@@ -423,6 +438,39 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         chunk_total: int,
     ) -> Optional[dict[int, dict]]:
         """Traduce un bloque. Devuelve {índice_global: payload} o None si la respuesta no sirve."""
+        def _aux_json(fn, label: str):
+            """Llamada auxiliar con Gemma; si falla, reintenta con el modelo principal."""
+            try:
+                return fn(DEFAULT_JUDGE_MODEL, True)
+            except Exception as aux_err:
+                if (model or "").lower() == DEFAULT_JUDGE_MODEL.lower():
+                    print(f"⚠️ {label}: omitido ({aux_err})", flush=True)
+                    return {}
+                print(
+                    f"⚠️ {label}: '{DEFAULT_JUDGE_MODEL}' falló ({aux_err}); "
+                    f"reintentando con '{model}'",
+                    flush=True,
+                )
+                try:
+                    return fn(model, is_gemma)
+                except Exception as fallback_err:
+                    print(f"⚠️ {label}: omitido ({fallback_err})", flush=True)
+                    return {}
+
+        def _aux_call(prompt: str) -> str:
+            """Llamada auxiliar de texto libre: Gemma primero, modelo principal como respaldo."""
+            try:
+                return _call_model(client, DEFAULT_JUDGE_MODEL, True, prompt)
+            except Exception as aux_err:
+                if (model or "").lower() == DEFAULT_JUDGE_MODEL.lower():
+                    raise
+                print(
+                    f"⚠️ [Auxiliar] '{DEFAULT_JUDGE_MODEL}' falló ({aux_err}); "
+                    f"reintentando con '{model}'",
+                    flush=True,
+                )
+                return _call_model(client, model, is_gemma, prompt)
+
         local_entries = {str(n + 1): entry_lines[g] for n, g in enumerate(indices)}
         context = [locked_sentences[g] for g in range(max(0, indices[0] - 2), indices[0])]
         prompt = _build_prompt(local_entries, len(indices), context)
@@ -455,12 +503,17 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         for n, g in enumerate(indices):
             if n in missing_local or not locked_sentences[g]:
                 continue
-            verdict = check_entities(locked_sentences[g], texts[n])
+            verdict = check_entities(locked_sentences[g], texts[n], lock_maps[g])
             if verdict["warnings"]:
                 warnings[n] = [str(w) for w in verdict["warnings"]]
             if not verdict["ok"]:
-                problems[n] = [str(r) for r in verdict["reasons"]]
-                rescue[str(n + 1)] = {"source": locked_sentences[g], "text": texts[n]}
+                reasons = [str(r) for r in verdict["reasons"]]
+                problems[n] = reasons
+                rescue[str(n + 1)] = {
+                    "source": locked_sentences[g],
+                    "text": texts[n],
+                    "problema": "; ".join(reasons),
+                }
 
         if warnings:
             print(
@@ -468,31 +521,46 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 flush=True,
             )
             for n in sorted(warnings):
-                print(f"   seg {indices[n] + 1}: {'; '.join(warnings[n])}", flush=True)
+                g = indices[n]
+                print(f"   seg {g + 1}: {'; '.join(warnings[n])}", flush=True)
+                print(f"      fuente: {_preview(locked_sentences[g], lock_maps[g])}", flush=True)
+                print(f"      salida: {_preview(texts[n], lock_maps[g])}", flush=True)
 
         if rescue:
             print(f"🔁 [Entidades] bloque {chunk_no}: {len(rescue)} segmento(s) con tokens alterados; rescate...", flush=True)
             for n in sorted(problems):
-                print(f"   seg {indices[n] + 1}: {'; '.join(problems[n])}", flush=True)
-            fixed = _translate_entity_retry(client, model, is_gemma, rescue, target_lang_name)
-            recovered = 0
+                g = indices[n]
+                print(f"   seg {g + 1}: {'; '.join(problems[n])}", flush=True)
+                print(f"      fuente: {_preview(locked_sentences[g], lock_maps[g])}", flush=True)
+                print(f"      salida: {_preview(texts[n], lock_maps[g])}", flush=True)
+            fixed = _aux_json(
+                lambda m, g: _translate_entity_retry(client, m, g, rescue, target_lang_name),
+                f"[Rescate entidades] bloque {chunk_no}",
+            )
+            recovered: list[int] = []
             for key_str, new_text in fixed.items():
                 n = int(key_str) - 1
                 if not (0 <= n < len(indices)) or not new_text.strip():
                     continue
-                if check_entities(locked_sentences[indices[n]], new_text)["ok"]:
+                g = indices[n]
+                if check_entities(locked_sentences[g], new_text, lock_maps[g])["ok"]:
                     texts[n] = new_text.strip()
                     problems.pop(n, None)
-                    recovered += 1
+                    recovered.append(n)
             print(
-                f"✅ [Entidades] bloque {chunk_no}: {recovered}/{len(rescue)} rescatado(s)",
+                f"✅ [Entidades] bloque {chunk_no}: {len(recovered)}/{len(rescue)} rescatado(s)",
                 flush=True,
             )
+            for n in recovered:
+                g = indices[n]
+                print(f"   seg {g + 1}: corregido → {_preview(texts[n], lock_maps[g])}", flush=True)
             for n in sorted(problems):
+                g = indices[n]
                 print(
-                    f"   seg {indices[n] + 1}: sigue roto: {'; '.join(problems[n])}",
+                    f"   seg {g + 1}: sigue roto: {'; '.join(problems[n])}",
                     flush=True,
                 )
+                print(f"      salida: {_preview(texts[n], lock_maps[g])}", flush=True)
 
         # ─── Idioma de salida: palabras que viajaron sin traducir ───
         # Se detecta por solapamiento léxico con el origen, sin diccionarios: los tokens
@@ -523,7 +591,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 ]
                 try:
                     leaks = _judge_leaks(
-                        lambda prompt: _call_model(client, model, is_gemma, prompt),
+                        _aux_call,
                         vocabulary,
                         source_lang_name,
                         target_lang_name,
@@ -552,7 +620,10 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         for n, shared in affected.items()
                     }
                     try:
-                        fixed = _translate_residue_retry(client, model, is_gemma, payload, target_lang_name)
+                        fixed = _aux_json(
+                            lambda m, g: _translate_residue_retry(client, m, g, payload, target_lang_name),
+                            f"[Idioma] bloque {chunk_no}",
+                        )
                     except Exception as e_res:
                         print(f"⚠️ [Idioma] bloque {chunk_no}: rescate omitido ({e_res})", flush=True)
                         fixed = {}
@@ -575,7 +646,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         )
                         if after >= before:
                             continue
-                        if not check_entities(locked_sentences[g], new_text)["ok"]:
+                        if not check_entities(locked_sentences[g], new_text, lock_maps[g])["ok"]:
                             continue
                         texts[n] = new_text.strip()
                         problems.pop(n, None)
@@ -654,7 +725,10 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         f"ajustando (pasada {round_no}/{passes})...",
                         flush=True,
                     )
-                    fitted = _fit_retry(client, model, is_gemma, offenders, target_lang_name)
+                    fitted = _aux_json(
+                        lambda m, g: _fit_retry(client, m, g, offenders, target_lang_name),
+                        f"[Encaje] bloque {chunk_no}",
+                    )
                     # El modelo devuelve a veces la misma cadena para entradas distintas
                     # (eco de la plantilla del prompt). Un texto idéntico para originales
                     # distintos no es una traducción: se descarta antes de aplicarlo.
@@ -667,7 +741,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                         if new_text.strip() in repetidos:
                             continue
                         g = indices[n]
-                        if not check_entities(locked_sentences[g], new_text)["ok"]:
+                        if not check_entities(locked_sentences[g], new_text, lock_maps[g])["ok"]:
                             continue
                         old_dev = abs(fit_deviation(texts[n], target_lang, speech_seconds[g], lock_maps[g]))
                         new_dev = abs(fit_deviation(new_text, target_lang, speech_seconds[g], lock_maps[g]))
@@ -722,7 +796,10 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     flush=True,
                 )
                 try:
-                    revised = _review_retry(client, model, is_gemma, flagged, target_lang_name)
+                    revised = _aux_json(
+                        lambda m, g: _review_retry(client, m, g, flagged, target_lang_name),
+                        f"[Revisión] bloque {chunk_no}",
+                    )
                 except Exception as e_rev:
                     print(f"⚠️ [Revisión] bloque {chunk_no}: omitida ({e_rev})", flush=True)
                     revised = {}
@@ -738,7 +815,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     if new_text.strip() in repetidos:
                         continue
                     g = indices[n]
-                    if not check_entities(locked_sentences[g], new_text)["ok"]:
+                    if not check_entities(locked_sentences[g], new_text, lock_maps[g])["ok"]:
                         continue
 
                     improved = False
@@ -870,12 +947,22 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     try:
                         candidates = collect_term_variants(aligned_list)
                         if len(candidates) >= 2:
-                            raw_groups = _review_terms(
-                                client,
-                                model,
-                                is_gemma,
-                                build_term_prompt(candidates, source_lang_name),
-                            )
+                            prompt_terms = build_term_prompt(candidates, source_lang_name)
+                            try:
+                                raw_groups = _review_terms(
+                                    client, DEFAULT_JUDGE_MODEL, True, prompt_terms
+                                )
+                            except Exception as e_aux_terms:
+                                if (model or "").lower() == DEFAULT_JUDGE_MODEL.lower():
+                                    raise
+                                print(
+                                    f"⚠️ [Revisión] variantes con '{DEFAULT_JUDGE_MODEL}' "
+                                    f"fallaron ({e_aux_terms}); reintentando con '{model}'",
+                                    flush=True,
+                                )
+                                raw_groups = _review_terms(
+                                    client, model, is_gemma, prompt_terms
+                                )
                             term_map = parse_term_groups(
                                 raw_groups, [c["term"] for c in candidates]
                             )
@@ -929,6 +1016,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     print(f"🔓 [Entidades] {entity_total} restauradas; {len(failed)} segmento(s) con fallo persistente", flush=True)
                     for i in failed:
                         print(f"   seg {i + 1}: {'; '.join(resolved[i]['problems'])}", flush=True)
+                        print(f"      salida: {_preview(aligned_list[i], lock_maps[i])}", flush=True)
 
                 print(f"⏱️ [Traducción '{model}'] segs. en {duration:.1f}s", flush=True)
                 return aligned_list
@@ -1070,15 +1158,19 @@ def _translate_entity_retry(
     """
     prompt = f"""Eres un corrector de traducción para doblaje al {target_lang_name}.
 
-Cada entrada trae `source` (frase con marcadores ⟦E1⟧, ⟦E2⟧... que representan
-términos técnicos) y `text` (su traducción, que perdió o alteró algún marcador).
+Cada entrada trae:
+- `source`: frase original con marcadores ⟦E1⟧, ⟦E2⟧... que representan términos técnicos.
+- `text`: su traducción, que perdió, inventó o duplicó algún marcador.
+- `problema`: el diagnóstico exacto de esa entrada (por ejemplo, `pierde ⟦E2⟧ «Ghidra»`).
 
-Corrige el campo `text` cumpliendo, sin excepciones:
+Corrige el campo `text` atacando solo el `problema` indicado, sin reescribir el resto:
 1. Cada marcador presente en `source` aparece exactamente una vez en el nuevo `text`.
 2. Los marcadores conservan su número y su posición relativa en la frase.
 3. No traduzcas, expandas, expliques ni elimines marcadores. No inventes marcadores nuevos.
-4. Todos los números de `source` (versiones, cantidades) se conservan idénticos.
-5. El texto debe seguir siendo una frase natural en {target_lang_name}, de longitud similar.
+4. Si `problema` dice que un marcador se duplica, deja una sola aparición.
+5. Todos los números de `source` (versiones, cantidades) se conservan idénticos.
+6. Conserva las repeticiones de palabras tal como estén en `source`: no las colapses.
+7. El texto debe seguir siendo una frase natural en {target_lang_name}, de longitud similar.
 
 Entrada:
 {json.dumps(payload, indent=2, ensure_ascii=False)}
