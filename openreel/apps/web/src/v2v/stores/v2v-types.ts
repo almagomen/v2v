@@ -105,7 +105,6 @@ export interface JobState {
   // Preferencias de inferencia y montaje en timeline
   initialEmotionPerSentence: boolean;
   initialEmotionTag: string;
-  phonemesDisabled: boolean;
   importTTSSegments: boolean;
   importVideoOnly: boolean;
   importMergedVideo: boolean;
@@ -123,7 +122,6 @@ export interface JobActions {
 
   setInitialEmotionPerSentence: (enabled: boolean) => void;
   setInitialEmotionTag: (tag: string) => void;
-  setPhonemesDisabled: (disabled: boolean) => void;
   setImportTTSSegments: (enabled: boolean) => void;
   setImportVideoOnly: (enabled: boolean) => void;
   setImportMergedVideo: (enabled: boolean) => void;

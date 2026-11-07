@@ -39,7 +39,6 @@ def process_video_queue(
     force_reprocess: bool = False,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
-    phonemes_disabled: bool = False,
     **kwargs,
 ) -> list[dict]:
     """
@@ -157,7 +156,6 @@ def process_video_queue(
                 title=safe_title,
                 initial_emotion_per_sentence=initial_emotion_per_sentence,
                 initial_emotion_tag=initial_emotion_tag,
-                phonemes_disabled=phonemes_disabled,
             )
             translated_result = run_res[0]
             output_name = run_res[1]

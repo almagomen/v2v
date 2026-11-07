@@ -911,7 +911,7 @@ def clone_voice_segments(
             seg_audio_ref = audio_ref
 
         seq_num = only_indices[idx] if only_indices else idx + 1
-        seg_phonemes = {} if text_dict.get("phonemes_disabled") else (text_dict.get("phonemes") or {})
+        seg_phonemes = text_dict.get("phonemes") or {}
         if not visible_text(text):
             # Sin habla no se pide TTS: el silencio se genera en el bucle principal.
             continue
@@ -1020,7 +1020,7 @@ def clone_voice_segments(
             speaker=seg_audio_ref,
             out_audio_path=audio_es_path,
             raw_audio_path=raw_es_path,
-            phonemes=None if text_dict.get("phonemes_disabled") else text_dict.get("phonemes"),
+            phonemes=text_dict.get("phonemes"),
             speed=speed,
             target_duration=target_duration,
             orig_duration=dur_en,

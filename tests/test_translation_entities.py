@@ -33,33 +33,27 @@ class _FakeInteractions:
         self.calls = 0
         self.judge_calls = 0
         self.prompts: list[str] = []
-        self.judge_words: list[str] = []
+        self.judge_preserve: list[str] = []
         self.judge_leaks: list[str] = []
-        self.respellings: dict[str, str | None] = {}
 
     def create(self, **kwargs):
         prompt = str(kwargs.get("input", ""))
         self.prompts.append(prompt)
-        if '"palabras"' in prompt:
+        if '"conservar"' in prompt:
             self.judge_calls += 1
-            return SimpleNamespace(output_text=json.dumps({"palabras": self.judge_words}))
+            return SimpleNamespace(output_text=json.dumps({"conservar": self.judge_preserve}))
         if '"fugas"' in prompt:
             self.judge_calls += 1
             return SimpleNamespace(output_text=json.dumps({"fugas": self.judge_leaks}))
-        if '"respelling"' in prompt:
-            self.judge_calls += 1
-            return SimpleNamespace(output_text=json.dumps(self.respellings))
         text = self.responses[min(self.calls, len(self.responses) - 1)]
         self.calls += 1
         return SimpleNamespace(output_text=text)
 
     @property
     def translation_prompts(self) -> list[str]:
-        """Prompts de traducción, sin los juicios ni el respelling."""
+        """Prompts de traducción, sin los juicios."""
         return [
-            p
-            for p in self.prompts
-            if '"palabras"' not in p and '"fugas"' not in p and '"respelling"' not in p
+            p for p in self.prompts if '"conservar"' not in p and '"fugas"' not in p
         ]
 
 
@@ -76,27 +70,22 @@ def _run(
     responses: list[str],
     sentences: list[str],
     judge_leaks: list[str] | None = None,
-    judge_words: list[str] | None = None,
-    respellings: dict[str, str | None] | None = None,
+    judge_preserve: list[str] | None = None,
 ) -> tuple[list[str], list[dict], _FakeClient]:
     _FakeClient.instances.clear()
     fake = _FakeClient("k")
     fake.interactions.responses = responses
     fake.interactions.judge_leaks = list(judge_leaks or [])
-    fake.interactions.judge_words = list(judge_words or [])
-    fake.interactions.respellings = dict(respellings or {})
+    fake.interactions.judge_preserve = list(judge_preserve or [])
     meta = [{"seg": i + 1} for i in range(len(sentences))]
     with patch("src.translation.get_google_api_keys", return_value=["test-key"]), \
          patch("src.translation.genai.Client", lambda api_key: fake):
-        result = translate_text_list(
+        texts = translate_text_list(
             sentences,
             target_lang="es",
             source_lang="pt",
             segments_meta=meta,
-            return_details=True,
         )
-    texts, phonemes = result
-    fake.phonemes = phonemes
     return texts, meta, fake
 
 
@@ -166,7 +155,6 @@ class TestEntityPipeline(unittest.TestCase):
             [json.dumps(malo), json.dumps(bueno)],
             sentences,
             judge_leaks=["Mais"],
-            judge_words=["Mais"],
         )
 
         self.assertEqual(fake.interactions.calls, 2)
@@ -181,38 +169,24 @@ class TestEntityPipeline(unittest.TestCase):
         sentences = ["Ela não funciona Mais em outro lugar"]
         malo = {"1": {"text": "No funciona Mais en otro lugar"}}
         texts, _meta, fake = _run(
-            [json.dumps(malo)], sentences, judge_leaks=[], judge_words=["Mais"]
+            [json.dumps(malo)], sentences, judge_leaks=[]
         )
 
         self.assertEqual(fake.interactions.calls, 1)
         self.assertEqual(texts[0], "No funciona Mais en otro lugar")
 
-    def test_pronunciacion_se_consolida_y_cubre_la_entidad_bloqueada(self):
-        """Misma palabra en dos bloques: una sola regla; y la entidad bloqueada recibe la suya."""
-        sentences = ["Abre o Ghidra e usa o npm.", "Instala com npm no desktop."]
-        part1 = {
-            "1": {"text": "Abre el ⟦E1⟧ y usa el npm.", "phonemes": {"npm": "ene-pe-eme"}},
-            "2": {"text": "Instala con npm en el desktop.", "phonemes": {"npm": "ene-pe-emee", "desktop": "désk-top"}},
-        }
-        texts, meta, fake = _run(
-            [json.dumps(part1)],
-            sentences,
-            respellings={"Ghidra": "guidra", "npm": "ene-pe-eme", "Desktop": "désk-top"},
-        )
-
-        self.assertEqual(meta[0]["phonemes"], {"npm": "ene-pe-eme", "Ghidra": "guidra"})
-        self.assertEqual(meta[1]["phonemes"], {"npm": "ene-pe-eme", "desktop": "désk-top"})
-        self.assertEqual(texts[0], "Abre el Ghidra y usa el npm.")
-
-    def test_respelling_invalido_no_llega_al_diccionario(self):
-        """Un valor con dígrafos ingleses sonaría peor que el original: se descarta."""
+    def test_prompt_no_pide_fonemas(self):
+        """La pronunciación es manual: el prompt no debe cargar el glosario ni el campo."""
         sentences = ["Abre o Ghidra agora."]
         good = {"1": {"text": "Abre el ⟦E1⟧ ahora."}}
-        _texts, meta, _fake = _run(
-            [json.dumps(good)], sentences, respellings={"Ghidra": "ghidra-th"}
-        )
+        _texts, _meta, fake = _run([json.dumps(good)], sentences)
 
-        self.assertEqual(meta[0]["phonemes"], {})
+        prompt = fake.interactions.translation_prompts[0]
+        self.assertNotIn("phonemes", prompt)
+        self.assertNotIn("DETECCIÓN FONÉTICA", prompt)
+        self.assertNotIn("GLOSARIO DE PRONUNCIACIÓN", prompt)
+        # El modelo puede devolver el campo por inercia; se ignora sin romper el flujo.
+        self.assertEqual(fake.interactions.calls, 1)
 
     def test_rescate_de_residuo_que_no_limpia_se_descarta(self):
         sentences = ["Ela não funciona Mais em outro lugar"]
@@ -221,7 +195,6 @@ class TestEntityPipeline(unittest.TestCase):
             [json.dumps(malo), json.dumps(malo)],
             sentences,
             judge_leaks=["Mais"],
-            judge_words=["Mais"],
         )
 
         self.assertEqual(fake.interactions.calls, 2)
@@ -290,15 +263,13 @@ class TestFitBudget(unittest.TestCase):
         meta = [{"seg": i + 1} for i in range(len(sentences))]
         with patch("src.translation.get_google_api_keys", return_value=["test-key"]), \
              patch("src.translation.genai.Client", lambda api_key: fake):
-            result = translate_text_list(
+            texts = translate_text_list(
                 sentences,
                 target_lang="es",
                 source_lang="pt",
                 times=times,
                 segments_meta=meta,
-                return_details=True,
             )
-        texts, _phonemes = result
         return texts, meta, fake
 
     def test_prompt_lleva_el_rango_calibrado(self):
@@ -380,104 +351,6 @@ class TestFitBudget(unittest.TestCase):
         _texts, _meta, fake = _run([json.dumps(corto)], sentences)
         self.assertEqual(fake.interactions.calls, 1)
         self.assertNotIn("slot |", fake.interactions.translation_prompts[0])
-
-
-@unittest.skipUnless(_HAS_GENAI, "google-genai no instalado en este entorno")
-class TestFonemasDesactivados(unittest.TestCase):
-    """El interruptor por segmento debe callar al modelo y al diccionario."""
-
-    def _run_with_meta(self, responses, sentences, meta, respellings=None):
-        _FakeClient.instances.clear()
-        fake = _FakeClient("k")
-        fake.interactions.responses = responses
-        fake.interactions.respellings = dict(respellings or {})
-        with patch("src.translation.get_google_api_keys", return_value=["test-key"]), \
-             patch("src.translation.genai.Client", lambda api_key: fake):
-            result = translate_text_list(
-                sentences,
-                target_lang="es",
-                source_lang="pt",
-                segments_meta=meta,
-                return_details=True,
-            )
-        return result, meta, fake
-
-    def test_prompt_omite_fonemas_del_segmento_desactivado(self):
-        sentences = ["Abre o Ghidra agora.", "Instala o npm depois."]
-        meta = [{"seg": 1, "phonemes_disabled": True}, {"seg": 2}]
-        payload = {
-            "1": {"text": "Abre el ⟦E1⟧ ahora.", "phonemes": {"Ghidra": "guidra"}},
-            "2": {"text": "Instala el npm después.", "phonemes": {"npm": "ene-pe-eme"}},
-        }
-        result, meta, fake = self._run_with_meta(
-            [json.dumps(payload)],
-            sentences,
-            meta,
-            respellings={"Ghidra": "guidra", "npm": "ene-pe-eme"},
-        )
-        texts, phonemes = result
-
-        prompt = fake.interactions.translation_prompts[0]
-        # La regla existe por la clave 2, pero no menciona a la clave 1.
-        self.assertIn("DETECCIÓN FONÉTICA", prompt)
-        self.assertIn('Aplica solo a las claves "2"', prompt)
-        self.assertNotIn("SEGMENTOS SIN FONEMAS", prompt)
-        self.assertIn('"1": {\n    "text": "frase 1 adaptada al Español"\n  }', prompt)
-        self.assertEqual(phonemes[0], {})
-        self.assertEqual(meta[0]["phonemes"], {})
-        # El segmento con el interruptor encendido sigue recibiendo su diccionario.
-        self.assertEqual(meta[1]["phonemes"], {"npm": "ene-pe-eme"})
-        self.assertEqual(texts[0], "Abre el Ghidra ahora.")
-
-    def test_prompt_sin_fonemas_cuando_todos_estan_desactivados(self):
-        sentences = ["Abre o Ghidra agora.", "Instala o npm depois."]
-        meta = [
-            {"seg": 1, "phonemes_disabled": True},
-            {"seg": 2, "phonemes_disabled": True},
-        ]
-        payload = {
-            "1": {"text": "Abre el ⟦E1⟧ ahora.", "phonemes": {"Ghidra": "guidra"}},
-            "2": {"text": "Instala el npm después.", "phonemes": {"npm": "ene-pe-eme"}},
-        }
-        result, meta, fake = self._run_with_meta([json.dumps(payload)], sentences, meta)
-        texts, phonemes = result
-
-        prompt = fake.interactions.translation_prompts[0]
-        # Sin claves activas no debe quedar rastro del campo ni del glosario.
-        self.assertNotIn("phonemes", prompt)
-        self.assertNotIn("DETECCIÓN FONÉTICA", prompt)
-        self.assertNotIn("GLOSARIO DE PRONUNCIACIÓN", prompt)
-        self.assertEqual(phonemes, [{}, {}])
-        self.assertEqual(meta[0]["phonemes"], {})
-        self.assertEqual(meta[1]["phonemes"], {})
-        self.assertEqual(texts, ["Abre el Ghidra ahora.", "Instala el npm después."])
-
-    def test_ejemplo_mixto_muestra_ambas_formas(self):
-        sentences = ["Abre o Ghidra.", "Instala o npm.", "Roda o script.", "Fecha tudo."]
-        meta = [
-            {"seg": 1, "phonemes_disabled": True},
-            {"seg": 2, "phonemes_disabled": True},
-            {"seg": 3},
-            {"seg": 4, "phonemes_disabled": True},
-        ]
-        payload = {
-            "1": {"text": "Abre el Ghidra."},
-            "2": {"text": "Instala el npm."},
-            "3": {"text": "Ejecuta el script.", "phonemes": {"script": "escript"}},
-            "4": {"text": "Cierra todo."},
-        }
-        result, meta, fake = self._run_with_meta([json.dumps(payload)], sentences, meta)
-        texts, _ = result
-
-        prompt = fake.interactions.translation_prompts[0]
-        self.assertIn('Aplica solo a las claves "3"', prompt)
-        # La clave desactivada 1 no lleva el campo; la activa 3 sí; y el
-        # ejemplo conserva el marcador de elisión.
-        self.assertIn('"1": {\n    "text": "frase 1 adaptada al Español"\n  }', prompt)
-        self.assertIn('"3": {\n    "text": "frase 2 adaptada al Español",\n    "phonemes": {}', prompt)
-        self.assertIn('"4": {\n    "text": "frase 4 adaptada al Español"\n  }', prompt)
-        self.assertIn("\n  ...\n", prompt)
-        self.assertEqual(texts[2], "Ejecuta el script.")
 
 
 if __name__ == "__main__":

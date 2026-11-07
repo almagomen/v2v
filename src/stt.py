@@ -283,7 +283,6 @@ def run_main(
     title: Optional[str] = None,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
-    phonemes_disabled: bool = False,
     **kwargs,
 ) -> Tuple[list[dict], str, list[dict], str, dict]:
     """
@@ -299,11 +298,6 @@ def run_main(
         raise FileNotFoundError(f"No se encontró el archivo de voces: {vocals_path}")
 
     result, detected_language, step_timings = transcribe_and_process(vocals_path)
-    if phonemes_disabled:
-        # El interruptor global de la primera pasada marca cada segmento antes
-        # de traducir: el prompt no pide fonemas y la entrada los persiste.
-        for segment in result:
-            segment["phonemes_disabled"] = True
     t_whisper = step_timings.get("whisper", 0.0)
     t_diarize = step_timings.get("diarization", 0.0)
 
@@ -326,7 +320,7 @@ def run_main(
         from src.audio_utils import get_audio_file_duration
 
         total_duration = get_audio_file_duration(vocals_path) or 0.0
-        translated_texts, phonemes_list = translate_text_list(
+        translated_texts = translate_text_list(
             texts,
             target_lang=target_language,
             source_lang=detected_language,
@@ -335,7 +329,6 @@ def run_main(
             segments_meta=result,
             initial_emotion_per_sentence=initial_emotion_per_sentence,
             initial_emotion_tag=initial_emotion_tag,
-            return_details=True,
         )
         t_trans = time.perf_counter() - t0_trans
 
@@ -349,12 +342,11 @@ def run_main(
                     original_text=orig.get("original_text", orig.get("text", "")),
                     speaker=orig.get("speaker"),
                     original_speaker=orig.get("original_speaker") or orig.get("speaker"),
-                    phonemes=phonemes_list[i] if phonemes_list and i < len(phonemes_list) else orig.get("phonemes"),
+                    phonemes=orig.get("phonemes"),
                     internal_pause_sec=orig.get("internal_pause_sec"),
                     translation_status=orig.get("translation_status"),
                     entity_fail=orig.get("entity_fail"),
                     untranslated=orig.get("untranslated"),
-                    phonemes_disabled=orig.get("phonemes_disabled"),
                 )
                 for i, ((s, e), txt, orig) in enumerate(zip(times, translated_texts, result))
             ]
@@ -369,12 +361,11 @@ def run_main(
                     original_text=orig.get("original_text", orig.get("text", "")),
                     speaker=orig.get("speaker"),
                     original_speaker=orig.get("original_speaker") or orig.get("speaker"),
-                    phonemes=phonemes_list[i] if phonemes_list and i < len(phonemes_list) else orig.get("phonemes"),
+                    phonemes=orig.get("phonemes"),
                     internal_pause_sec=orig.get("internal_pause_sec"),
                     translation_status=orig.get("translation_status"),
                     entity_fail=orig.get("entity_fail"),
                     untranslated=orig.get("untranslated"),
-                    phonemes_disabled=orig.get("phonemes_disabled"),
                 )
                 for i, ((s, e), orig) in enumerate(zip(times, result))
             ]
@@ -394,7 +385,6 @@ def run_main(
                     translation_status=r.get("translation_status"),
                     entity_fail=r.get("entity_fail"),
                     untranslated=r.get("untranslated"),
-                    phonemes_disabled=r.get("phonemes_disabled"),
                 )
                 for i, r in enumerate(result)
             ]
@@ -417,7 +407,6 @@ def run_main(
                 original_speaker=r.get("original_speaker") or r.get("speaker"),
                 phonemes=r.get("phonemes"),
                 internal_pause_sec=r.get("internal_pause_sec"),
-                phonemes_disabled=r.get("phonemes_disabled"),
             )
             for i, r in enumerate(result)
         ]

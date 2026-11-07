@@ -203,7 +203,6 @@ export interface Segment {
   original_speaker?: string;
   original_text?: string;
   phonemes?: Record<string, string>;
-  phonemes_disabled?: boolean;
   internal_pause_sec?: number;
   syllable_count?: number;
 }
@@ -288,7 +287,6 @@ export interface SegmentEditorRow {
   original_speaker?: string | null;
   filename?: string | null;
   phonemes?: Record<string, string>;
-  phonemes_disabled?: boolean;
 }
 
 
@@ -476,7 +474,6 @@ export const v2vApi = {
       speakerMap?: Record<string, string>;
       initialEmotionPerSentence?: boolean;
       initialEmotionTag?: string;
-      phonemesDisabled?: boolean;
     },
     signal?: AbortSignal,
   ): Promise<ProcessUrlsResponse> {
@@ -493,7 +490,6 @@ export const v2vApi = {
         speaker_map: options?.speakerMap,
         initial_emotion_per_sentence: options?.initialEmotionPerSentence ?? false,
         initial_emotion_tag: options?.initialEmotionTag ?? "auto",
-        phonemes_disabled: options?.phonemesDisabled ?? false,
       }),
     });
     if (!res.ok) {
@@ -659,7 +655,6 @@ export const v2vApi = {
       repetition_penalty?: number;
       volume?: number;
       phonemes?: Record<string, string>;
-      phonemes_disabled?: boolean;
       prevent_overlap?: boolean;
       signal?: AbortSignal;
     },
@@ -686,7 +681,6 @@ export const v2vApi = {
         repetition_penalty: options?.repetition_penalty ?? 1.2,
         volume: options?.volume ?? 0.0,
         phonemes: options?.phonemes,
-        phonemes_disabled: options?.phonemes_disabled,
         prevent_overlap: options?.prevent_overlap,
       }),
     });
@@ -951,8 +945,7 @@ export const v2vApi = {
     segIndices: number[],
     targetLang?: string | null,
     customTexts?: Record<number, string>,
-    skipPhonemes?: number[],
-  ): Promise<{ segments: Array<{ seg: number; text: string; phonemes?: Record<string, string>; phonemes_disabled?: boolean }> }> {
+  ): Promise<{ segments: Array<{ seg: number; text: string; phonemes?: Record<string, string> }> }> {
     const res = await fetch(url("/api/retranslate-segments"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -962,14 +955,13 @@ export const v2vApi = {
         seg_indices: segIndices,
         target_lang: targetLang ?? null,
         custom_texts: customTexts ?? null,
-        skip_phonemes: skipPhonemes ?? null,
       }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || "Error al retraducir segmentos");
     }
-    return readJsonOrThrow<{ segments: Array<{ seg: number; text: string; phonemes?: Record<string, string>; phonemes_disabled?: boolean }> }>(res);
+    return readJsonOrThrow<{ segments: Array<{ seg: number; text: string; phonemes?: Record<string, string> }> }>(res);
   },
 
 

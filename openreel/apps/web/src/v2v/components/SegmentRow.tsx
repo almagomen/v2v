@@ -44,7 +44,6 @@ export type BulkSegmentRow = {
   repetitionPenalty: number;
   volume: number;
   phonemes?: Record<string, string>;
-  phonemesDisabled?: boolean;
   origDuration?: number;
   preventOverlap?: boolean;
 };
@@ -233,7 +232,7 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
           type="button"
           onClick={() => setShowSettings(!showSettings)}
           className={`flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
-            showSettings || hasCustomFishAudio || hasCustomPhonemes || row.phonemesDisabled || row.preventOverlap
+            showSettings || hasCustomFishAudio || hasCustomPhonemes || row.preventOverlap
               ? "border-primary/40 bg-primary/10 text-primary font-medium"
               : "border-border/60 bg-background-tertiary text-text-muted hover:text-text-primary"
           }`}
@@ -330,33 +329,6 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
 
           {/* Fonemas / Pronunciación */}
           <div className="space-y-2 pt-2 border-t border-border/40">
-            <label
-              className="flex items-center gap-2 cursor-pointer"
-              title="Desactiva la inferencia automática y el diccionario de pronunciación de este segmento"
-            >
-              <input
-                type="checkbox"
-                checked={!row.phonemesDisabled}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  updateRow(row.seg, {
-                    phonemesDisabled: !enabled,
-                    phonemes: enabled ? row.phonemes : {},
-                    dirty: true,
-                  });
-                }}
-                className="accent-primary cursor-pointer"
-              />
-              <span className="text-[10px] text-text-secondary">
-                Inferir fonemas automáticamente
-              </span>
-            </label>
-            {row.phonemesDisabled ? (
-              <p className="text-[9px] text-text-muted italic">
-                Inferencia desactivada: el TTS no recibe diccionario de pronunciación para este segmento.
-              </p>
-            ) : (
-              <>
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-semibold text-text-secondary">Fonemas / Pronunciación (S2.1)</span>
               {row.phonemes && Object.keys(row.phonemes).length > 0 && (
@@ -457,8 +429,6 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
                 +
               </button>
             </div>
-              </>
-            )}
           </div>
         </div>
       )}

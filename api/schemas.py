@@ -28,9 +28,6 @@ class ProcessUrlsRequest(BaseModel):
     initial_emotion_tag: Optional[str] = Field(
         "[excited]", description="Tag de emoción específica a incluir al inicio de cada frase (ej: [excited], [confident])"
     )
-    phonemes_disabled: Optional[bool] = Field(
-        False, description="Desactiva la inferencia y el diccionario de fonemas en la primera pasada"
-    )
 
 
 class ProcessUrlsResponse(BaseModel):
@@ -117,9 +114,6 @@ class RegenerateSegmentRequest(BaseModel):
     repetition_penalty: float = Field(1.2, ge=1.0, le=2.0, description="Fish Audio control de repetición")
     volume: float = Field(0.0, ge=-10.0, le=10.0, description="Fish Audio ajuste volumen en dB")
     phonemes: Optional[dict[str, str]] = Field(None, description="Diccionario de pronunciación fonética para términos especiales")
-    phonemes_disabled: Optional[bool] = Field(
-        None, description="Desactiva la inferencia y el diccionario de fonemas del segmento"
-    )
     prevent_overlap: Optional[bool] = Field(False, description="Si es True, aplica técnicas de ajuste anticolisión al espacio antes del siguiente segmento")
 
 
@@ -189,7 +183,6 @@ class SegmentEditorRow(BaseModel):
     original_speaker: Optional[str] = None
     filename: Optional[str] = None
     phonemes: Optional[dict[str, str]] = None
-    phonemes_disabled: bool = False
 
 
 
@@ -219,16 +212,12 @@ class RetranslateSegmentsRequest(BaseModel):
     seg_indices: list[int] = Field(..., min_length=1)
     target_lang: Optional[str] = None
     custom_texts: Optional[dict[str, str]] = None
-    skip_phonemes: Optional[list[int]] = Field(
-        None, description="Índices de segmento que desactivan la inferencia de fonemas"
-    )
 
 
 class RetranslateSegmentItem(BaseModel):
     seg: int
     text: str
     phonemes: Optional[dict[str, str]] = None
-    phonemes_disabled: bool = False
 
 
 

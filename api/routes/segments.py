@@ -132,9 +132,6 @@ def get_segments_editor(job_id: str, video_index: int):
                 original_speaker=orig_spk,
                 filename=_find_tts_filename(folder, seg_num),
                 phonemes=seg_ph,
-                phonemes_disabled=bool(
-                    tts_d.get("phonemes_disabled") or orig_d.get("phonemes_disabled")
-                ),
             )
         )
 
@@ -176,7 +173,6 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
         )
 
     indices = sorted(set(req.seg_indices))
-    skip_phonemes = set(req.skip_phonemes or [])
     sentences: list[str] = []
     valid_indices: list[int] = []
     times_list: list[tuple[float, float]] = []
@@ -216,32 +212,27 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
                 s_t = float(orig_d.get("start", 0.0))
                 e_t = float(orig_d.get("end", s_t + 2.0))
             times_list.append((s_t, e_t))
-            meta = dict(orig_d)
-            meta["phonemes_disabled"] = seg_idx in skip_phonemes
-            meta_list.append(meta)
+            meta_list.append(dict(orig_d))
 
     if not sentences:
         raise HTTPException(status_code=400, detail="No hay textos para retraducir")
 
     from src.translation import translate_text_list
 
-    res = translate_text_list(
+    translated = translate_text_list(
         sentences,
         target_lang=target_lang,
         source_lang=source_lang,
         times=times_list if len(times_list) == len(sentences) else None,
         segments_meta=meta_list if len(meta_list) == len(sentences) else None,
-        return_details=True,
     )
-    if not res or not res[0] or len(res[0]) != len(sentences):
+    if not translated or len(translated) != len(sentences):
         raise HTTPException(status_code=500, detail="Error al retraducir con Gemini")
 
-    translated, phonemes_list = res
-
-    # Actualizar result.json con los nuevos textos y fonemas de los segmentos retraducidos
+    # Actualizar result.json con los nuevos textos, conservando el diccionario manual
     try:
         from src.result_store import create_segment_entry, update_result_segments
-        for seg_idx, txt, ph, meta in zip(valid_indices, translated, phonemes_list or [], meta_list):
+        for seg_idx, txt, meta in zip(valid_indices, translated, meta_list):
             if 1 <= seg_idx <= len(tts_list):
                 curr = tts_list[seg_idx - 1]
                 tts_list[seg_idx - 1] = create_segment_entry(
@@ -252,8 +243,7 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
                     original_text=meta.get("original_text") or curr.get("original_text") or txt,
                     speaker=curr.get("speaker") or meta.get("speaker") or "mrbeast",
                     original_speaker=meta.get("original_speaker") or curr.get("original_speaker") or "SPEAKER_00",
-                    phonemes=ph or meta.get("phonemes") or curr.get("phonemes"),
-                    phonemes_disabled=bool(meta.get("phonemes_disabled")),
+                    phonemes=meta.get("phonemes") or curr.get("phonemes"),
                     orig_start=curr.get("orig_start"),
                     orig_end=curr.get("orig_end"),
                     orig_duration=curr.get("orig_duration"),
@@ -274,14 +264,9 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
             RetranslateSegmentItem(
                 seg=seg,
                 text=txt,
-                phonemes=(
-                    None
-                    if meta.get("phonemes_disabled")
-                    else (ph or meta.get("phonemes"))
-                ),
-                phonemes_disabled=bool(meta.get("phonemes_disabled")),
+                phonemes=meta.get("phonemes"),
             )
-            for seg, txt, ph, meta in zip(valid_indices, translated, phonemes_list or [None] * len(translated), meta_list)
+            for seg, txt, meta in zip(valid_indices, translated, meta_list)
         ]
     )
 

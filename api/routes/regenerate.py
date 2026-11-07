@@ -81,7 +81,6 @@ async def regenerate_segment(req: RegenerateSegmentRequest):
         repetition_penalty=req.repetition_penalty,
         volume=req.volume,
         phonemes=req.phonemes,
-        phonemes_disabled=req.phonemes_disabled,
         prevent_overlap=bool(req.prevent_overlap),
         job_id=req.job_id,
         video_index=req.video_index,
@@ -103,7 +102,6 @@ def _do_regenerate_segment(
     repetition_penalty: float = 1.2,
     volume: float = 0.0,
     phonemes: dict[str, str] | None = None,
-    phonemes_disabled: bool | None = None,
     prevent_overlap: bool = False,
     job_id: str | None = None,
     video_index: int = 0,
@@ -126,16 +124,7 @@ def _do_regenerate_segment(
     # y `clone_voice_segments` los necesitan para recalcular el mismo margen y no perder
     # el alineado del timeline al regenerar un solo segmento.
     existing = dict(texts_original[seg_idx - 1])
-    disabled = (
-        phonemes_disabled
-        if phonemes_disabled is not None
-        else bool(existing.get("phonemes_disabled"))
-    )
-    seg_phonemes = (
-        {}
-        if disabled
-        else (phonemes if phonemes is not None else existing.get("phonemes", {}))
-    )
+    seg_phonemes = phonemes if phonemes is not None else existing.get("phonemes", {})
 
     orig_txt_val = existing.get("original_text", "")
     t_edit = {
@@ -145,7 +134,6 @@ def _do_regenerate_segment(
         "text": text,
         "original_text": orig_txt_val,
         "phonemes": seg_phonemes,
-        "phonemes_disabled": disabled,
         # Resolvemos siempre a la clave legible del diccionario (ej: 'mrbeast')
         # aunque el frontend haya enviado el ID de Fish Audio como speaker.
         # Esto garantiza que el archivo en disco se llame tts_mrbeast_001.wav

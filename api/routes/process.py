@@ -39,7 +39,6 @@ def process_urls(req: ProcessUrlsRequest):
         speaker_map=req.speaker_map,
         initial_emotion_per_sentence=bool(req.initial_emotion_per_sentence),
         initial_emotion_tag=req.initial_emotion_tag or "[excited]",
-        phonemes_disabled=bool(req.phonemes_disabled),
     )
     return ProcessUrlsResponse(job_id=job_id, message="Procesamiento iniciado")
 

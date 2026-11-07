@@ -115,23 +115,16 @@ class TestBordesDelClip(unittest.TestCase):
         self.assertEqual((entry["orig_start"], entry["orig_end"]), (0.15, 1.0))
 
 
-class TestFonemasDesactivados(unittest.TestCase):
-    def test_flag_desactiva_y_limpia_fonemas(self):
-        entry = create_segment_entry(
-            1,
-            0.0,
-            1.0,
-            "texto",
-            phonemes={"Ghidra": "gui-dra"},
-            phonemes_disabled=True,
-        )
-        self.assertTrue(entry["phonemes_disabled"])
-        self.assertNotIn("phonemes", entry)
-
-    def test_sin_flag_persiste_fonemas(self):
+class TestFonemasManuales(unittest.TestCase):
+    def test_persiste_el_diccionario_manual(self):
         entry = create_segment_entry(1, 0.0, 1.0, "texto", phonemes={"Ghidra": "gui-dra"})
         self.assertEqual(entry["phonemes"], {"Ghidra": "gui-dra"})
+        # El flag de inferencia automática ya no existe: no debe reaparecer al guardar.
         self.assertNotIn("phonemes_disabled", entry)
+
+    def test_diccionario_vacio_no_se_guarda(self):
+        entry = create_segment_entry(1, 0.0, 1.0, "texto", phonemes={})
+        self.assertNotIn("phonemes", entry)
 
 
 if __name__ == "__main__":

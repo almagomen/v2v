@@ -26,19 +26,9 @@ from src.pacing import (
     echoed_texts,
     fit_deviation,
     needs_rewrite,
-    primary_lang,
     source_bounds,
     speech_rate,
     visible_text,
-)
-from src.pronunciation import (
-    MAX_TERMS_PER_CALL,
-    apply_table,
-    build_respelling_prompt,
-    consolidate,
-    missing_terms,
-    norm_key,
-    validate_rule,
 )
 from src.review import (
     apply_term_map,
@@ -53,6 +43,9 @@ from src.review import (
 # Modelos recomendados: gemini-flash-lite-latest (alta velocidad, sin errores 503) y gemma-4-26b-a4b-it como respaldo
 DEFAULT_TITLE_MODEL = os.environ.get("DEFAULT_TITLE_MODEL", "gemini-flash-lite-latest")
 DEFAULT_TRANSLATION_MODEL = os.environ.get("DEFAULT_TRANSLATION_MODEL", "gemini-flash-lite-latest")
+# El juicio de conservación es una decisión corta y acotada: Gemma la resuelve
+# igual de bien que el modelo de traducción y cuesta menos.
+DEFAULT_JUDGE_MODEL = os.environ.get("DEFAULT_JUDGE_MODEL", "gemma-4-26b-a4b-it")
 
 POPULAR_GEMINI_MODELS = [
     "gemini-flash-lite-latest",
@@ -153,9 +146,8 @@ def translate_text_list(
     segments_meta: Optional[list[dict]] = None,
     initial_emotion_per_sentence: bool = False,
     initial_emotion_tag: str = "[excited]",
-    return_details: bool = False,
     **kwargs,
-) -> list[str] | Tuple[list[str], list[dict]] | None:
+) -> Optional[list[str]]:
     """
     Traduce o adapta una lista de frases a un idioma objetivo usando Gemini (Interactions API).
 
@@ -187,13 +179,6 @@ def translate_text_list(
     # La revisión pre-TTS es determinista salvo que quede algo marcado: sin marcas
     # no hay llamada. Se puede apagar sin tocar el resto del pipeline.
     review_enabled = os.environ.get("TRANSLATION_REVIEW", "1").strip().lower() not in ("0", "false", "no")
-    # Segmentos con la inferencia de fonemas desactivada: el prompt ni siquiera
-    # menciona el campo, no entran en la consolidación y no se persisten.
-    skip_phonemes = {
-        i
-        for i, meta_item in enumerate(segments_meta or [])
-        if meta_item.get("phonemes_disabled")
-    }
 
     # ─── Entity lock: congelar términos técnicos antes de tocar el prompt ───
     # Las mayúsculas del ASR no distinguen nombres propios de ortografía de pausa:
@@ -218,19 +203,36 @@ def translate_text_list(
         # dudoso para no alterar nombres durante la adaptación prosódica.
         preserved = doubtful
     elif doubtful:
-        try:
-            judge_client = genai.Client(api_key=available_keys[0])
-            judge_model = (model_name or DEFAULT_TRANSLATION_MODEL).strip()
-            judge_gemma = "gemma" in judge_model.lower()
-            preserved = _judge_preservable(
-                lambda prompt: _call_model(judge_client, judge_model, judge_gemma, prompt),
+        judge_client = genai.Client(api_key=available_keys[0])
+
+        def _judge_with(model: str) -> set[str]:
+            return _judge_preservable(
+                lambda prompt: _call_model(judge_client, model, "gemma" in model.lower(), prompt),
                 sorted(doubtful),
                 source_lang_name,
                 target_lang_name,
             )
+
+        try:
+            preserved = _judge_with(DEFAULT_JUDGE_MODEL)
         except Exception as e_judge:
-            print(f"⚠️ [Entidades] juicio de conservación omitido ({e_judge})", flush=True)
-            preserved = set()
+            # Gemma es el juez barato; si no está disponible, el juicio se reintenta
+            # con el modelo de traducción antes de renunciar a proteger nombres.
+            fallback_model = (model_name or DEFAULT_TRANSLATION_MODEL).strip()
+            if fallback_model.lower() == DEFAULT_JUDGE_MODEL.lower():
+                print(f"⚠️ [Entidades] juicio de conservación omitido ({e_judge})", flush=True)
+                preserved = set()
+            else:
+                print(
+                    f"⚠️ [Entidades] juez '{DEFAULT_JUDGE_MODEL}' falló ({e_judge}); "
+                    f"reintentando con '{fallback_model}'",
+                    flush=True,
+                )
+                try:
+                    preserved = _judge_with(fallback_model)
+                except Exception as e_fallback:
+                    print(f"⚠️ [Entidades] juicio de conservación omitido ({e_fallback})", flush=True)
+                    preserved = set()
         released = doubtful - preserved
         if preserved:
             print(
@@ -296,7 +298,6 @@ def translate_text_list(
    - SEGMENTOS BREVES (< 2.0s): Respeta la concisión temporal manteniendo la traducción breve y directa sin adiciones innecesarias.
    - En tu JSON de salida entrega ÚNICAMENTE el texto adaptado dentro de cada objeto, SIN repetir el prefijo de metadatos (prohibido poner `[Xs slot | ...]:`).""" if has_times else f"""5. CONCISIÓN TEMPORAL: Mantén una longitud similar a la frase original para no desbordar los tiempos de habla del clip de video. Evita redundancias o explicaciones innecesarias."""
 
-    empty_dict_str = "{}"
     if is_same_lang:
         role_mission = f"""Eres un director de voz y especialista en adaptación prosódica de diálogos para síntesis de voz (TTS).
 Tu misión es ADAPTAR cada frase en {target_lang_name} para su locución por modelos de voz (TTS), preservando con total fidelidad el texto, la idea y la intención original del {source_lang_name}, pero dotándola de ritmo oral natural, pausas orgánicas y excelente fonética."""
@@ -306,27 +307,21 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
 
     # Solo se inyecta cuando hay entidades: no gastar tokens de instrucción en videos sin tecnicismos.
     if entity_total:
-        entity_rule = """9. TOKENS PROTEGIDOS (PROHIBIDO TRADUCIR O ALTERAR):
+        entity_rule = """8. TOKENS PROTEGIDOS (PROHIBIDO TRADUCIR O ALTERAR):
    Las entidades técnicas, nombres de producto, nombres de archivo, rutas, versiones, siglas y cifras aparecen como marcadores opacos ⟦E1⟧, ⟦E2⟧, ... dentro del texto de entrada.
    - Conserva cada marcador EXACTAMENTE igual: mismos caracteres, mismo número, una sola vez y en la misma posición relativa de la frase.
    - No los traduzcas, no los expandas, no los expliques, no los elimines y no inventes marcadores nuevos.
    - No cuentan para el presupuesto de caracteres indicado en el prefijo temporal.
    - Traduce con normalidad el resto de la frase alrededor de los marcadores."""
     else:
-        entity_rule = "9. CIFRAS Y NOMBRES: Conserva sin cambios los números, nombres de archivo, rutas, versiones y siglas técnicas que aparezcan en el texto."
+        entity_rule = "8. CIFRAS Y NOMBRES: Conserva sin cambios los números, nombres de archivo, rutas, versiones y siglas técnicas que aparezcan en el texto."
 
-    def _build_prompt(entries: dict[str, str], count: int, context: list[str], no_phonemes_keys: Optional[set[str]] = None) -> str:
+    def _build_prompt(entries: dict[str, str], count: int, context: list[str]) -> str:
         ex_text_1 = f"frase 1 adaptada al {target_lang_name}"
         ex_text_2 = f"frase 2 adaptada al {target_lang_name}"
-        # Claves del bloque sin inferencia de fonemas: su ejemplo de salida no
-        # lleva el campo y la regla 8 no las menciona.
-        disabled_keys = no_phonemes_keys or set()
-        enabled_keys = [str(n) for n in range(1, count + 1) if str(n) not in disabled_keys]
 
         def _ex(k: int, text: str) -> str:
-            if str(k) in disabled_keys:
-                return f'  "{k}": {{\n    "text": "{text}"\n  }}'
-            return f'  "{k}": {{\n    "text": "{text}",\n    "phonemes": {empty_dict_str}\n  }}'
+            return f'  "{k}": {{\n    "text": "{text}"\n  }}'
 
         # El ejemplo no debe repetir la última clave cuando el bloque es corto
         # (con count=1 se generaban "1", "2" y otra vez "1").
@@ -335,17 +330,7 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
                 _ex(k, ex_text_1 if k == 1 else ex_text_2) for k in range(1, count + 1)
             )
         else:
-            # En bloques mixtos el ejemplo debe mostrar ambas formas; si las
-            # claves 1, 2 y count no cubren las dos, se cambia la central.
-            sample = [1, 2, count]
-            if enabled_keys and disabled_keys:
-                shown = {str(k) in disabled_keys for k in sample}
-                if len(shown) == 1:
-                    pool = enabled_keys if shown.pop() else sorted(disabled_keys, key=int)
-                    swap = next((int(k) for k in pool if int(k) not in sample), None)
-                    if swap is not None:
-                        sample[1] = swap
-            sample = sorted(set(sample))
+            sample = sorted({1, 2, count})
             head = ",\n".join(
                 _ex(k, ex_text_1 if k == 1 else ex_text_2) for k in sample[:-1]
             )
@@ -362,40 +347,6 @@ Tu misión es REESCRIBIR cada frase al {target_lang_name}, capturando con total 
                 f"{json.dumps(context, ensure_ascii=False)}\n"
             )
 
-        # La sección de fonemas solo se redacta si el bloque tiene alguna clave
-        # que los use; si todas los desactivan, el prompt no menciona el campo.
-        phoneme_rule = ""
-        if enabled_keys:
-            scope = ""
-            if disabled_keys:
-                keys_txt = ", ".join(f'"{k}"' for k in enabled_keys)
-                scope = f" Aplica solo a las claves {keys_txt}."
-            if primary_lang(target_lang) == "en":
-                phoneme_value = (
-                    "usa CMU Arpabet en mayúsculas, separado por espacios y con el "
-                    "dígito de acento (0, 1 o 2) opcional. Ejemplo de formato: "
-                    '"OW1 P AH0 N K OW1 D"'
-                )
-            else:
-                phoneme_value = (
-                    f"usa la ortografía de {target_lang_name} tal como debe sonar, "
-                    "con una sola tilde en la sílaba tónica cuando la escritura lo "
-                    f"permita y sin combinaciones de letras que no existan en "
-                    f"{target_lang_name}"
-                )
-            phoneme_rule = f"""8. DETECCIÓN FONÉTICA Y GLOSARIO DE PRONUNCIACIÓN (TTS):{scope}
-   Identifica en cada frase cualquier vocablo cuya lectura ortográfica literal en {target_lang_name} pueda ser pronunciada de forma errónea, distorsionada o antinatural por un sintetizador de voz. Evalúa rigurosamente candidatos en cualquier área temática que cumplan con alguno de los siguientes criterios:
-   a) Nombres propios, marcas, productos, entidades o topónimos de origen no nativo o grafía singular.
-   b) Siglas, acrónimos o combinaciones alfanuméricas que deban pronunciarse con la fonética propia de su disciplina o mediante deletreo.
-   c) Extranjerismos, vocablos foráneos o términos especializados que conserven la pronunciación de su idioma de origen y no sigan las reglas ortográficas del {target_lang_name}.
-   d) Palabras cuya ortografía estándar en {target_lang_name} resulte propensa a una lectura defectuosa o robótica por modelos de voz.
-
-   Para cada vocablo detectado en la frase:
-   - Como clave: la palabra exacta tal como está escrita en tu texto traducido.
-   - Como valor: {phoneme_value}.
-   - En tu salida, asocia el diccionario al campo "phonemes": {{"Palabra": "Pronunciación"}}. Si una frase contiene únicamente vocabulario cotidiano estándar de {target_lang_name}, deja "phonemes": {empty_dict_str}.
-"""
-
         return f"""{role_mission}
 
 Directrices obligatorias:
@@ -408,8 +359,8 @@ Directrices obligatorias:
 7. PUNTUACIÓN Y RITMO ORAL:
    - Conserva la entonación interrogativa y exclamativa con la puntuación propia de {target_lang_name}.
    - Emplea comas, dos puntos y puntos seguidos para articular un ritmo oral natural y bien estructurado.
-{phoneme_rule}{entity_rule}
-10. MAYÚSCULAS DEL RECONOCIMIENTO DE VOZ (NO SON NOMBRES PROPIOS):
+{entity_rule}
+9. MAYÚSCULAS DEL RECONOCIMIENTO DE VOZ (NO SON NOMBRES PROPIOS):
    El texto de entrada viene de un ASR que capitaliza la primera palabra de cada trozo separado por una pausa, aunque sea una palabra corriente. Una mayúscula a mitad de frase NO indica nombre propio: solo los marcadores ⟦E1⟧, ⟦E2⟧... son términos protegidos.
    Traduce TODAS las palabras, incluidas las que aparecen en mayúscula, salvo los marcadores protegidos. Dejar una palabra del {source_lang_name} sin traducir porque venía capitalizada es un error grave.
 {contexto}
@@ -426,18 +377,17 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
     def _normalize_response(
         parsed,
         fallback_texts: list[str],
-    ) -> tuple[Optional[list[str]], dict[int, dict[str, str]], set[int]]:
-        """Extrae textos y fonemas de la respuesta (dict indexado o lista)."""
+    ) -> tuple[Optional[list[str]], set[int]]:
+        """Extrae los textos de la respuesta (dict indexado o lista)."""
         count = len(fallback_texts)
         if isinstance(parsed, dict):
             indexed = True
         elif isinstance(parsed, list):
             indexed = False
         else:
-            return None, {}, set()
+            return None, set()
 
         texts: list[str] = []
-        phonemes: dict[int, dict[str, str]] = {}
         missing: set[int] = set()
 
         for n in range(count):
@@ -447,16 +397,10 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 val = parsed[n] if n < len(parsed) else ""
 
             txt_raw = ""
-            seg_phonemes: dict[str, str] = {}
             if isinstance(val, dict):
                 txt_raw = str(val.get("text", "")).strip()
-                ph = val.get("phonemes")
-                if isinstance(ph, dict):
-                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in ph.items() if k and v}
             elif isinstance(val, list):
                 txt_raw = str(val[0]).strip() if len(val) > 0 else ""
-                if len(val) > 1 and isinstance(val[1], dict):
-                    seg_phonemes = {str(k).strip(): str(v).strip() for k, v in val[1].items() if k and v}
             elif isinstance(val, str):
                 txt_raw = val.strip()
 
@@ -467,9 +411,8 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
             else:
                 texts.append(fallback_texts[n])
                 missing.add(n)
-            phonemes[n] = seg_phonemes
 
-        return texts, phonemes, missing
+        return texts, missing
 
     def _run_chunk(
         client,
@@ -482,10 +425,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         """Traduce un bloque. Devuelve {índice_global: payload} o None si la respuesta no sirve."""
         local_entries = {str(n + 1): entry_lines[g] for n, g in enumerate(indices)}
         context = [locked_sentences[g] for g in range(max(0, indices[0] - 2), indices[0])]
-        local_no_phonemes = {
-            str(n + 1) for n, g in enumerate(indices) if g in skip_phonemes
-        }
-        prompt = _build_prompt(local_entries, len(indices), context, local_no_phonemes)
+        prompt = _build_prompt(local_entries, len(indices), context)
 
         if print_full_prompt:
             print("\n" + "=" * 60, flush=True)
@@ -504,33 +444,38 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
             print(f"⚠️ [Traducción] bloque {chunk_no}: JSON inválido ({exc})", flush=True)
             return None
         fallback_texts = [list_sentences[g] for g in indices]
-        texts, phonemes, missing_local = _normalize_response(parsed, fallback_texts)
+        texts, missing_local = _normalize_response(parsed, fallback_texts)
         if texts is None:
             return None
 
         # ─── Verificación de entidades + rescate dentro del bloque ───
         problems: dict[int, list[str]] = {}
+        warnings: dict[int, list[str]] = {}
         rescue: dict[str, dict[str, str]] = {}
-        number_warn = 0
         for n, g in enumerate(indices):
             if n in missing_local or not locked_sentences[g]:
                 continue
             verdict = check_entities(locked_sentences[g], texts[n])
-            if verdict["numbers_mismatch"]:
-                number_warn += 1
+            if verdict["warnings"]:
+                warnings[n] = [str(w) for w in verdict["warnings"]]
             if not verdict["ok"]:
                 problems[n] = [str(r) for r in verdict["reasons"]]
                 rescue[str(n + 1)] = {"source": locked_sentences[g], "text": texts[n]}
 
-        if number_warn:
+        if warnings:
             print(
-                f"🔢 [Entidades] bloque {chunk_no}: {number_warn} segmento(s) con cifras escritas en palabras (aviso)",
+                f"🔢 [Entidades] bloque {chunk_no}: {len(warnings)} segmento(s) con cifras escritas en palabras (aviso)",
                 flush=True,
             )
+            for n in sorted(warnings):
+                print(f"   seg {indices[n] + 1}: {'; '.join(warnings[n])}", flush=True)
 
         if rescue:
             print(f"🔁 [Entidades] bloque {chunk_no}: {len(rescue)} segmento(s) con tokens alterados; rescate...", flush=True)
+            for n in sorted(problems):
+                print(f"   seg {indices[n] + 1}: {'; '.join(problems[n])}", flush=True)
             fixed = _translate_entity_retry(client, model, is_gemma, rescue, target_lang_name)
+            recovered = 0
             for key_str, new_text in fixed.items():
                 n = int(key_str) - 1
                 if not (0 <= n < len(indices)) or not new_text.strip():
@@ -538,6 +483,16 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 if check_entities(locked_sentences[indices[n]], new_text)["ok"]:
                     texts[n] = new_text.strip()
                     problems.pop(n, None)
+                    recovered += 1
+            print(
+                f"✅ [Entidades] bloque {chunk_no}: {recovered}/{len(rescue)} rescatado(s)",
+                flush=True,
+            )
+            for n in sorted(problems):
+                print(
+                    f"   seg {indices[n] + 1}: sigue roto: {'; '.join(problems[n])}",
+                    flush=True,
+                )
 
         # ─── Idioma de salida: palabras que viajaron sin traducir ───
         # Se detecta por solapamiento léxico con el origen, sin diccionarios: los tokens
@@ -829,7 +784,6 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
         for n, g in enumerate(indices):
             out[g] = {
                 "text": restore_text(texts[n], lock_maps[g]),
-                "phonemes": phonemes.get(n, {}),
                 "missing": n in missing_local,
                 "problems": problems.get(n, []),
                 "untranslated": untranslated.get(n, []),
@@ -905,7 +859,6 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     resolved.update(part)
 
                 aligned_list = [resolved[i]["text"] for i in range(total_count)]
-                phonemes_map = {i: resolved[i]["phonemes"] for i in range(total_count)}
                 duration = time.perf_counter() - t_start
 
                 # ─── Variantes del ASR: una sola grafía por entidad ───
@@ -929,9 +882,8 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                             if term_map:
                                 aligned_list, changed = apply_term_map(aligned_list, term_map)
                                 # La entidad bloqueada sigue siendo la variante vieja en
-                                # `lock_maps`; si no se actualiza, la cobertura de
-                                # pronunciación busca una palabra que ya no está y deja
-                                # sin regla a la grafía canónica.
+                                # `lock_maps`; si no se actualiza, la detección de fugas
+                                # compara contra una grafía que ya no está en el texto.
                                 for mapping in lock_maps:
                                     for key, value in list(mapping.items()):
                                         if value in term_map:
@@ -947,37 +899,15 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     except Exception as e_term:
                         print(f"⚠️ [Revisión] variantes del ASR omitidas ({e_term})", flush=True)
 
-                # ─── Pronunciación: una regla por palabra y cobertura de las bloqueadas ───
-                # Corre antes de la etiqueta de emoción para que la clave case con el
-                # texto tal como lo dirá la voz, sin prefijos de control.
-                phonemes_map = _finalize_pronunciations(
-                    phonemes_map,
-                    aligned_list,
-                    lock_maps,
-                    target_lang,
-                    target_lang_name,
-                    lambda prompt: _call_model(client, model, is_gemma, prompt),
-                    skip=skip_phonemes,
-                )
-
                 # Etiqueta de emoción al frente (después del rescate: el modelo no debe verla)
                 if initial_emotion_per_sentence and aligned_list:
                     tag_to_insert = initial_emotion_tag if (initial_emotion_tag and initial_emotion_tag.startswith("[")) else f"[{initial_emotion_tag or 'excited'}]"
                     aligned_list = [f"{tag_to_insert} {t}".strip() for t in aligned_list]
 
-                # Fonemas y estado de traducción por segmento
+                # Estado de traducción por segmento. El diccionario de pronunciación
+                # es manual: si el segmento ya traía `phonemes`, se respeta tal cual.
                 if segments_meta and len(segments_meta) == total_count:
                     for idx, meta_item in enumerate(segments_meta):
-                        ph = (
-                            {}
-                            if meta_item.get("phonemes_disabled")
-                            else (phonemes_map.get(idx) or {})
-                        )
-                        if ph:
-                            meta_item["phonemes"] = ph
-                        elif "phonemes" not in meta_item:
-                            meta_item["phonemes"] = {}
-
                         info = resolved[idx]
                         if info["missing"]:
                             meta_item["translation_status"] = "fallback"
@@ -995,13 +925,12 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                             meta_item.pop("untranslated", None)
 
                 if entity_total:
-                    failed = sum(1 for i in range(total_count) if resolved[i]["problems"])
-                    print(f"🔓 [Entidades] {entity_total} restauradas; {failed} segmento(s) con fallo persistente", flush=True)
+                    failed = [i for i in range(total_count) if resolved[i]["problems"]]
+                    print(f"🔓 [Entidades] {entity_total} restauradas; {len(failed)} segmento(s) con fallo persistente", flush=True)
+                    for i in failed:
+                        print(f"   seg {i + 1}: {'; '.join(resolved[i]['problems'])}", flush=True)
 
                 print(f"⏱️ [Traducción '{model}'] segs. en {duration:.1f}s", flush=True)
-                if return_details:
-                    phonemes_list = [phonemes_map.get(i, {}) for i in range(total_count)]
-                    return aligned_list, phonemes_list
                 return aligned_list
 
             except Exception as e:
@@ -1021,83 +950,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                     continue
 
     print(f"❌ [Traducción] Fallaron todos los modelos disponibles. Último error: {last_error}", flush=True)
-    if return_details:
-        return None, None
     return None
-
-
-def _finalize_pronunciations(
-    phonemes_map: dict[int, dict[str, str]],
-    texts: list[str],
-    lock_maps: list[dict[int, str]],
-    target_lang: str,
-    target_lang_name: str,
-    call: Callable[[str], str],
-    skip: Optional[set[int]] = None,
-) -> dict[int, dict[str, str]]:
-    """
-    Consolida las reglas del lote y cubre los términos que el traductor no pudo ver.
-
-    El modelo escribe la pronunciación segmento a segmento, sin memoria entre bloques:
-    la misma palabra puede salir con dos respellings y el video suena inconsistente.
-    Además las entidades bloqueadas viajan como marcadores opacos, así que el
-    traductor nunca las ve y no puede escribir su pronunciación — son justo las
-    palabras anglosajonas que suenan mal.
-
-    Returns:
-        {índice: {clave: respelling}} listo para `pronunciation_dictionary`.
-    """
-    skip = skip or set()
-    # Sin ninguna clave activa no hay diccionario que consolidar ni términos que
-    # consultar: evitar la llamada de respelling por completo.
-    if skip.issuperset(range(len(texts))):
-        return {i: {} for i in range(len(texts))}
-
-    tables = [{} if i in skip else (phonemes_map.get(i) or {}) for i in range(len(texts))]
-    chosen, display, conflicts = consolidate(tables, target_lang)
-
-    entity_terms = [term for mapping in lock_maps for term in mapping.values()]
-    active_texts = [t for i, t in enumerate(texts) if i not in skip]
-    pending = missing_terms(active_texts, entity_terms, chosen)
-    extra: dict[str, dict] = {}
-    for start in range(0, len(pending), MAX_TERMS_PER_CALL):
-        batch = pending[start : start + MAX_TERMS_PER_CALL]
-        try:
-            parsed = _loads_loose(
-                call(build_respelling_prompt(batch, target_lang_name, target_lang)),
-                "[Pronunciación] respelling",
-            )
-        except Exception as exc:
-            print(f"⚠️ [Pronunciación] respelling omitido ({exc})", flush=True)
-            continue
-        if not isinstance(parsed, dict):
-            continue
-        for term, value in parsed.items():
-            if value is None:
-                continue
-            rule = validate_rule(str(term), str(value), target_lang)
-            if rule:
-                extra[norm_key(rule["key"])] = rule
-
-    final = {
-        i: {} if i in skip else apply_table(texts[i], tables[i], chosen, display, extra)
-        for i in range(len(texts))
-    }
-
-    applied = {(key, value) for table in final.values() for key, value in table.items()}
-    if applied:
-        segments = sum(1 for table in final.values() if table)
-        print(
-            f"🔤 [Pronunciación] {len(applied)} regla(s) en {segments} segmento(s)",
-            flush=True,
-        )
-        for key, value in sorted(applied):
-            print(f"   {key} → {value}", flush=True)
-    if conflicts:
-        print(f"⚠️ [Pronunciación] {len(conflicts)} palabra(s) con dos respellings; gana el más frecuente:", flush=True)
-        for line in conflicts[:10]:
-            print(f"   {line}", flush=True)
-    return final
 
 
 def _loads_loose(raw_text: str, log_tag: str = "[JSON]") -> Any:

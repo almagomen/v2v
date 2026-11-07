@@ -6,7 +6,6 @@ export const V2V_PREFERENCES_STORAGE_KEY = "openreel.v2v.preferences";
 export interface V2VUserPreferences {
   initialEmotionPerSentence: boolean;
   initialEmotionTag: string;
-  phonemesDisabled: boolean;
   importTTSSegments: boolean;
   importVideoOnly: boolean;
   importMergedVideo: boolean;
@@ -19,7 +18,6 @@ export interface V2VUserPreferences {
 export const DEFAULT_V2V_PREFERENCES: V2VUserPreferences = {
   initialEmotionPerSentence: false,
   initialEmotionTag: "[excited]",
-  phonemesDisabled: false,
   importTTSSegments: true,
   importVideoOnly: true,
   importMergedVideo: false,
