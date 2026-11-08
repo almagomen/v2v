@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import re
+import threading
 import time
 import subprocess
 import unicodedata
@@ -189,6 +190,67 @@ def _job_folder(job_id: str, video_index: int) -> Path:
     return Path(videos[video_index]["video_path"]).parent
 
 
+# --- Segmentos de audio originales (Seqs_src) --------------------------------
+# El frontend importa cada corte original como `vocals_<NNN>.(wav|m4a)` y envía
+# ese nombre lógico al render. Esos cortes no viven en el manifiesto: se generan
+# desde `vocals.wav` en `Seqs_src/`, así que hay que resolverlos desde disco.
+
+_src_split_lock = threading.Lock()
+_src_split_done: set[str] = set()
+
+
+def _ensure_src_segments(folder: Path) -> None:
+    """Genera `Seqs_src/` en demanda, como máximo una vez por carpeta y proceso."""
+    key = str(folder)
+    with _src_split_lock:
+        if key in _src_split_done:
+            return
+        _src_split_done.add(key)
+
+    vocals_wav = folder / "vocals.wav"
+    if not vocals_wav.exists():
+        return
+    try:
+        from src.pipeline import split_audio_sequences
+        from src.result_store import load_result
+
+        data = load_result(folder) or {}
+        segments = data.get("segments") or data.get("original_segments") or []
+        if segments:
+            split_audio_sequences(vocals_wav, segments, output_dir=folder / "Seqs_src")
+    except Exception as e:
+        print(f"[Seqs_src] No se pudo generar on-demand en {folder}: {e}")
+
+
+def _find_src_segment(folder: Path, seg_index: int, prefix: str = "") -> Optional[Path]:
+    """Localiza el corte original `*_<NNN>.(m4a|wav)` en `Seqs_src/`."""
+    seqs_src = folder / "Seqs_src"
+
+    def _lookup() -> Optional[Path]:
+        exts = (".m4a", ".wav", ".mp3")
+        # 1. Nombre canónico del corte (`vocals_001.m4a` / `vocals-001.m4a`)
+        if prefix:
+            for sep in ("_", "-"):
+                for ext in exts:
+                    cand = seqs_src / f"{prefix}{sep}{seg_index:03d}{ext}"
+                    if cand.is_file() and cand.stat().st_size > 0:
+                        return cand
+        # 2. Cualquier corte con ese índice, sea cual sea su prefijo
+        for sep in ("_", "-"):
+            for ext in exts:
+                for cand in sorted(seqs_src.glob(f"*{sep}{seg_index:03d}{ext}")):
+                    if cand.is_file() and cand.stat().st_size > 0:
+                        return cand
+        return None
+
+    found = _lookup()
+    if found:
+        return found
+
+    _ensure_src_segments(folder)
+    return _lookup()
+
+
 def _resolve_media_path(
     folder: Path, media_name: str, job_id: str = None, video_index: int = None
 ) -> Path:
@@ -235,8 +297,6 @@ def _resolve_media_path(
                 return path
 
     # 2.5 Segmentos TTS/gen por índice directo desde Seqs_trg
-    import re
-
     tts_match = re.search(r"tts_.*?_(\d+)\.(?:wav|m4a)$", file_name, re.I)
     seg_idx = (
         int(tts_match.group(1))
@@ -247,6 +307,19 @@ def _resolve_media_path(
         seg_path = get_segment(folder, seg_idx)
         if seg_path and seg_path.exists():
             return seg_path
+
+    # 2.55 Segmentos de audio originales: vocals_001.(wav|m4a) → Seqs_src/
+    src_match = re.search(
+        r"^(vocals|src|original|orig)[_-]?(\d{1,3})(?:\.(?:wav|m4a|mp3))?$",
+        file_name,
+        re.I,
+    )
+    if src_match:
+        src_path = _find_src_segment(
+            folder, int(src_match.group(2)), prefix=src_match.group(1).lower()
+        )
+        if src_path:
+            return src_path
 
     # 2.6 Búsqueda exhaustiva en el manifiesto por nombre de archivo
     for val in assets.values():
