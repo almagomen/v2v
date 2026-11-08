@@ -70,12 +70,15 @@ async function readJsonOrThrow<T>(res: Response): Promise<T> {
 }
 
 const METADATA_TIMEOUT_MS = 30_000;
-const MEDIA_TIMEOUT_MS = 60_000;
 // Transferencias grandes (video_only, merged, TAR): sin tope total. Un MP4 de
 // 40 MB puede tardar minutos por un túnel lento; abortar por tiempo total era
 // un falso fallo. Solo se vigila el primer byte y los periodos sin datos.
 const STREAM_HEADER_TIMEOUT_MS = 30_000;
 const STREAM_STALL_TIMEOUT_MS = 45_000;
+// Generación bajo demanda (TTS, aplicar velocidad): el servidor puede tardar
+// bastante antes del primer byte, pero no minutos. Un tope amplio evita que la
+// UI espere para siempre si la petición se perdió.
+const GENERATION_HEADER_TIMEOUT_MS = 180_000;
 
 function timeoutError(message: string): Error {
   return new DOMException(message, "TimeoutError");
@@ -119,6 +122,30 @@ interface BufferedDownload {
 const PARALLEL_RANGE_MAX = 4;
 const PARALLEL_RANGE_BYTES = 8 * 1024 * 1024;
 const PARALLEL_RANGE_ATTEMPTS = 3;
+// Presupuesto global de conexiones de rango. Varios activos se descargan a la
+// vez (`Promise.all` en la importación), y cada uno abriría 4 conexiones: sin
+// este tope se saturan los sockets del navegador y Cloudflare empieza a
+// devolver 429/502. Los trozos esperan turno en vez de fallar.
+const RANGE_MAX_CONCURRENCY = 6;
+let activeRangeRequests = 0;
+const rangeWaiters: Array<() => void> = [];
+
+async function withRangeSlot<T>(task: () => Promise<T>): Promise<T> {
+  if (activeRangeRequests >= RANGE_MAX_CONCURRENCY) {
+    // Esperamos a que se libere un hueco; el hueco se transfiere directamente.
+    await new Promise<void>((resolve) => rangeWaiters.push(resolve));
+  } else {
+    activeRangeRequests++;
+  }
+
+  try {
+    return await task();
+  } finally {
+    const next = rangeWaiters.shift();
+    if (next) next();
+    else activeRangeRequests--;
+  }
+}
 
 interface GuardedResponse {
   res: Response;
@@ -137,36 +164,45 @@ async function fetchWithHeaderGuard(
     label: string;
     method?: string;
     headers?: Record<string, string>;
+    body?: BodyInit;
     signal?: AbortSignal;
-    headerTimeoutMs?: number;
+    /** `null` desactiva la guarda: para peticiones que pueden tardar minutos. */
+    headerTimeoutMs?: number | null;
   }
 ): Promise<GuardedResponse> {
   const {
     label,
     method,
     headers,
+    body,
     signal,
     headerTimeoutMs = STREAM_HEADER_TIMEOUT_MS,
   } = options;
 
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(timeoutError(`El servidor no envió '${label}' en ${headerTimeoutMs / 1000}s`)),
-    headerTimeoutMs
-  );
+  const timer =
+    headerTimeoutMs == null
+      ? null
+      : setTimeout(
+          () =>
+            controller.abort(
+              timeoutError(`El servidor no envió '${label}' en ${headerTimeoutMs / 1000}s`)
+            ),
+          headerTimeoutMs
+        );
   const onAbort = () => controller.abort(signal?.reason);
   if (signal) {
     if (signal.aborted) controller.abort(signal.reason);
     else signal.addEventListener("abort", onAbort, { once: true });
   }
   const cleanup = () => {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     if (signal) signal.removeEventListener("abort", onAbort);
   };
 
   try {
-    const res = await fetch(target, { method, signal: controller.signal, headers });
-    clearTimeout(timer);
+    const res = await fetch(target, { method, body, signal: controller.signal, headers });
+    if (timer) clearTimeout(timer);
     return { res, controller, cleanup };
   } catch (error) {
     cleanup();
@@ -217,15 +253,19 @@ async function responseError(res: Response, label: string): Promise<Error> {
     try {
       const parsed = JSON.parse(raw);
       if (typeof parsed?.detail === "string") detail = parsed.detail;
+      else if (typeof parsed?.message === "string") detail = parsed.message;
     } catch {
-      // La respuesta de error no era JSON; el status ya es suficiente.
+      // La respuesta de error no era JSON; mostramos el texto si lo hay.
+      if (raw.trim()) detail = raw.trim().slice(0, 300);
     }
   } else {
     // No descargamos un cuerpo binario enorme solo para leer el error.
     await res.body?.cancel().catch(() => {});
   }
 
-  return new Error(detail || `Error al descargar '${label}' (${res.status})`);
+  const error = new Error(detail || `Error al descargar '${label}' (${res.status})`);
+  (error as Error & { status?: number }).status = res.status;
+  return error;
 }
 
 /**
@@ -286,6 +326,57 @@ async function consumeBodyWithStallGuard(
   return { buffer: merged.buffer, bytes: total };
 }
 
+/**
+ * Ejecuta una petición que devuelve un blob (regenerar TTS, aplicar velocidad,
+ * render) y consume el cuerpo con guarda de estancamiento.
+ *
+ * No impone límite al tiempo hasta las cabeceras por defecto: el servidor puede
+ * tardar en generar el audio o el vídeo. Lo que sí se vigila es que, una vez
+ * empezada la respuesta, no deje de llegar datos. Así una generación lenta
+ * termina, pero una conexión colgada falla con un mensaje claro en vez de
+ * dejar la UI bloqueada indefinidamente.
+ */
+async function fetchBlobWithStallGuard(
+  target: string,
+  init: {
+    method: string;
+    headers?: Record<string, string>;
+    body?: BodyInit;
+    signal?: AbortSignal;
+  },
+  options: {
+    label: string;
+    headerTimeoutMs?: number | null;
+    stallTimeoutMs?: number;
+  }
+): Promise<{ blob: Blob; res: Response }> {
+  const stallTimeoutMs = options.stallTimeoutMs ?? STREAM_STALL_TIMEOUT_MS;
+  const guarded = await fetchWithHeaderGuard(target, {
+    label: options.label,
+    method: init.method,
+    headers: init.headers,
+    body: init.body,
+    signal: init.signal,
+    headerTimeoutMs: options.headerTimeoutMs ?? null,
+  });
+
+  try {
+    if (!guarded.res.ok) {
+      throw await responseError(guarded.res, options.label);
+    }
+    const { buffer } = await consumeBodyWithStallGuard(
+      guarded.res,
+      guarded.controller,
+      options.label,
+      stallTimeoutMs
+    );
+    const contentType = guarded.res.headers.get("content-type") || "application/octet-stream";
+    return { blob: new Blob([buffer], { type: contentType }), res: guarded.res };
+  } finally {
+    guarded.cleanup();
+  }
+}
+
 /** Combina señales de cancelación (externa + aborto compartido de rangos). */
 function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
   const present = signals.filter((s): s is AbortSignal => !!s);
@@ -325,37 +416,39 @@ async function fetchRangeInto(
   for (let attempt = 1; attempt <= PARALLEL_RANGE_ATTEMPTS; attempt++) {
     const rangeLabel =
       attempt === 1 ? options.label : `${options.label} (reintento ${attempt - 1})`;
-    let cleanup: (() => void) | null = null;
 
     try {
-      const guarded = await fetchWithHeaderGuard(target, {
-        label: rangeLabel,
-        headers: { Range: `bytes=${start}-${end}` },
-        signal: options.signal,
-        headerTimeoutMs: options.headerTimeoutMs,
-      });
-      cleanup = guarded.cleanup;
+      await withRangeSlot(async () => {
+        const guarded = await fetchWithHeaderGuard(target, {
+          label: rangeLabel,
+          headers: { Range: `bytes=${start}-${end}` },
+          signal: options.signal,
+          headerTimeoutMs: options.headerTimeoutMs,
+        });
 
-      if (guarded.res.status !== 206) {
-        throw await responseError(guarded.res, rangeLabel);
-      }
-      const { bytes } = await consumeBodyWithStallGuard(
-        guarded.res,
-        guarded.controller,
-        rangeLabel,
-        options.stallTimeoutMs,
-        (chunk, offset) => sink.set(chunk, start + offset)
-      );
-      if (bytes !== expected) {
-        throw new Error(`Rango incompleto en '${rangeLabel}': ${bytes}/${expected} bytes`);
-      }
+        try {
+          if (guarded.res.status !== 206) {
+            throw await responseError(guarded.res, rangeLabel);
+          }
+          const { bytes } = await consumeBodyWithStallGuard(
+            guarded.res,
+            guarded.controller,
+            rangeLabel,
+            options.stallTimeoutMs,
+            (chunk, offset) => sink.set(chunk, start + offset)
+          );
+          if (bytes !== expected) {
+            throw new Error(`Rango incompleto en '${rangeLabel}': ${bytes}/${expected} bytes`);
+          }
+        } finally {
+          guarded.cleanup();
+        }
+      });
       return;
     } catch (error) {
       lastError = error;
       // Si el conjunto se canceló, no tiene sentido reintentar.
       if (options.signal?.aborted) break;
-    } finally {
-      cleanup?.();
     }
   }
 
@@ -441,6 +534,8 @@ async function fetchBufferWithGuards(
     headerTimeoutMs?: number;
     stallTimeoutMs?: number;
     parallelRanges?: boolean;
+    /** Intentos del flujo único (los rangos ya tienen su propio reintento). */
+    attempts?: number;
   } = {}
 ): Promise<BufferedDownload> {
   const {
@@ -449,6 +544,7 @@ async function fetchBufferWithGuards(
     headerTimeoutMs = STREAM_HEADER_TIMEOUT_MS,
     stallTimeoutMs = STREAM_STALL_TIMEOUT_MS,
     parallelRanges = false,
+    attempts = 2,
   } = options;
 
   const contentTypeOf = (res: Response) => res.headers.get("content-type") || "";
@@ -515,25 +611,42 @@ async function fetchBufferWithGuards(
     }
   }
 
-  const single = await fetchWithHeaderGuard(target, {
-    label,
-    signal: externalSignal,
-    headerTimeoutMs,
-  });
-  try {
-    if (!single.res.ok) {
-      throw await responseError(single.res, label);
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const single = await fetchWithHeaderGuard(target, {
+        label,
+        signal: externalSignal,
+        headerTimeoutMs,
+      });
+      try {
+        if (!single.res.ok) {
+          throw await responseError(single.res, label);
+        }
+        const { buffer, bytes } = await consumeBodyWithStallGuard(
+          single.res,
+          single.controller,
+          label,
+          stallTimeoutMs
+        );
+        return { buffer, contentType: contentTypeOf(single.res), bytes };
+      } finally {
+        single.cleanup();
+      }
+    } catch (error) {
+      lastError = error;
+      const status = (error as { status?: number }).status;
+      // Reintentamos fallos de red o 5xx; un 4xx no mejora al repetirlo.
+      const retryable = status === undefined || status >= 500;
+      if (!retryable || externalSignal?.aborted || attempt >= attempts) break;
+      console.warn(
+        `[V2V] Descarga de '${label}' falló; reintentando (${attempt}/${attempts - 1}).`,
+        error
+      );
     }
-    const { buffer, bytes } = await consumeBodyWithStallGuard(
-      single.res,
-      single.controller,
-      label,
-      stallTimeoutMs
-    );
-    return { buffer, contentType: contentTypeOf(single.res), bytes };
-  } finally {
-    single.cleanup();
   }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function fetchTarBuffer(
@@ -1009,35 +1122,37 @@ export const v2vApi = {
     signal?: AbortSignal,
   ): Promise<Blob> {
     const abortSignal = signal || options?.signal;
-    const res = await fetch(url("/api/regenerate-segment"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: abortSignal,
-      body: JSON.stringify({
-        job_id: jobId,
-        video_index: videoIndex,
-        seg_idx: segIdx,
-        text,
-        start,
-        end,
-        translate_lang: translateLang,
-        speaker,
-        speed,
-        target_duration: targetDuration,
-        temperature: options?.temperature ?? 0.7,
-        top_p: options?.top_p ?? 0.7,
-        repetition_penalty: options?.repetition_penalty ?? 1.2,
-        volume: options?.volume ?? 0.0,
-        phonemes: options?.phonemes,
-        prevent_overlap: options?.prevent_overlap,
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al regenerar segmento");
-    }
-    return res.blob();
+    const { blob } = await fetchBlobWithStallGuard(
+      url("/api/regenerate-segment"),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: abortSignal,
+        body: JSON.stringify({
+          job_id: jobId,
+          video_index: videoIndex,
+          seg_idx: segIdx,
+          text,
+          start,
+          end,
+          translate_lang: translateLang,
+          speaker,
+          speed,
+          target_duration: targetDuration,
+          temperature: options?.temperature ?? 0.7,
+          top_p: options?.top_p ?? 0.7,
+          repetition_penalty: options?.repetition_penalty ?? 1.2,
+          volume: options?.volume ?? 0.0,
+          phonemes: options?.phonemes,
+          prevent_overlap: options?.prevent_overlap,
+        }),
+      },
+      {
+        label: `regenerar segmento ${segIdx}`,
+        headerTimeoutMs: GENERATION_HEADER_TIMEOUT_MS,
+      }
+    );
+    return blob;
   },
 
   async generateNewAudioSegment(
@@ -1047,30 +1162,32 @@ export const v2vApi = {
     speaker: string,
     options?: GenerateAudioSegmentOptions,
   ): Promise<GeneratedAudioResult> {
-    const res = await fetch(url("/api/generate-audio-segment"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        job_id: jobId || undefined,
-        video_index: videoIndex,
-        video_path: options?.video_path,
-        text,
-        speaker,
-        start: options?.start ?? 0,
-        speed: options?.speed ?? 1.0,
-        temperature: options?.temperature ?? 0.7,
-        top_p: options?.top_p ?? 0.7,
-        repetition_penalty: options?.repetition_penalty ?? 1.2,
-        volume: options?.volume ?? 0.0,
-        phonemes: options?.phonemes,
-        preview: options?.preview ?? false,
-      }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al generar segmento de audio");
-    }
-    const blob = await res.blob();
+    const { blob, res } = await fetchBlobWithStallGuard(
+      url("/api/generate-audio-segment"),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: jobId || undefined,
+          video_index: videoIndex,
+          video_path: options?.video_path,
+          text,
+          speaker,
+          start: options?.start ?? 0,
+          speed: options?.speed ?? 1.0,
+          temperature: options?.temperature ?? 0.7,
+          top_p: options?.top_p ?? 0.7,
+          repetition_penalty: options?.repetition_penalty ?? 1.2,
+          volume: options?.volume ?? 0.0,
+          phonemes: options?.phonemes,
+          preview: options?.preview ?? false,
+        }),
+      },
+      {
+        label: "generar segmento de audio",
+        headerTimeoutMs: GENERATION_HEADER_TIMEOUT_MS,
+      }
+    );
     const segIdx = parseInt(res.headers.get("x-seg-idx") || "0", 10);
     const duration = parseFloat(res.headers.get("x-audio-duration") || "0");
     const filename =
@@ -1086,22 +1203,25 @@ export const v2vApi = {
     speed: number | null,
     targetDuration?: number
   ): Promise<Blob> {
-    const res = await fetch(url("/api/apply-speed"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        job_id: jobId,
-        video_index: videoIndex,
-        seg_idx: segIdx,
-        speed,
-        target_duration: targetDuration,
-      }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al aplicar velocidad al audio");
-    }
-    return res.blob();
+    const { blob } = await fetchBlobWithStallGuard(
+      url("/api/apply-speed"),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: jobId,
+          video_index: videoIndex,
+          seg_idx: segIdx,
+          speed,
+          target_duration: targetDuration,
+        }),
+      },
+      {
+        label: `aplicar velocidad al segmento ${segIdx}`,
+        headerTimeoutMs: GENERATION_HEADER_TIMEOUT_MS,
+      }
+    );
+    return blob;
   },
 
   async shareToCatbox(jobId: string, videoIndex: number): Promise<string> {
@@ -1144,19 +1264,11 @@ export const v2vApi = {
   },
 
   async fetchAudioSegmentBlob(jobId: string, videoIndex: number, seg: number): Promise<Blob> {
-    const { signal, cleanup } = createTimeoutSignal(MEDIA_TIMEOUT_MS);
-    try {
-      const res = await fetch(url(`/api/job/${jobId}/audio-segments/${videoIndex}/${seg}`), {
-        signal,
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `Error al descargar segmento ${seg}`);
-      }
-      return await res.blob();
-    } finally {
-      cleanup();
-    }
+    const { buffer, contentType } = await fetchBufferWithGuards(
+      url(`/api/job/${jobId}/audio-segments/${videoIndex}/${seg}`),
+      { label: `segmento de audio ${seg}` }
+    );
+    return new Blob([buffer], { type: contentType || "audio/mp4" });
   },
 
   /**
@@ -1205,19 +1317,11 @@ export const v2vApi = {
   },
 
   async fetchSrcAudioSegmentBlob(jobId: string, videoIndex: number, seg: number): Promise<Blob> {
-    const { signal, cleanup } = createTimeoutSignal(MEDIA_TIMEOUT_MS);
-    try {
-      const res = await fetch(url(`/api/job/${jobId}/src-audio-segments/${videoIndex}/${seg}`), {
-        signal,
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `Error al descargar segmento original ${seg}`);
-      }
-      return await res.blob();
-    } finally {
-      cleanup();
-    }
+    const { buffer, contentType } = await fetchBufferWithGuards(
+      url(`/api/job/${jobId}/src-audio-segments/${videoIndex}/${seg}`),
+      { label: `segmento original ${seg}` }
+    );
+    return new Blob([buffer], { type: contentType || "audio/mp4" });
   },
 
   /**
@@ -1247,20 +1351,6 @@ export const v2vApi = {
     }
 
     return parseTarArchive(buffer);
-  },
-
-  async downloadZipBlob(jobId: string): Promise<Blob> {
-    const res = await fetch(url(`/api/job/${jobId}/zip`));
-    if (!res.ok) {
-      // FastAPI suele devolver JSON con {detail}
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al descargar ZIP");
-    }
-    return res.blob();
-  },
-
-  getZipUrl(jobId: string): string {
-    return url(`/api/job/${jobId}/zip`);
   },
 
   async getManifest(jobId: string, videoIndex: number): Promise<Record<string, unknown>> {
@@ -1342,30 +1432,26 @@ export const v2vApi = {
    * Returns a Blob (MP4) for direct download, or CatboxUploadResult if upload_to_catbox is true.
    */
   async renderTimeline(payload: RenderTimelinePayload, signal?: AbortSignal): Promise<Blob | CatboxUploadResult> {
-    const res = await fetch(url("/api/render/timeline"), {
+    const target = url("/api/render/timeline");
+    const init = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal,
       body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      let detail = "";
-      try {
-        const parsed = JSON.parse(text);
-        detail = parsed.detail || parsed.message || "";
-      } catch {
-        detail = text;
-      }
-      throw new Error(detail || `Error al renderizar en Colab (HTTP ${res.status})`);
-    }
-    
-    // Si se solicitó upload a Catbox, la respuesta es JSON
+    };
+
+    // Si se solicitó upload a Catbox, la respuesta es un JSON pequeño.
     if (payload.upload_to_catbox) {
+      const res = await fetch(target, init);
+      if (!res.ok) throw await responseError(res, "render de timeline");
       return readJsonOrThrow<CatboxUploadResult>(res);
     }
-    
-    const blob = await res.blob();
+
+    // El render puede tardar minutos: sin tope de cabeceras, pero con guarda
+    // de estancamiento mientras llega el MP4.
+    const { blob, res } = await fetchBlobWithStallGuard(target, init, {
+      label: "render de timeline",
+    });
     const ffTime = res.headers.get("X-Render-Time-Ffmpeg");
     const totTime = res.headers.get("X-Render-Time-Total");
     const isCached = res.headers.get("X-Render-Cached") === "1";
@@ -1386,23 +1472,25 @@ export const v2vApi = {
    * Returns a Blob (ZIP) for direct download, or BatchCatboxResult if upload_to_catbox is true.
    */
   async renderBatch(payload: RenderBatchPayload, signal?: AbortSignal): Promise<Blob | BatchCatboxResult> {
-    const res = await fetch(url("/api/render/batch"), {
+    const target = url("/api/render/batch");
+    const init = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal,
       body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Error al renderizar batch en Colab");
-    }
-    
-    // Si se solicitó upload a Catbox, la respuesta es JSON
+    };
+
+    // Si se solicitó upload a Catbox, la respuesta es un JSON pequeño.
     if (payload.upload_to_catbox) {
+      const res = await fetch(target, init);
+      if (!res.ok) throw await responseError(res, "render batch");
       return readJsonOrThrow<BatchCatboxResult>(res);
     }
-    
-    return res.blob();
+
+    // El ZIP se genera después de renderizar todos los proyectos: sin tope de
+    // cabeceras, pero con guarda de estancamiento durante la descarga.
+    const { blob } = await fetchBlobWithStallGuard(target, init, { label: "render batch" });
+    return blob;
   },
 
   async getBatchProgress(batchId: string): Promise<BatchProgressResponse> {

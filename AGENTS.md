@@ -39,7 +39,8 @@ Este documento es la **fuente de verdad única** de arquitectura, reglas de aisl
      - **Prohibido generar `.wav` sincronizados redundantes**: solo existen el máster `_raw.wav` y el sincronizado `.m4a`.
    - **Pre-caching en Background Instantáneo**: El paquete `audio_segments.tar.gz` se genera al terminar la síntesis TTS empaquetando directamente los `.m4a` existentes en disco (tiempo <150ms, tamaño ~2.5MB, 90% de ahorro de ancho de banda).
    - Todo endpoint de transferencia masiva (TAR de segmentos, videos largos, películas) debe **servirse directamente desde disco con `FileResponse`** (`sendfile()`) para emitir el primer byte en <10ms.
-   - En el cliente (`v2v-api.ts`), transferencias masivas no tienen tope total: usan una guarda de 30 s hasta las cabeceras y otra de 45 s sin recibir datos (watchdog de estancamiento), más descompresión nativa `DecompressionStream("gzip")`. Los activos de vídeo grandes se descargan además por rangos HTTP en paralelo (máximo 4 conexiones, trozos de ~8 MB) cuando el servidor confirma soporte con `HEAD` + `Range`; si lo ignora, se consume la misma respuesta como un único flujo.
+   - En el cliente (`v2v-api.ts`), **ninguna transferencia de medios tiene tope total**: usan una guarda de 30 s hasta las cabeceras y otra de 45 s sin recibir datos (watchdog de estancamiento), más descompresión nativa `DecompressionStream("gzip")`. Los activos de vídeo grandes se descargan además por rangos HTTP en paralelo (máximo 4 trozos de ~8 MB por archivo) cuando el servidor confirma soporte con `HEAD` + `Range`; si lo ignora, se consume la misma respuesta como un único flujo. Un semáforo global limita a **6 las conexiones de rango simultáneas** en toda la app, para que importar varios activos a la vez no sature los sockets. Los flujos únicos reintentan una vez ante errores de red o 5xx (nunca ante 4xx).
+   - **Peticiones POST que devuelven medios** (regenerar TTS, aplicar velocidad, render de timeline y render batch) usan la misma guarda de estancamiento: sin tope al tiempo hasta las cabeceras (la generación puede tardar), pero con aborto y error claro si el cuerpo deja de avanzar.
    - **TTS Concurrente**: La síntesis con Fish Audio se paraleliza con `ThreadPoolExecutor(max_workers=5)` con reintento exponencial ante HTTP 429 para acelerar 4x la generación.
    - **Auto-emociones (`/enhance/text`)**: Es un endpoint interno del Studio de Fish. Solo responde con el **token de sesión web** de Fish (copiado de DevTools) en `FISH_ENHANCE_TOKEN`; la API key pública de TTS (`FISH_API_KEY`) no sirve para este endpoint. El token se lee del entorno o de los secretos de Kaggle/Colab, y el panel incluye un botón «Probar token» que avisa si está caducado. La opción de auto-emociones solo se puede activar cuando hay token. Sin token válido se registra el fallo una sola vez y se sintetiza el texto original, sin fallback a Gemini.
    - En fallbacks individuales de red, **prohibido `Promise.all` masivo** sin control de concurrencia; usar lotes concurrentes (máximo 5) con reintentos para evitar saturación de sockets en Chromium (error 429/502).
@@ -161,14 +162,24 @@ Al comunicar el cliente OpenReel con el backend a través de Cloudflare Tunnel (
      - Caché en disco con validación por `mtime` de los segmentos para entrega instantánea en reimportaciones.
 
 2. **Cero Límites Artificiales y Descompresión Nativa en el Cliente**:
-   - `fetchAudioSegmentsTar` y `fetchSrcAudioSegmentsTar` no imponen un tope total de descarga. Usan `fetchTarBuffer`: 30 s máximo para recibir cabeceras y 45 s máximo sin datos entre chunks. Una transferencia lenta pero viva puede terminar; una conexión colgada falla con un error claro en vez de dejar la importación bloqueada. La cancelación manual sigue disponible vía `AbortSignal`.
+   - Ninguna descarga de medios impone un tope total. `fetchBufferWithGuards` aplica 30 s máximo para recibir cabeceras y 45 s máximo sin datos entre chunks. Una transferencia lenta pero viva puede terminar; una conexión colgada falla con un error claro en vez de dejar la importación bloqueada. La cancelación manual sigue disponible vía `AbortSignal`.
+   - Los flujos únicos (TAR, segmentos sueltos, archivos pequeños) reintentan una vez ante errores de red o 5xx; nunca ante un 4xx.
    - Detección automática de magic bytes gzip (`0x1f, 0x8b`) y descompresión en memoria mediante la API nativa de Chromium `DecompressionStream("gzip")`.
 
-3. **Control de Concurrencia en Fallback de Descargas (Anti-Saturación de Sockets)**:
+3. **Descarga por Rangos Paralelos para Activos Grandes**:
+   - `fetchAssetBlob`, `fetchFileBlob` y `fetchOutputVideoBlob` sondean el tamaño con `HEAD` (cabeceras safelisted, legibles en cross-origin) y confirman soporte con `Range: bytes=0-0`.
+   - Si el servidor responde `206` y el archivo supera 8 MB, se descarga en hasta 4 trozos de ~8 MB escritos directamente en su posición del buffer final. Cada trozo tiene 3 intentos. Si los rangos fallan de forma definitiva, se reintenta con un único flujo; si el servidor ignora `Range` (`200`), se consume esa misma respuesta sin descargar dos veces.
+   - Un semáforo global limita a **6 las conexiones de rango simultáneas** en toda la app. Así, importar varios activos a la vez (que se piden en paralelo con `Promise.all`) no satura los sockets ni dispara `429/502`.
+
+4. **Guarda de Estancamiento en POST que Devuelven Medios**:
+   - `regenerateSegment`, `generateNewAudioSegment`, `applyAudioSpeed`, `renderTimeline` y `renderBatch` consumen el cuerpo con la misma guarda de estancamiento.
+   - No se impone tope al tiempo hasta las cabeceras (la generación/render puede tardar minutos), pero si el cuerpo deja de avanzar durante 45 s se aborta con un mensaje claro.
+
+5. **Control de Concurrencia en Fallback de Descargas (Anti-Saturación de Sockets)**:
    - Si el paquete TAR no está disponible y se recurre a descargar segmentos individualmente, las peticiones se procesan en lotes secuenciales de **5 peticiones simultáneas** con reintento automático (`CONCURRENCY_LIMIT = 5`).
    - Esto evita saturar los 6 sockets máximos de Chromium/Electron y previene bloqueos por rate limit (`429`) o `Connection Reset` (`502/524`) en Cloudflare.
 
-4. **Síntesis TTS Concurrente (Fish Audio)**:
+6. **Síntesis TTS Concurrente (Fish Audio)**:
    - En `src/audio_utils.py`, `clone_voice_segments` ejecuta llamadas concurrentes con `ThreadPoolExecutor(max_workers=5)`, acelerando la generación de cientos de clips de minutos a segundos sin sobrepasar los límites de concurrencia de la API.
    - En `src/tts.py`, reintentos automáticos con backoff exponencial ante respuestas HTTP 429 (Rate Limit).
 
