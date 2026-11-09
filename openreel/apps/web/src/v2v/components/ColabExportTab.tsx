@@ -26,25 +26,11 @@ import { useColabExportStore, type CatboxVideoResult } from "../stores/colab-exp
 import { RenderProgressBar } from "./RenderProgressBar";
 import { CatboxUploadStatus } from "./CatboxUploadStatus";
 import { BatchRenderQueue } from "./BatchRenderQueue";
+import { analyzeProject, type AnalyzedClip } from "../utils/v2v-export-clips";
 
 // ----------------------------------------------------------------
 // Types
 // ----------------------------------------------------------------
-
-type ClipStatus = "ok" | "upload_needed" | "not_allowed";
-
-interface AnalyzedClip {
-  clipId: string;
-  mediaId: string;
-  mediaName: string;
-  type: "video" | "audio";
-  start: number;
-  end: number;
-  trackStart: number;
-  volume: number;
-  status: ClipStatus;
-  blob?: Blob;
-}
 
 interface SavedProject {
   meta: AutoSaveMetadata;
@@ -55,87 +41,6 @@ interface SavedProject {
 // ----------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------
-
-/** Determine if a media_name belongs to a V2V folder (already in Colab). */
-function isInV2VFolder(
-  mediaName: string,
-  folderRefs: Record<string, any>,
-): boolean {
-  const norm = mediaName.replace(/\\/g, "/");
-  const filename = norm.split("/").pop() || norm;
-
-  for (const folderKey of Object.keys(folderRefs)) {
-    const ref = folderRefs[folderKey];
-    if (ref.nativeFiles && Array.isArray(ref.nativeFiles)) {
-      if (ref.nativeFiles.includes(filename) || ref.nativeFiles.includes(norm)) {
-        return true;
-      }
-    }
-  }
-
-  // Detección tolerante de medios que provienen intrínsecamente del pipeline V2V en Colab
-  const isV2VStandardAsset =
-    filename.startsWith("tts_") ||
-    filename.startsWith("seg_") ||
-    filename.startsWith("video_only") ||
-    filename.startsWith("merged") ||
-    filename.includes("tts_") ||
-    filename.includes("seg_");
-
-  if (isV2VStandardAsset && Object.keys(folderRefs).length > 0) {
-    return true;
-  }
-
-  return false;
-}
-
-function analyzeProject(
-  project: Project,
-  folderRefs: Record<string, unknown>,
-): AnalyzedClip[] {
-  const mediaMap = new Map<string, MediaItem>(
-    project.mediaLibrary.items.map((m) => [m.id, m]),
-  );
-
-  const clips: AnalyzedClip[] = [];
-
-  for (const track of project.timeline.tracks) {
-    if (track.type !== "video" && track.type !== "audio") continue;
-
-    for (const clip of track.clips) {
-      const media = mediaMap.get(clip.mediaId);
-      if (!media) continue;
-      if (media.type === "image") continue;
-
-      const inServer = isInV2VFolder(media.name, folderRefs);
-      const hasBlob = !!media.blob;
-
-      let status: ClipStatus;
-      if (inServer) {
-        status = "ok";
-      } else if (hasBlob) {
-        status = "upload_needed";
-      } else {
-        status = "not_allowed";
-      }
-
-      clips.push({
-        clipId: clip.id,
-        mediaId: clip.mediaId,
-        mediaName: media.name,
-        type: track.type as "video" | "audio",
-        start: clip.inPoint ?? 0,
-        end: clip.outPoint ?? (clip.inPoint ?? 0) + clip.duration,
-        trackStart: clip.startTime,
-        volume: clip.volume ?? 1.0,
-        status,
-        blob: media.blob ?? undefined,
-      });
-    }
-  }
-
-  return clips;
-}
 
 async function uploadPendingClips(
   clips: AnalyzedClip[],

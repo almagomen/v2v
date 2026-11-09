@@ -514,6 +514,8 @@ def _build_ffmpeg_cmd(
         input_idx = 1
 
         for i, clip in enumerate(audio_clips):
+            if clip.volume <= 0:
+                continue
             path = _resolve_media_path(folder, clip.media_name, job_id, video_index)
             if not _has_audio(path):
                 continue
@@ -544,7 +546,7 @@ def _build_ffmpeg_cmd(
         cmd += ["-map", "0:v", "-c:v", "copy"]
         if audio_map:
             cmd += ["-map", audio_map, "-c:a", "aac", "-b:a", "192k"]
-        elif _has_audio(v_path):
+        elif v_clip.volume > 0 and _has_audio(v_path):
             cmd += ["-map", "0:a", "-c:a", "copy"]
 
         if v_duration > 0:
@@ -564,7 +566,7 @@ def _build_ffmpeg_cmd(
         filter_parts.append(
             f"[{input_idx}:v]setpts=PTS-STARTPTS+{pts_offset}/TB[{label_v}]"
         )
-        if _has_audio(path):
+        if clip.volume > 0 and _has_audio(path):
             filter_parts.append(
                 f"[{input_idx}:a]adelay={int(pts_offset * 1000)}|{int(pts_offset * 1000)},"
                 f"volume={clip.volume}[{label_a}]"
@@ -574,6 +576,8 @@ def _build_ffmpeg_cmd(
         input_idx += 1
 
     for i, clip in enumerate(audio_clips):
+        if clip.volume <= 0:
+            continue
         path = _resolve_media_path(folder, clip.media_name, job_id, video_index)
         if not _has_audio(path):
             continue
