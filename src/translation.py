@@ -1194,21 +1194,30 @@ def _judge_preservable(
     capitalizó tras una pausa cuando aparece una sola vez. El modelo sí lo separa,
     porque conoce el par de idiomas.
 
-    La pregunta es general a propósito: no enumera meses, días ni categorías con
-    ejemplos. Un término se conserva si no tiene una traducción natural al idioma
-    destino; todo lo demás se traduce. La respuesta se acota a la lista de entrada,
-    así que un juicio errático no puede inventar términos ni romper el lock.
+    Se pide la lista de lo conservable, no la de lo traducible: una omisión solo
+    expone un nombre a una traducción imperfecta, mientras que un falso positivo
+    congela una palabra del idioma origen dentro del doblaje.
+
+    El criterio es «se escribe igual en el idioma destino», no «es un nombre
+    propio»: los topónimos con forma propia (France→Francia, Caribbean→Caribe) y
+    los sustantivos comunes que el ASR capitalizó (`the French Empire`) se traducen.
+    Sin esa distinción el doblaje dejaba «France» sin traducir y producía
+    «el imperio francés Empire».
+
+    La respuesta se acota a la lista de entrada, así que un juicio errático no
+    puede inventar términos ni romper el lock.
     """
     if not words:
         return set()
 
-    prompt = f"""Recibes términos que aparecen en mayúscula en la transcripción automática de un audio en {source_lang_name}.
+    prompt = f"""Recibes términos que aparecen en mayúscula en la transcripción automática de un audio en {source_lang_name}. El doblaje es al {target_lang_name}.
 
-El reconocimiento de voz capitaliza el inicio de cada fragmento y, a veces, palabras que no son nombres propios. El doblaje es al {target_lang_name}.
+Devuelve SOLO los términos que deben conservarse sin traducir, es decir, los que en {target_lang_name} se escriben igual que en {source_lang_name}: nombres de personas, marcas, productos, empresas, obras y siglas.
 
-Devuelve SOLO los términos que deben conservarse sin traducir porque no tienen una traducción natural al {target_lang_name}: nombres de personas, marcas, productos, empresas, obras, lugares, siglas y términos técnicos que deban sonar igual.
-
-NO incluyas palabras comunes, verbos, adverbios, conectores, pronombres, adjetivos, meses, días, idiomas, nacionalidades, gentilicios, unidades ni expresiones corrientes: esas se traducen.
+NO incluyas (se traducen):
+- Nombres de países, continentes, regiones, ríos, mares y accidentes geográficos cuando {target_lang_name} tiene su propia forma para ese lugar. Un topónimo con forma establecida en {target_lang_name} se traduce; solo se conserva si se escribe exactamente igual en los dos idiomas.
+- Sustantivos comunes, adjetivos, verbos, adverbios, conectores, pronombres, cargos, meses, días, idiomas, nacionalidades, gentilicios y unidades. Una palabra común capitalizada por el reconocimiento de voz no es un nombre propio: en `the French Empire`, `Empire` es un sustantivo común y se traduce.
+- Cualquier término que solo lleve mayúscula por abrir frase o por seguir una pausa.
 
 Ante la duda, NO lo incluyas. Es preferible traducir un nombre que congelar una palabra del idioma de origen.
 

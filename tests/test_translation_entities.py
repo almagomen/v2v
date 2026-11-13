@@ -353,5 +353,39 @@ class TestFitBudget(unittest.TestCase):
         self.assertNotIn("slot |", fake.interactions.translation_prompts[0])
 
 
+@unittest.skipUnless(_HAS_GENAI, "google-genai no instalado en este entorno")
+class TestJudgePreservablePrompt(unittest.TestCase):
+    """El juez decide qué se congela: su prompt es la única barrera contra
+    congelar topónimos y sustantivos comunes que sí tienen traducción."""
+
+    def _prompt(self, words):
+        from src.translation import _judge_preservable
+
+        captured = {}
+
+        def call(prompt: str) -> str:
+            captured["prompt"] = prompt
+            return json.dumps({"conservar": []})
+
+        _judge_preservable(call, words, "English", "Spanish")
+        return captured["prompt"]
+
+    def test_obliga_a_traducir_toponimos_con_forma_propia(self):
+        prompt = self._prompt(["France", "Britain", "Caribbean"])
+        self.assertIn("geográficos", prompt)
+        self.assertIn("se traduce", prompt)
+        self.assertNotIn("lugares", prompt)
+
+    def test_obliga_a_traducir_sustantivos_comunes_capitalizados(self):
+        prompt = self._prompt(["Empire"])
+        self.assertIn("sustantivos comunes", prompt)
+        self.assertIn("Empire", prompt)
+
+    def test_conserva_la_polaridad_segura(self):
+        """Ante la duda no se conserva: una omisión solo expone el nombre."""
+        prompt = self._prompt(["Napoleon"])
+        self.assertIn("Ante la duda, NO lo incluyas", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

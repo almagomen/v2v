@@ -142,6 +142,8 @@ canónica correcta (el nombre real del producto, empresa o persona):
 - Si no estás seguro de que sean lo mismo, no las agrupes.
 - No inventes entidades que no estén en la lista.
 - La canónica tiene que ser una grafía real del término, no una explicación.
+- No agrupes una palabra con su plural ni con otra forma gramatical
+  (`America`/`Americas`, `Empire`/`Empires`): son palabras distintas, no variantes.
 - Si todas las variantes son correctas para cosas distintas, no devuelvas nada.
 
 Devuelve únicamente este JSON:
@@ -149,6 +151,15 @@ Devuelve únicamente este JSON:
 
 Términos:
 {chr(10).join(lines)}"""
+
+
+def _is_word_inflection(a: str, b: str) -> bool:
+    """¿Son la misma palabra en distinta forma gramatical (singular/plural)?"""
+    la, lb = str(a).lower(), str(b).lower()
+    if la == lb:
+        return True
+    short, long_ = (la, lb) if len(la) <= len(lb) else (lb, la)
+    return long_ in (short + "s", short + "es")
 
 
 def parse_term_groups(raw: object, known: Iterable[str]) -> dict[str, str]:
@@ -177,6 +188,14 @@ def parse_term_groups(raw: object, known: Iterable[str]) -> dict[str, str]:
             continue
         real = [v for v in variants if str(v) in allowed]
         if len(real) < 2:
+            continue
+        # `America`/`Americas` son dos palabras del idioma, no dos grafías de la
+        # misma entidad: unificarlas reescribe el guion y rompe la concordancia.
+        if any(
+            _is_word_inflection(real[i], real[j])
+            for i in range(len(real))
+            for j in range(i + 1, len(real))
+        ):
             continue
         # La canónica tiene que ser una grafía del lote, no una explicación:
         # `Ghidra Pro` está a distancia 4 de `Ghidra` y no debe pasar.

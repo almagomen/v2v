@@ -85,6 +85,22 @@ class TestParseTermGroups(unittest.TestCase):
         self.assertEqual(parse_term_groups("nada", ["Guidra"]), {})
         self.assertEqual(parse_term_groups({"grupos": "x"}, ["Guidra"]), {})
 
+    def test_no_unifica_singular_y_plural(self):
+        # `America`/`Americas` son dos palabras: unificarlas producía
+        # «norte de Americas» y «en el Americas».
+        raw = {"grupos": [{"variantes": ["America", "Americas"], "canonica": "Americas"}]}
+        self.assertEqual(parse_term_groups(raw, ["America", "Americas"]), {})
+
+    def test_no_unifica_plural_con_es(self):
+        raw = {"grupos": [{"variantes": ["Empire", "Empires"], "canonica": "Empires"}]}
+        self.assertEqual(parse_term_groups(raw, ["Empire", "Empires"]), {})
+
+    def test_sigue_unificando_erratas_reales(self):
+        raw = {"grupos": [{"variantes": ["Guidra", "Ghidra"], "canonica": "Ghidra"}]}
+        self.assertEqual(
+            parse_term_groups(raw, ["Guidra", "Ghidra"]), {"Guidra": "Ghidra"}
+        )
+
 
 class TestApplyTermMap(unittest.TestCase):
     def test_reemplaza_solo_palabra_completa(self):

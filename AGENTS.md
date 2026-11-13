@@ -132,6 +132,10 @@ apps/web/src/v2v/
    - Si `Pipeline.from_pretrained` falla con 401/403, `src/diarization.py` diagnostica entonces el motivo real (`whoami` → `model_info` por repo) para distinguir «sin token», «token inválido» y «cuenta sin acceso». El diagnóstico es **posterior al fallo**, nunca previo: así una carga desde caché o un corte de red no se convierten en un falso «falta el token».
    - `huggingface_hub.login()` se llama **sin kwargs específicos de versión** (`login(token=...)`); `write_permission` ya no existe en las versiones actuales y hacía fallar el arranque aunque el token fuera correcto.
    - Los lanzadores marcan `/tmp/v2v_deps_ok` tras instalar dependencias: si el kernel sigue vivo, volver a ejecutar la celda **no reinstala** nada aunque la carga de modelos haya fallado antes.
+5. **Qué se congela y qué se traduce (`entity lock`)**:
+   - El criterio es **«se escribe igual en el idioma destino»**, no «es un nombre propio». Se conservan personas, marcas, productos, empresas, obras y siglas.
+   - Se **traducen** los topónimos con forma propia en el destino (`France`→`Francia`, `Britain`→`Gran Bretaña`, `Caribbean`→`Caribe`, `Americas`→`América`) y cualquier sustantivo común que el ASR capitalice (`the French Empire`: `Empire` es común). Congelarlos dejaba «France» sin traducir y producía «el imperio francés Empire».
+   - La consolidación de variantes del ASR (`America`/`Americas`) **nunca** agrupa formas que solo difieren en el plural: son palabras distintas, no dos grafías de la misma entidad.
 
 ---
 
