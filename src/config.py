@@ -291,22 +291,61 @@ def set_fish_api_key(key_str: str | None) -> None:
         pass
 
 
-def get_hf_token() -> str | None:
-    """Retorna el token de Hugging Face desde env o Colab userdata."""
-    # 1. Variable de entorno (cargada al inicio de Kaggle o Colab)
-    val = os.getenv("HF_TOKEN")
-    if val and val.strip():
-        return val.strip()
+# Alias habituales del token de Hugging Face. Se acepta cualquiera para que el
+# notebook funcione aunque el secreto se haya creado con otro nombre.
+HF_TOKEN_NAMES = ("HF_TOKEN", "HUGGINGFACE_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HF_API_TOKEN")
+_hf_token_warned = False
 
-    # 2. Colab Secrets (userdata)
-    try:
-        from google.colab import userdata
-        val = userdata.get("HF_TOKEN")
-        if val and str(val).strip():
-            os.environ["HF_TOKEN"] = str(val).strip()
-            return str(val).strip()
-    except Exception:
-        pass
+
+def _mask_secret(value: str) -> str:
+    """Muestra solo las últimas 4 letras de un secreto (nunca el valor completo)."""
+    return f"...{value[-4:]}" if len(value) >= 8 else "***"
+
+
+def get_hf_token() -> str | None:
+    """Retorna el token de Hugging Face desde env o secretos de la plataforma.
+
+    Orden: variable de entorno → Colab userdata → Kaggle Secrets. Si se encuentra,
+    se normaliza en `HF_TOKEN` para que huggingface_hub y pyannote lo usen también
+    de forma implícita. Si falta, se avisa una sola vez con instrucciones claras:
+    `pyannote/speaker-diarization-3.1` es un repo con acceso restringido y sin
+    token falla con `401 Unauthorized` (mensaje que no explica el motivo real).
+    """
+    global _hf_token_warned
+
+    # 1. Variables de entorno (el lanzador de Colab/Kaggle las sincroniza al inicio)
+    for name in HF_TOKEN_NAMES:
+        val = os.getenv(name)
+        if val and val.strip():
+            token = val.strip()
+            os.environ["HF_TOKEN"] = token
+            return token
+
+    # 2. Secretos de la plataforma (Colab userdata / Kaggle Secrets)
+    for name in HF_TOKEN_NAMES:
+        val = _get_platform_secret(name)
+        if val:
+            os.environ["HF_TOKEN"] = val
+            print(
+                f"🤗 [HF] Token cargado desde secretos ({name}, {_mask_secret(val)})",
+                flush=True,
+            )
+            return val
+
+    if not _hf_token_warned:
+        _hf_token_warned = True
+        print(
+            "⚠️ [HF] No se encontró ningún token de Hugging Face "
+            f"(buscado: {', '.join(HF_TOKEN_NAMES)}).\n"
+            "   Pyannote fallará con '401 Unauthorized' porque "
+            "pyannote/speaker-diarization-3.1 es un repo con acceso restringido.\n"
+            "   • Google Colab: 🔑 Secretos → añade 'HF_TOKEN' y activa "
+            "'Acceso del notebook' (se reinicia al importar o copiar el notebook).\n"
+            "   • Kaggle: Add-ons → Secrets → añade 'HF_TOKEN' y actívalo para este notebook.\n"
+            "   • Acepta las condiciones en https://hf.co/pyannote/speaker-diarization-3.1 "
+            "y https://hf.co/pyannote/segmentation-3.0",
+            flush=True,
+        )
 
     return None
 

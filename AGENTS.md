@@ -125,6 +125,12 @@ apps/web/src/v2v/
 1. **Preservación de `original_speaker`**: Pyannote clasifica por palabra (`assign_speakers_by_word`). El tag se conserva inmutable en `result.json`.
 2. **Mapeo Flexible de Voces (`speaker_map`)**: Envía mapeos `{ "SPEAKER_00": "mrbeast", "SPEAKER_01": "default_fish" }` para clonación diferenciada por personaje.
 3. **Control Visual**: En `V2VSegmentBulkEditor`, barra de reasignación masiva por speaker.
+4. **Token de Hugging Face (`HF_TOKEN`) y repos restringidos**:
+   - `pyannote/speaker-diarization-3.1` y `pyannote/segmentation-3.0` son repos **gated**. Sin token, Hugging Face responde `401 Unauthorized` sobre `config.yaml`, un mensaje que no explica el motivo real.
+   - Los secretos de Colab y Kaggle se activan **por notebook**: al importar o copiar el notebook el interruptor «Acceso del notebook» se reinicia. Por eso los lanzadores **nunca** deben tragarse el fallo en silencio: imprimen qué secretos faltan y las instrucciones exactas de cada plataforma.
+   - `get_hf_token()` acepta los alias `HF_TOKEN`, `HUGGINGFACE_TOKEN`, `HUGGING_FACE_HUB_TOKEN` y `HF_API_TOKEN`, lee de entorno, Colab userdata y Kaggle Secrets, y normaliza el valor en `HF_TOKEN`.
+   - Antes de descargar el pipeline, `src/diarization.py` valida el token (`whoami`) y el acceso a cada repo (`model_info`) para distinguir «sin token» de «token inválido» y de «cuenta sin acceso concedido».
+   - Los lanzadores marcan `/tmp/v2v_deps_ok` tras instalar dependencias: si el kernel sigue vivo, volver a ejecutar la celda **no reinstala** nada aunque la carga de modelos haya fallado antes.
 
 ---
 

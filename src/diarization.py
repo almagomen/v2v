@@ -29,15 +29,70 @@ if not DIARIZATION_DIR and KAGGLE_INPUT_DIR and KAGGLE_INPUT_DIR.exists():
             break
 
 
-def _load_diarization_model() -> Any:
-    pretrained = (
-        DIARIZATION_DIR
-        if DIARIZATION_DIR and DIARIZATION_DIR.exists()
-        else "pyannote/speaker-diarization-3.1"
+DIARIZATION_REPO = "pyannote/speaker-diarization-3.1"
+# Repos con acceso restringido de los que depende el pipeline anterior.
+DIARIZATION_GATED_REPOS = (DIARIZATION_REPO, "pyannote/segmentation-3.0")
+
+
+def _missing_token_error() -> RuntimeError:
+    """Error accionable cuando no hay token para un repo restringido de HF."""
+    return RuntimeError(
+        "⚠️ Falta HF_TOKEN: pyannote/speaker-diarization-3.1 es un repo con acceso "
+        "restringido y no se puede descargar de forma anónima (401 Unauthorized).\n"
+        "   1. Acepta las condiciones en https://hf.co/pyannote/speaker-diarization-3.1 "
+        "y https://hf.co/pyannote/segmentation-3.0\n"
+        "   2. Crea un token de lectura en https://hf.co/settings/tokens\n"
+        "   3. Guárdalo como secreto 'HF_TOKEN' y activa su acceso para este notebook:\n"
+        "      • Google Colab: 🔑 Secretos → 'Acceso del notebook' (se reinicia al "
+        "importar o copiar el notebook).\n"
+        "      • Kaggle: Add-ons → Secrets → activar el secreto para este notebook.\n"
+        "   4. Vuelve a ejecutar la celda."
     )
-    token = get_hf_token()
+
+
+def _check_hf_access(token: str) -> None:
+    """Valida el token y el acceso al repo restringido antes de descargar el pipeline.
+
+    Un 401 al pedir `config.yaml` no distingue entre "sin token", "token inválido"
+    y "cuenta sin acceso concedido", así que se comprueban los dos casos aquí para
+    dar un mensaje que se pueda resolver sin adivinar.
+    """
+    try:
+        from huggingface_hub import HfApi
+    except ImportError:  # sin huggingface_hub no se puede prevalidar
+        return
+
+    api = HfApi(token=token)
+    try:
+        api.whoami(token=token)
+    except Exception as exc:
+        raise RuntimeError(
+            "⚠️ El HF_TOKEN configurado no es válido (Hugging Face rechazó la "
+            "autenticación). Genera uno nuevo en https://hf.co/settings/tokens y "
+            "actualiza el secreto HF_TOKEN del notebook."
+        ) from exc
+
+    for repo in DIARIZATION_GATED_REPOS:
+        try:
+            api.model_info(repo, token=token)
+        except Exception as exc:
+            raise RuntimeError(
+                f"⚠️ El HF_TOKEN es válido, pero la cuenta no tiene acceso a '{repo}'.\n"
+                f"   Entra en https://hf.co/{repo}, acepta las condiciones y vuelve a "
+                "ejecutar la celda (el acceso se concede al instante)."
+            ) from exc
+
+
+def _load_diarization_model() -> Any:
+    local_dir = DIARIZATION_DIR if (DIARIZATION_DIR and DIARIZATION_DIR.exists()) else None
+    pretrained = local_dir or DIARIZATION_REPO
     load_kwargs = {}
-    if token and not (DIARIZATION_DIR and DIARIZATION_DIR.exists()):
+
+    if local_dir is None:
+        token = get_hf_token()
+        if not token:
+            raise _missing_token_error()
+        _check_hf_access(token)
         load_kwargs["token"] = token
 
     try:
