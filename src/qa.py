@@ -472,24 +472,24 @@ def format_report(report: dict[str, Any]) -> list[str]:
 
     lines = [
         header,
-        "   Voz:",
-        f"     • Velocidad aplicada (p95): {_metric_text('speed_p95', m.get('speed_p95'))} "
-        f"(máximo permitido {_metric_text('speed_p95', QA_THRESHOLDS['speed_p95_max'])}) — "
+        "Voz:",
+        f"• Vel. aplicada (p95): {_metric_text('speed_p95', m.get('speed_p95'))} "
+        f"(máx. permitido {_metric_text('speed_p95', QA_THRESHOLDS['speed_p95_max'])}) — "
         "1.00x = voz sin tocar",
-        f"     • Tempo bruto (p95): {_metric_text('tempo_p95', m.get('tempo_p95'))} — "
+        f"• Tempo bruto (p95): {_metric_text('tempo_p95', m.get('tempo_p95'))} — "
         "incluye aceleración y recorte de silencios",
-        f"     • Clips ralentizados (<0.85x): {_metric_text('slow_ratio', slow)}",
-        "   Sincronía con el video original:",
-        f"     • Desvío de duración (p95): {_metric_text('length_dev_p95', m.get('length_dev_p95'))} — "
-        "diferencia frente al hueco original",
-        f"     • Desborde (p95): {over_txt} — "
+        f"• Clips ralentizados (<0.85x): {_metric_text('slow_ratio', slow)}",
+        "Sincronía con el video original:",
+        f"• Desvío de dur. (p95): {_metric_text('length_dev_p95', m.get('length_dev_p95'))} — "
+        "dif. frente al hueco orig.",
+        f"• Desborde (p95): {over_txt} — "
         "cuánto se pasó del hueco",
-        f"     • Solapes: {m.get('overlap_count', 0)} clip(s) "
-        f"({_metric_text('overlap_secs', m.get('overlap_secs'))}) — un clip que invade al siguiente",
-        "   Volumen y contenido:",
-        f"     • Variación de volumen (σ RMS): {rms_txt} — {rms_note}",
-        f"     • Sin voz: {m.get('silent', 0)} · traducción de respaldo: {m.get('fallback', 0)} · "
-        f"términos protegidos rotos: {m.get('entity_fail', 0)}",
+        f"• Solapes: {m.get('overlap_count', 0)} clip(s) "
+        f"({_metric_text('overlap_secs', m.get('overlap_secs'))}) — clip invade al sig.",
+        "Volumen y contenido:",
+        f"• Var. de volumen (σ RMS): {rms_txt} — {rms_note}",
+        f"• Sin voz: {m.get('silent', 0)} · traducción de respaldo: {m.get('fallback', 0)} · "
+        f"térm. protegidos rotos: {m.get('entity_fail', 0)}",
     ]
 
     if comp is not None and comp >= 0.05:

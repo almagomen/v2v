@@ -82,7 +82,7 @@ def get_language_detector_model():
             size,
             device=DEVICE,
             download_root=WHISPER_LANG_DIR,
-            label=f"whisper-{size} (detector de idioma para CrisperWhisper)",
+            label=f"whisper-{size} idioma detector",
         )
     except Exception as exc:
         if size == "turbo":
@@ -190,8 +190,8 @@ def transcribe_and_process(
         wh_gpu_tag = " | GPU 0" if gpu_count >= 2 else ""
         dia_gpu_tag = " | GPU 1" if gpu_count >= 2 else ""
         wh_engine_label = "CrisperWhisper" if stt_engine == "crisper" else "Whisper"
-        print(f"⏱️ [Transcripción ({wh_engine_label}{wh_gpu_tag})] Completada en {t_whisper:.1f}s")
-        print(f"⏱️ [Diarización (Pyannote{dia_gpu_tag})] Completada en {t_diarize:.1f}s")
+        print(f"⏱️ [Transcripción {wh_engine_label}{wh_gpu_tag}] en {t_whisper:.1f}s")
+        print(f"⏱️ [Diarización Pyannote{dia_gpu_tag}] en {t_diarize:.1f}s")
 
         # Extraer idioma detectado antes de procesar. Sin detección no se inventa un
         # idioma: un fallback fijo etiquetaría mal la transcripción y la traducción.
