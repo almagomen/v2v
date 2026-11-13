@@ -26,7 +26,7 @@ export const RenderProgressBar: React.FC<RenderProgressBarProps> = ({
 }) => {
   if (!isRunning) return null;
 
-  const displayProgress = progress || (status === "uploading" ? 15 : 50);
+  const displayProgress = Math.max(0, Math.min(100, progress));
 
   return (
     <div className="space-y-2 p-3 bg-primary/10 border border-primary/30 rounded-xl shadow-sm">
@@ -67,6 +67,12 @@ export const RenderProgressBar: React.FC<RenderProgressBarProps> = ({
           </span>
         )}
       </div>
+
+      {currentVideoName && statusMsg && statusMsg !== currentStep && (
+        <div className="text-[10px] text-text-muted truncate" title={statusMsg}>
+          {statusMsg}
+        </div>
+      )}
     </div>
   );
 };

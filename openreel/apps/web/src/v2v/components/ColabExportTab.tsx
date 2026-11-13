@@ -610,6 +610,9 @@ export const ColabExportTab: React.FC = () => {
     clearExportLogs();
     openExportLogs();
     const tBatchStart = performance.now();
+    // Etapas del lote: preparación 0-25 %, render 25-90 %, empaquetado/descarga 90-100 %.
+    const PREP_END = 25;
+    const RENDER_END = 90;
 
     const totalSelected = selected.length;
     appendExportLog(`🚀 [Batch Export] Iniciando exportación de ${totalSelected} proyectos...`);
@@ -618,36 +621,42 @@ export const ColabExportTab: React.FC = () => {
     setCatboxUrl(null);
     setCatboxVideos([]);
     setProgressData({
-      progress: 5,
-      currentStep: `Paso 1/2: Preparando proyectos (0/${totalSelected})`,
+      progress: 0,
+      currentStep: "Paso 1/3: Preparando proyectos",
       currentVideoName: selected[0]?.meta.projectName || "",
       currentIdx: 0,
       totalVideos: totalSelected,
-      statusMsg: "Iniciando preparación...",
+      statusMsg: `0 de ${totalSelected} preparados`,
     });
 
     let progressInterval: ReturnType<typeof setInterval> | null = null;
 
     try {
       const renders: BatchRenderItemPayload[] = [];
+      const skipped: string[] = [];
 
       for (let i = 0; i < selected.length; i++) {
         const sp = selected[i];
         const currentNum = i + 1;
-        const prepPct = Math.round((i / totalSelected) * 20);
+        const prepPct = Math.round((i / totalSelected) * PREP_END);
         const tProjStart = performance.now();
 
+        appendExportLog(`📋 [${currentNum}/${totalSelected}] Preparando: "${sp.meta.projectName}"`);
         setProgressData({
           progress: prepPct,
-          currentStep: `Paso 1/2: Preparando proyecto (${currentNum}/${totalSelected})`,
+          currentStep: "Paso 1/3: Preparando proyectos",
           currentVideoName: sp.meta.projectName,
           currentIdx: currentNum,
           totalVideos: totalSelected,
-          statusMsg: `Preparando: ${sp.meta.projectName}…`,
+          statusMsg: `Preparando ${currentNum} de ${totalSelected}: ${sp.meta.projectName}`,
         });
 
         const fullProject = await autoSaveManager.recover(sp.meta.id);
-        if (!fullProject) continue;
+        if (!fullProject) {
+          skipped.push(`${sp.meta.projectName} (no se pudo recuperar)`);
+          appendExportLog(`⚠️ [${currentNum}/${totalSelected}] Omitido: no se pudo recuperar "${sp.meta.projectName}"`);
+          continue;
+        }
 
         const clips = analyzeProject(fullProject, folderRefs);
         const ctx = clips.reduce<{ jobId: string; videoIndex: number } | null>((acc, c) => {
@@ -663,7 +672,11 @@ export const ColabExportTab: React.FC = () => {
           return null;
         }, null);
 
-        if (!ctx) continue;
+        if (!ctx) {
+          skipped.push(`${sp.meta.projectName} (sin medios del backend)`);
+          appendExportLog(`⚠️ [${currentNum}/${totalSelected}] Omitido: sin medios del backend "${sp.meta.projectName}"`);
+          continue;
+        }
 
         const uploadedMap = await uploadPendingClips(
           clips,
@@ -671,17 +684,30 @@ export const ColabExportTab: React.FC = () => {
           ctx.videoIndex,
           (msg) => {
             setProgressData({
-              progress: prepPct + 1,
-              currentStep: `Paso 1/2: Subiendo medios (${currentNum}/${totalSelected})`,
+              progress: Math.min(
+                PREP_END,
+                Math.round(((i + 0.5) / totalSelected) * PREP_END),
+              ),
+              currentStep: "Paso 1/3: Subiendo medios",
               currentVideoName: sp.meta.projectName,
-              statusMsg: msg,
+              currentIdx: currentNum,
+              totalVideos: totalSelected,
+              statusMsg: `[${currentNum}/${totalSelected}] ${msg}`,
             });
           },
         );
 
         const outName = ((ctx as any).longName || fullProject.name || sp.meta.projectName || "export").replace(/^\d+[._\s]*/, "");
         const tProjSec = ((performance.now() - tProjStart) / 1000).toFixed(1);
-        appendExportLog(`📁 [${currentNum}/${totalSelected}] Preparado: "${outName}" (${clips.length} clips, ${tProjSec}s)`);
+        appendExportLog(`✅ [${currentNum}/${totalSelected}] Preparado: "${outName}" (${clips.length} clips, ${tProjSec}s)`);
+        setProgressData({
+          progress: Math.round((currentNum / totalSelected) * PREP_END),
+          currentStep: "Paso 1/3: Preparando proyectos",
+          currentVideoName: sp.meta.projectName,
+          currentIdx: currentNum,
+          totalVideos: totalSelected,
+          statusMsg: `${currentNum} de ${totalSelected} preparados`,
+        });
 
         renders.push({
           job_id: ctx.jobId,
@@ -696,21 +722,23 @@ export const ColabExportTab: React.FC = () => {
         throw new Error("Ningún proyecto tiene medios del backend disponibles.");
       }
 
+      if (skipped.length > 0) {
+        appendExportLog(`⚠️ [Batch Export] ${skipped.length} proyecto(s) omitido(s): ${skipped.join("; ")}`);
+      }
+
       const batchId = `batch_${Date.now()}`;
 
       setStatus("rendering");
       setProgressData({
-        progress: 20,
-        currentStep: `Paso 2/2: Renderizando videos en el backend (1/${renders.length})`,
+        progress: PREP_END,
+        currentStep: "Paso 2/3: Renderizando videos en el backend",
         currentVideoName: renders[0]?.output_name || "",
-        currentIdx: 1,
+        currentIdx: 0,
         totalVideos: renders.length,
-        statusMsg: uploadToCatbox
-          ? `Renderizando y subiendo ${renders.length} videos a Catbox…`
-          : `Renderizando ${renders.length} proyectos en el backend…`,
+        statusMsg: `0 de ${renders.length} renderizados`,
       });
 
-      appendExportLog(`🚀 [Batch Export] Iniciando render de ${renders.length} videos en el backend...`);
+      appendExportLog(`🎬 [Batch Export] Iniciando render de ${renders.length} videos en el backend...`);
 
       // Polling activo de progreso y logs al backend
       const seenBackendLogs = new Set<string>();
@@ -728,15 +756,33 @@ export const ColabExportTab: React.FC = () => {
             }
 
             if (p.total > 0) {
-              const scaled = Math.min(95, Math.max(20, Math.round(20 + (p.percentage * 0.75))));
-              useColabExportStore.getState().setProgressData({
-                progress: scaled,
-                currentStep: p.step || `Renderizando (${p.current}/${p.total})`,
-                currentVideoName: p.current_name || "",
-                currentIdx: p.current,
-                totalVideos: p.total,
-                statusMsg: p.step || `Renderizando ${p.current} de ${p.total}`,
-              });
+              if (p.status === "packaging" || p.status === "done") {
+                useColabExportStore.getState().setProgressData({
+                  progress: RENDER_END,
+                  currentStep: "Paso 3/3: Empaquetando y descargando el ZIP",
+                  currentVideoName: "",
+                  currentIdx: p.total,
+                  totalVideos: p.total,
+                  statusMsg: p.step || "Empaquetando el ZIP final…",
+                });
+              } else {
+                const scaled = Math.min(
+                  RENDER_END,
+                  Math.max(
+                    PREP_END,
+                    Math.round(PREP_END + (p.percentage / 100) * (RENDER_END - PREP_END)),
+                  ),
+                );
+                const detail = p.step || `${p.current} de ${p.total} completados`;
+                useColabExportStore.getState().setProgressData({
+                  progress: scaled,
+                  currentStep: "Paso 2/3: Renderizando videos en el backend",
+                  currentVideoName: p.current_name || "",
+                  currentIdx: p.current,
+                  totalVideos: p.total,
+                  statusMsg: detail,
+                });
+              }
             }
           }
         } catch {
@@ -773,6 +819,11 @@ export const ColabExportTab: React.FC = () => {
       // Check if result is Catbox upload response
       if (uploadToCatbox && result && typeof result === "object" && "videos" in result) {
         const batchResult = result as { videos: CatboxVideoResult[]; logs?: string[]; total_time?: number };
+        setProgressData({
+          progress: 95,
+          currentStep: "Paso 3/3: Recibiendo enlaces de Catbox",
+          statusMsg: `Preparando ${batchResult.videos.length} enlace(s)…`,
+        });
         setCatboxVideos(batchResult.videos);
         setStatus("done");
         setProgressData({
@@ -783,6 +834,11 @@ export const ColabExportTab: React.FC = () => {
       } else {
         // Normal download
         appendExportLog(`📦 [Descarga ZIP] Paquete "batch_export.zip" recibido con éxito`);
+        setProgressData({
+          progress: 95,
+          currentStep: "Paso 3/3: Descargando el ZIP",
+          statusMsg: "Guardando batch_export.zip…",
+        });
         downloadBlob(result as Blob, "batch_export.zip");
         setStatus("done");
         setProgressData({

@@ -835,6 +835,8 @@ export interface BatchProgressResponse {
   percentage: number;
   step: string;
   current_name: string;
+  started?: number;
+  active?: string[];
   logs?: string[];
   total_time?: number;
 }

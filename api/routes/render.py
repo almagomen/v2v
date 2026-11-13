@@ -949,9 +949,11 @@ async def render_batch(req: RenderBatchRequest):
     _batch_progress[batch_id] = {
         "status": "rendering",
         "current": 0,
+        "started": 0,
         "total": total,
         "percentage": 0,
         "current_name": "",
+        "active": [],
         "step": f"Iniciando render de {total} proyectos...",
         "logs": [init_log],
     }
@@ -964,16 +966,32 @@ async def render_batch(req: RenderBatchRequest):
     catbox_urls: list[dict] = []
     completed_lock = threading.Lock()
     completed_count = 0
+    started_count = 0
+    active: dict[int, str] = {}
 
     max_workers = min(2, GPU_COUNT) if GPU_COUNT >= 2 else 1
     if max_workers > 1:
         print(f"⚡ [Multi-GPU Render] Renderizando batch en paralelo con {max_workers} GPUs...")
 
     def process_render_item(idx_item):
-        nonlocal completed_count
+        nonlocal completed_count, started_count
         idx, item = idx_item
         t_item_start = time.perf_counter()
         gpu_id = idx % GPU_COUNT if GPU_COUNT > 0 else 0
+        with completed_lock:
+            started_count += 1
+            active[idx] = item.output_name
+            progress = _batch_progress.setdefault(batch_id, {})
+            progress["status"] = "rendering"
+            progress["current_name"] = item.output_name
+            progress["started"] = started_count
+            progress["active"] = list(active.values())
+            progress["step"] = (
+                f"Renderizando ({started_count}/{total}): " + ", ".join(active.values())
+            )
+            progress.setdefault("logs", []).append(
+                f"🎬 [{idx + 1}/{total}] Renderizando: {item.output_name}"
+            )
         try:
             folder = _job_folder(item.job_id, item.video_index)
             safe_name = to_safe_name(item.output_name)
@@ -1019,9 +1037,21 @@ async def render_batch(req: RenderBatchRequest):
                     gpu_id=gpu_id,
                     force_reencode=force_reencode,
                 )
+                cmd_str = " ".join(cmd)
+                if "-c:v copy" in cmd_str:
+                    mode_str = "Stream Copy"
+                elif "h264_nvenc" in cmd_str:
+                    mode_str = f"NVENC GPU {gpu_id}"
+                else:
+                    mode_str = "CPU libx264"
+                with completed_lock:
+                    _batch_progress.setdefault(batch_id, {}).setdefault("logs", []).append(
+                        f"🎞️ [{idx + 1}/{total}] FFmpeg [{mode_str}]: {item.output_name}"
+                    )
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode != 0:
                     with completed_lock:
+                        active.pop(idx, None)
                         err_msg = f"❌ [{idx + 1}/{total}] {item.output_name}: Error FFmpeg – {result.stderr[-300:]}"
                         errors.append(err_msg)
                         completed_count += 1
@@ -1032,13 +1062,6 @@ async def render_batch(req: RenderBatchRequest):
 
                 _save_render_cache_hash(output_path, item.clips, mode=desired_mode)
                 t_ff = time.perf_counter() - t0_ff
-                cmd_str = " ".join(cmd)
-                if "-c:v copy" in cmd_str:
-                    mode_str = "Stream Copy"
-                elif "h264_nvenc" in cmd_str:
-                    mode_str = f"NVENC GPU {gpu_id}"
-                else:
-                    mode_str = "CPU libx264"
                 log_render = f"⏱️ [{idx + 1}/{total}] Modo: [{mode_str}] | FFmpeg: {t_ff:.2f}s | {item.output_name}"
                 print(log_render)
                 output_final = output_path
@@ -1046,6 +1069,10 @@ async def render_batch(req: RenderBatchRequest):
             t_cb = 0.0
             catbox_url = ""
             if req.upload_to_catbox:
+                with completed_lock:
+                    _batch_progress.setdefault(batch_id, {}).setdefault("logs", []).append(
+                        f"☁️ [{idx + 1}/{total}] Subiendo a Catbox: {item.output_name}"
+                    )
                 t0_cb = time.perf_counter()
                 catbox_url = upload_to_catbox(output_final)
                 t_cb = time.perf_counter() - t0_cb
@@ -1058,21 +1085,28 @@ async def render_batch(req: RenderBatchRequest):
             with completed_lock:
                 results.append((output_final, zip_name))
                 completed_count += 1
+                active.pop(idx, None)
                 pct = round((completed_count / max(1, total)) * 100)
-                
+
                 curr_logs = _batch_progress[batch_id].get("logs", [])
                 curr_logs.append(log_render)
                 if req.upload_to_catbox:
                     curr_logs.append(log_cb)
                 curr_logs.append(tot_log)
 
+                remaining = ", ".join(active.values())
+                step = f"Completado ({completed_count}/{total}): {item.output_name} ({t_item_total:.1f}s)"
+                if remaining:
+                    step += f" · En curso: {remaining}"
                 _batch_progress[batch_id] = {
                     "status": "rendering",
                     "current": completed_count,
+                    "started": started_count,
                     "total": total,
                     "percentage": pct,
                     "current_name": item.output_name,
-                    "step": f"Completado ({completed_count}/{total}): {item.output_name} ({t_item_total:.1f}s)",
+                    "active": list(active.values()),
+                    "step": step,
                     "logs": curr_logs,
                 }
 
@@ -1086,12 +1120,17 @@ async def render_batch(req: RenderBatchRequest):
                     )
         except Exception as e:
             with completed_lock:
+                active.pop(idx, None)
                 err_msg = f"❌ [{idx + 1}/{total}] {item.output_name}: {str(e)}"
                 errors.append(err_msg)
                 completed_count += 1
-                _batch_progress[batch_id].setdefault("logs", []).append(err_msg)
-                _batch_progress[batch_id]["current"] = completed_count
-                _batch_progress[batch_id]["percentage"] = round((completed_count / max(1, total)) * 100)
+                progress = _batch_progress.setdefault(batch_id, {})
+                progress.setdefault("logs", []).append(err_msg)
+                progress["current"] = completed_count
+                progress["started"] = started_count
+                progress["active"] = list(active.values())
+                progress["percentage"] = round((completed_count / max(1, total)) * 100)
+                progress["step"] = f"Completado ({completed_count}/{total}): {item.output_name} (error)"
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(executor.map(process_render_item, list(enumerate(req.renders))))
@@ -1112,9 +1151,11 @@ async def render_batch(req: RenderBatchRequest):
         _batch_progress[batch_id] = {
             "status": "error",
             "current": total,
+            "started": started_count,
             "total": total,
             "percentage": 100,
             "current_name": "",
+            "active": [],
             "step": "Error al renderizar videos",
             "logs": _batch_progress[batch_id].get("logs", []) + [batch_summary],
         }
@@ -1130,9 +1171,11 @@ async def render_batch(req: RenderBatchRequest):
         _batch_progress[batch_id] = {
             "status": "done",
             "current": total,
+            "started": started_count,
             "total": total,
             "percentage": 100,
             "current_name": "",
+            "active": [],
             "step": f"¡{len(catbox_urls)} video(s) subido(s) a Catbox!",
             "logs": curr_logs,
             "total_time": round(t_batch_total, 2),
@@ -1152,9 +1195,11 @@ async def render_batch(req: RenderBatchRequest):
     _batch_progress[batch_id] = {
         "status": "packaging",
         "current": total,
+        "started": started_count,
         "total": total,
         "percentage": 95,
         "current_name": "",
+        "active": [],
         "step": "Empaquetando archivo ZIP final...",
         "logs": curr_logs,
         "total_time": round(t_batch_total, 2),
@@ -1173,9 +1218,11 @@ async def render_batch(req: RenderBatchRequest):
     _batch_progress[batch_id] = {
         "status": "done",
         "current": total,
+        "started": started_count,
         "total": total,
         "percentage": 100,
         "current_name": "",
+        "active": [],
         "step": f"¡{len(results)} videos exportados con éxito!",
     }
 
