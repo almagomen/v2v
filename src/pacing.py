@@ -3,17 +3,16 @@ Presupuesto de duración para doblaje (isocronía).
 
 La única tasa que se mide es caracteres por segundo, porque es lo que el modelo puede
 contar y lo que el TTS entrega de verdad. Las sílabas quedaron fuera: no están
-definidas igual en todos los idiomas (un ideograma chino no es una sílaba, el japonés
-cuenta moras) y el modelo no las cuenta de forma fiable. El carácter sí es una unidad
-universal y medible en cualquier escritura.
+definidas igual en todas las escrituras (una escritura logográfica no cuenta sílabas
+como una alfabética) y el modelo no las cuenta de forma fiable. El carácter sí es una
+unidad universal y medible en cualquier escritura.
 
-La referencia humana se midió sobre el doblaje español de YouTube y su original
-portugués separando voz de silencio con ffmpeg: ambos rondan 16.0 chars/s. El TTS no
-habla a esa velocidad: la QA de un render real (Fish Audio, 144 segmentos) midió
-17.2 chars/s a 1.0x. El presupuesto usa la tasa del TTS porque es la que decide si el
-clip llena su slot o si el sincronizador tiene que estirarlo.
+La referencia humana se midió sobre un doblaje real y su audio original separando voz
+de silencio con ffmpeg: ambos rondan 16.0 chars/s. El TTS no habla a esa velocidad: la
+QA de un render real midió una tasa mayor. El presupuesto usa la tasa del TTS porque es
+la que decide si el clip llena su slot o si el sincronizador tiene que estirarlo.
 
-La tasa depende de la escritura, no solo del idioma: los idiomas con alfabeto rondan
+La tasa depende de la escritura, no solo del idioma: las escrituras alfabéticas rondan
 15-17 chars/s, mientras que una escritura logográfica entrega muchos menos caracteres
 por segundo con la misma información. Por eso un idioma nuevo se calibra con una
 medición real (`src.qa` ya reporta los chars/s del render) y mientras tanto usa
@@ -27,11 +26,10 @@ import re
 from collections import Counter
 from typing import Mapping, Optional, Sequence
 
-from src.lang_utils import SENTENCE_END_CHARS
+from src.lang_utils import SENTENCE_END_CHARS, primary_lang
 
-# Caracteres por segundo en locución, medidos sobre audio real.
-# `es` sale de la QA de un render con Fish Audio (17.2 chars/s a 1.0x); el resto
-# conserva la referencia de doblaje humano (16.0) hasta tener medición propia.
+# Caracteres por segundo en locución, medidos sobre audio real. Cada entrada es una
+# medición propia de ese idioma; los códigos sin medición usan `DEFAULT_RATE`.
 SPEECH_RATES: dict[str, float] = {
     "es": 17.2,
     "pt": 16.0,
@@ -133,11 +131,6 @@ _SPACE_RE = re.compile(r"\s+")
 
 # Longitud media de un término técnico bloqueado.
 _MARKER_FALLBACK_LEN = 6
-
-
-def primary_lang(lang: str) -> str:
-    """'pt-BR' -> 'pt'. Evita depender de src.lang_utils para no arrastrar imports."""
-    return str(lang or "").strip().lower().replace("_", "-").split("-")[0]
 
 
 def speech_rate(lang: str) -> float:

@@ -2,7 +2,7 @@
 
 import unittest
 
-from src.lang_utils import language_name, same_language
+from src.lang_utils import language_name, primary_lang, same_language
 
 
 class TestSameLanguage(unittest.TestCase):
@@ -26,6 +26,17 @@ class TestSameLanguage(unittest.TestCase):
 
     def test_espacios_alrededor(self):
         self.assertTrue(same_language(" pt ", "pt-BR"))
+
+    def test_idioma_desconocido_no_demuestra_identidad(self):
+        """Un código vacío no es prueba de que sean el mismo idioma."""
+        self.assertFalse(same_language("", ""))
+        self.assertFalse(same_language(None, None))
+        self.assertFalse(same_language("", "pt"))
+
+    def test_subtag_primario(self):
+        self.assertEqual(primary_lang(" PT_br "), "pt")
+        self.assertEqual(primary_lang("zh-Hans-CN"), "zh")
+        self.assertEqual(primary_lang(""), "")
 
 
 class TestLanguageName(unittest.TestCase):

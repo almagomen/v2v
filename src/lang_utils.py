@@ -41,20 +41,31 @@ LANGUAGE_NAMES = {
 }
 
 
+def primary_lang(code: str) -> str:
+    """
+    Subtipo primario de un código BCP-47, en minúscula.
+
+    La variante regional o de escritura no cambia el idioma: se descarta todo lo
+    que siga al primer separador, sea guion o guion bajo, para comparar siempre el
+    mismo nivel de la etiqueta.
+    """
+    return str(code or "").strip().lower().replace("_", "-").split("-")[0]
+
+
 def language_name(code: str) -> str:
     """
     Nombre legible del idioma a partir de su código BCP-47.
 
-    Si el código no está en la tabla se devuelve el propio código. El fallback
-    anterior era "español", que traducía al idioma equivocado en silencio cuando
-    Whisper detectaba un idioma fuera de la lista.
+    La tabla solo sirve para mostrar el nombre en los prompts; no es una lista de
+    idiomas admitidos ni un criterio de traducción. Si el código no está en la
+    tabla se devuelve el propio código, nunca otro idioma: un fallback fijo
+    traduciría al idioma equivocado en silencio.
     """
     raw = str(code or "").strip()
     if raw.lower() in ("none", "null"):
         raw = ""
-    primary = raw.lower().replace("_", "-").split("-")[0]
     return (
-        LANGUAGE_NAMES.get(primary)
+        LANGUAGE_NAMES.get(primary_lang(raw))
         or LANGUAGE_NAMES.get(raw.lower())
         or raw
         or "el idioma original"
@@ -63,15 +74,14 @@ def language_name(code: str) -> str:
 
 def same_language(a: str, b: str) -> bool:
     """
-    Compara idiomas por subtag primario: 'pt-BR', 'pt_BR' y 'pt' son el mismo idioma.
+    ¿Dos códigos designan el mismo idioma?
 
-    Whisper devuelve el código base ('pt'), así que comparar la cadena completa
-    ('pt-BR' != 'pt') lanzaba una traducción pt→pt que reescribía el texto sin necesidad.
+    Compara solo el subtipo primario, así que una variante regional o de escritura
+    frente a su base no cuenta como cambio de idioma. Dos códigos vacíos no se
+    consideran iguales: un idioma desconocido no demuestra identidad.
     """
-    def _primary(code: str) -> str:
-        return str(code or "").strip().lower().replace("_", "-").split("-")[0]
-
-    return _primary(a) == _primary(b)
+    pa, pb = primary_lang(a), primary_lang(b)
+    return bool(pa) and pa == pb
 
 
 def _tokens(text: str) -> set[str]:

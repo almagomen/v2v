@@ -59,7 +59,7 @@ def get_crisper_model():
 
 
 def _normalize_detection(detected: Any) -> tuple[str, float | None, str]:
-    """Acepta `"es"` o `("es", 0.97, " · alternativas: ...")`."""
+    """Acepta un código suelto o una tupla (código, probabilidad, detalle)."""
     if isinstance(detected, (tuple, list)):
         language = str(detected[0] if detected else "").strip().lower()
         probability = None

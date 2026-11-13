@@ -154,12 +154,21 @@ Términos:
 
 
 def _is_word_inflection(a: str, b: str) -> bool:
-    """¿Son la misma palabra en distinta forma gramatical (singular/plural)?"""
+    """
+    ¿Son la misma palabra en distinta forma gramatical?
+
+    Sin reglas de ningún idioma: si una forma contiene a la otra y solo añade un
+    sufijo corto y alfabético, se trata como flexión y no como dos grafías de la
+    misma entidad.
+    """
     la, lb = str(a).lower(), str(b).lower()
     if la == lb:
         return True
     short, long_ = (la, lb) if len(la) <= len(lb) else (lb, la)
-    return long_ in (short + "s", short + "es")
+    if not short or not long_.startswith(short):
+        return False
+    suffix = long_[len(short):]
+    return 0 < len(suffix) <= 3 and suffix.isalpha()
 
 
 def parse_term_groups(raw: object, known: Iterable[str]) -> dict[str, str]:

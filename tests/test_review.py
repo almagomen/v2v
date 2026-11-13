@@ -96,6 +96,11 @@ class TestParseTermGroups(unittest.TestCase):
         raw = {"grupos": [{"variantes": ["Trepix", "Trepixes"], "canonica": "Trepixes"}]}
         self.assertEqual(parse_term_groups(raw, ["Trepix", "Trepixes"]), {})
 
+    def test_no_unifica_flexion_con_sufijo_de_otro_idioma(self):
+        """La flexión se detecta por forma, no por una lista de sufijos de un idioma."""
+        raw = {"grupos": [{"variantes": ["Zorbal", "Zorbalka"], "canonica": "Zorbalka"}]}
+        self.assertEqual(parse_term_groups(raw, ["Zorbal", "Zorbalka"]), {})
+
     def test_sigue_unificando_erratas_reales(self):
         raw = {"grupos": [{"variantes": ["Guidra", "Ghidra"], "canonica": "Ghidra"}]}
         self.assertEqual(

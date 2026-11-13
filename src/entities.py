@@ -57,9 +57,9 @@ _WORD_RE = re.compile(r"[^\W\d_][\w'-]*", re.UNICODE)
 # preposiciones como para que la estadística diga algo.
 _MIN_TOKEN_LEN = 3
 
-# Apóstrofo + 1-2 letras es un clítico o un posesivo (`I'm`, `I'll`, `Here's`,
-# `Xiaomi's`), no un nombre propio: el idioma destino lo resuelve con su propia
-# gramática. Congelarlo deja la forma de origen dentro de la traducción.
+# Apóstrofo + 1-2 letras es un clítico o un posesivo, no un nombre propio: el
+# idioma destino lo resuelve con su propia gramática. Congelarlo deja la forma de
+# origen dentro de la traducción.
 _CLITIC_RE = re.compile(r"['’][^\W\d_]{1,2}$", re.UNICODE)
 
 
@@ -124,10 +124,10 @@ def normalize_asr_casing(text: str, keep: Iterable[str] = ()) -> str:
     """
     Baja a minúscula las mayúsculas que el ASR pone a mitad de oración.
 
-    Whisper capitaliza el inicio de cada trozo separado por pausa, así que aparecen
-    'funciona Mais em outro lugar' o 'Utilizar no Hermes Porém'. El modelo de
+    El reconocimiento de voz capitaliza el inicio de cada trozo separado por pausa,
+    así que una palabra corriente llega al modelo con mayúscula. El modelo de
     traducción lee una mayúscula a mitad de frase como nombre propio y no la traduce;
-    medido sobre un doblaje real, eso dejó 26 segmentos con portugués sin traducir.
+    medido sobre un doblaje real, eso dejó segmentos enteros sin traducir.
 
     Se conservan intactos los términos de `keep` (las entidades ya detectadas), las
     siglas en mayúscula sostenida y los tokens de una sola letra.
@@ -140,8 +140,8 @@ def normalize_asr_casing(text: str, keep: Iterable[str] = ()) -> str:
     cursor = 0
     for m in _WORD_RE.finditer(text):
         word = m.group(0)
-        # La raíz de un posesivo (`Xiaomi's`) conserva la mayúscula si su nombre
-        # está protegido, aunque el posesivo en sí se traduzca.
+        # La raíz de un posesivo conserva la mayúscula si su nombre está protegido,
+        # aunque el posesivo en sí se traduzca.
         stem = re.split(r"['’]", word, 1)[0].lower()
         if (
             len(word) < 2
@@ -172,8 +172,8 @@ def split_terms(sentences: Sequence[str]) -> tuple[set[str], set[str]]:
     estadística del lote no las distingue cuando aparecen una sola vez, así que
     quedan marcadas para que el modelo decida cuáles conservar.
 
-    Los clíticos y posesivos (`I'm`, `Xiaomi's`) nunca son dudosos: el idioma
-    destino los resuelve con su propia gramática.
+    Los clíticos y posesivos nunca son dudosos: el idioma destino los resuelve con
+    su propia gramática.
     """
     texts = [t or "" for t in sentences]
     lowercase = _lowercase_counts(texts)
@@ -212,9 +212,10 @@ def _term_spans(text: str, term: str):
     """
     Apariciones de `term` que son el término completo y no parte de otro.
 
-    Sin esta comprobación, conservar `Xiaomi` bloquearía también la raíz de
-    `Xiaomi's` y el posesivo quedaría intacto dentro de la traducción. Un término
-    rodeado de letras, dígitos o apóstrofos es un fragmento de una palabra mayor.
+    Sin esta comprobación, conservar un nombre bloquearía también la raíz de su
+    forma posesiva y el posesivo quedaría intacto dentro de la traducción. Un
+    término rodeado de letras, dígitos o apóstrofos es un fragmento de una palabra
+    mayor.
     """
     for m in re.finditer(re.escape(term), text):
         s, e = m.span()

@@ -95,7 +95,7 @@ def get_segments_editor(job_id: str, video_index: int):
             tts_text = str(tts_d["text"])
             speaker = tts_d.get("speaker") or orig_d.get("speaker")
 
-        # Texto original (lenguaje fuente STT, ej. portugués) preservado fielmente
+        # Texto original en el idioma detectado por el STT, preservado fielmente
         original_text = (
             orig_d.get("original_text")
             or orig_d.get("text")
@@ -164,7 +164,7 @@ def retranslate_segments(req: RetranslateSegmentsRequest):
         target_lang = job.get("translate_lang")
     if not target_lang or target_lang in ("None", ""):
         # Sin destino explícito se reescribe en el idioma que ya declara el resultado;
-        # nunca se inventa un idioma (el antiguo "es"/"en" traducía al equivocado).
+        # nunca se inventa uno fijo, porque traduciría al idioma equivocado.
         target_lang = stored_target_lang or source_lang
     if not target_lang:
         raise HTTPException(

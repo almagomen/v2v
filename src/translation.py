@@ -152,7 +152,7 @@ def _preview(text: str, mapping: Optional[dict[int, str]] = None, limit: int = _
 def translate_text_list(
     list_sentences: list[str],
     target_lang: str,
-    source_lang: str = "en",
+    source_lang: str = "",
     model_name: Optional[str] = None,
     print_full_prompt: bool = False,
     times: Optional[list[Tuple[float, float]]] = None,
