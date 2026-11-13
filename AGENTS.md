@@ -128,8 +128,9 @@ apps/web/src/v2v/
 4. **Token de Hugging Face (`HF_TOKEN`) y repos restringidos**:
    - `pyannote/speaker-diarization-3.1` y `pyannote/segmentation-3.0` son repos **gated**. Sin token, Hugging Face responde `401 Unauthorized` sobre `config.yaml`, un mensaje que no explica el motivo real.
    - Los secretos de Colab y Kaggle se activan **por notebook**: al importar o copiar el notebook el interruptor «Acceso del notebook» se reinicia. Por eso los lanzadores **nunca** deben tragarse el fallo en silencio: imprimen qué secretos faltan y las instrucciones exactas de cada plataforma.
-   - `get_hf_token()` acepta los alias `HF_TOKEN`, `HUGGINGFACE_TOKEN`, `HUGGING_FACE_HUB_TOKEN` y `HF_API_TOKEN`, lee de entorno, Colab userdata y Kaggle Secrets, y normaliza el valor en `HF_TOKEN`.
-   - Antes de descargar el pipeline, `src/diarization.py` valida el token (`whoami`) y el acceso a cada repo (`model_info`) para distinguir «sin token» de «token inválido» y de «cuenta sin acceso concedido».
+   - `get_hf_token()` acepta los alias `HF_TOKEN`, `HUGGINGFACE_TOKEN`, `HUGGING_FACE_HUB_TOKEN` y `HF_API_TOKEN`, lee de entorno, Colab userdata y Kaggle Secrets, y normaliza el valor en `HF_TOKEN`. Basta un token de **lectura**.
+   - Si `Pipeline.from_pretrained` falla con 401/403, `src/diarization.py` diagnostica entonces el motivo real (`whoami` → `model_info` por repo) para distinguir «sin token», «token inválido» y «cuenta sin acceso». El diagnóstico es **posterior al fallo**, nunca previo: así una carga desde caché o un corte de red no se convierten en un falso «falta el token».
+   - `huggingface_hub.login()` se llama **sin kwargs específicos de versión** (`login(token=...)`); `write_permission` ya no existe en las versiones actuales y hacía fallar el arranque aunque el token fuera correcto.
    - Los lanzadores marcan `/tmp/v2v_deps_ok` tras instalar dependencias: si el kernel sigue vivo, volver a ejecutar la celda **no reinstala** nada aunque la carga de modelos haya fallado antes.
 
 ---

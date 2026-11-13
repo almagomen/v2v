@@ -37,39 +37,46 @@ DIARIZATION_GATED_REPOS = (DIARIZATION_REPO, "pyannote/segmentation-3.0")
 def _missing_token_error() -> RuntimeError:
     """Error accionable cuando no hay token para un repo restringido de HF."""
     return RuntimeError(
-        "⚠️ Falta HF_TOKEN: pyannote/speaker-diarization-3.1 es un repo con acceso "
-        "restringido y no se puede descargar de forma anónima (401 Unauthorized).\n"
+        "⚠️ Falta HF_TOKEN y pyannote/speaker-diarization-3.1 es un repo gated (401).\n"
         "   1. Acepta las condiciones en https://hf.co/pyannote/speaker-diarization-3.1 "
         "y https://hf.co/pyannote/segmentation-3.0\n"
-        "   2. Crea un token de lectura en https://hf.co/settings/tokens\n"
-        "   3. Guárdalo como secreto 'HF_TOKEN' y activa su acceso para este notebook:\n"
-        "      • Google Colab: 🔑 Secretos → 'Acceso del notebook' (se reinicia al "
-        "importar o copiar el notebook).\n"
-        "      • Kaggle: Add-ons → Secrets → activar el secreto para este notebook.\n"
-        "   4. Vuelve a ejecutar la celda."
+        "   2. Crea un token de lectura en https://hf.co/settings/tokens y guárdalo como "
+        "secreto 'HF_TOKEN' con acceso para este notebook."
     )
 
 
-def _check_hf_access(token: str) -> None:
-    """Valida el token y el acceso al repo restringido antes de descargar el pipeline.
+_AUTH_ERROR_MARKERS = ("401", "403", "gated", "unauthorized", "forbidden", "access to model")
 
-    Un 401 al pedir `config.yaml` no distingue entre "sin token", "token inválido"
-    y "cuenta sin acceso concedido", así que se comprueban los dos casos aquí para
-    dar un mensaje que se pueda resolver sin adivinar.
+
+def _is_auth_error(exc: Exception) -> bool:
+    """Indica si el fallo de Hugging Face es de autenticación o autorización."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _AUTH_ERROR_MARKERS)
+
+
+def _diagnose_hf_auth_error(token: str | None) -> None:
+    """Traduce un 401/403 de Hugging Face en la causa real.
+
+    El error nativo solo dice "401 Unauthorized" tanto si falta el token como si
+    es inválido o si la cuenta no aceptó las condiciones del repo gated. Aquí se
+    comprueban los tres casos, en orden, y se lanza el mensaje correspondiente.
+    Se invoca únicamente tras un fallo real, para no romper cargas desde caché.
     """
+    if not token:
+        raise _missing_token_error()
+
     try:
         from huggingface_hub import HfApi
-    except ImportError:  # sin huggingface_hub no se puede prevalidar
-        return
+    except ImportError:
+        raise _missing_token_error()
 
     api = HfApi(token=token)
     try:
         api.whoami(token=token)
     except Exception as exc:
         raise RuntimeError(
-            "⚠️ El HF_TOKEN configurado no es válido (Hugging Face rechazó la "
-            "autenticación). Genera uno nuevo en https://hf.co/settings/tokens y "
-            "actualiza el secreto HF_TOKEN del notebook."
+            "⚠️ HF_TOKEN rechazado por Hugging Face (token inválido o revocado). "
+            "Genera otro en https://hf.co/settings/tokens y actualiza el secreto."
         ) from exc
 
     for repo in DIARIZATION_GATED_REPOS:
@@ -77,23 +84,27 @@ def _check_hf_access(token: str) -> None:
             api.model_info(repo, token=token)
         except Exception as exc:
             raise RuntimeError(
-                f"⚠️ El HF_TOKEN es válido, pero la cuenta no tiene acceso a '{repo}'.\n"
-                f"   Entra en https://hf.co/{repo}, acepta las condiciones y vuelve a "
-                "ejecutar la celda (el acceso se concede al instante)."
+                f"⚠️ HF_TOKEN válido, pero sin acceso a '{repo}'. "
+                f"Acepta las condiciones en https://hf.co/{repo} y reintenta."
             ) from exc
+
+    raise RuntimeError(
+        "⚠️ HF_TOKEN válido y con acceso a los repos de Pyannote, pero Hugging Face "
+        "devolvió 401/403 durante la descarga. Revisa que el token siga activo en "
+        "https://hf.co/settings/tokens."
+    )
 
 
 def _load_diarization_model() -> Any:
     local_dir = DIARIZATION_DIR if (DIARIZATION_DIR and DIARIZATION_DIR.exists()) else None
     pretrained = local_dir or DIARIZATION_REPO
     load_kwargs = {}
+    token = None
 
     if local_dir is None:
         token = get_hf_token()
-        if not token:
-            raise _missing_token_error()
-        _check_hf_access(token)
-        load_kwargs["token"] = token
+        if token:
+            load_kwargs["token"] = token
 
     try:
         model = Pipeline.from_pretrained(pretrained, **load_kwargs)
@@ -105,6 +116,12 @@ def _load_diarization_model() -> Any:
             model = Pipeline.from_pretrained(pretrained, **load_kwargs)
         else:
             raise
+    except Exception as exc:
+        # Solo se diagnostica cuando el fallo es de autenticación: una carga desde
+        # caché o un error de red no deben convertirse en "falta el token".
+        if local_dir is None and _is_auth_error(exc):
+            _diagnose_hf_auth_error(token)
+        raise
 
     target_dev = DEVICE_SECONDARY if (torch is not None and torch.cuda.is_available()) else DEVICE
     model.to(torch.device(target_dev))

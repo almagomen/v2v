@@ -335,15 +335,11 @@ def get_hf_token() -> str | None:
     if not _hf_token_warned:
         _hf_token_warned = True
         print(
-            "⚠️ [HF] No se encontró ningún token de Hugging Face "
-            f"(buscado: {', '.join(HF_TOKEN_NAMES)}).\n"
-            "   Pyannote fallará con '401 Unauthorized' porque "
-            "pyannote/speaker-diarization-3.1 es un repo con acceso restringido.\n"
-            "   • Google Colab: 🔑 Secretos → añade 'HF_TOKEN' y activa "
-            "'Acceso del notebook' (se reinicia al importar o copiar el notebook).\n"
-            "   • Kaggle: Add-ons → Secrets → añade 'HF_TOKEN' y actívalo para este notebook.\n"
-            "   • Acepta las condiciones en https://hf.co/pyannote/speaker-diarization-3.1 "
-            "y https://hf.co/pyannote/segmentation-3.0",
+            "⚠️ [HF] Sin token de Hugging Face "
+            f"(busqué {', '.join(HF_TOKEN_NAMES)}). Pyannote responderá 401: sus repos son gated.\n"
+            "   Colab: 🔑 → 'Acceso del notebook'. Kaggle: Add-ons → Secrets → activar el secreto.\n"
+            "   Condiciones: https://hf.co/pyannote/speaker-diarization-3.1 y "
+            "https://hf.co/pyannote/segmentation-3.0",
             flush=True,
         )
 
