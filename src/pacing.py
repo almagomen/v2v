@@ -131,7 +131,7 @@ _TAG_RE = re.compile(r"\[[^\]]*\]")
 _MARKER_RE = re.compile(r"⟦E\d+⟧")
 _SPACE_RE = re.compile(r"\s+")
 
-# Longitud media de un término técnico bloqueado ("Ghidra", "Malwarebytes.exe").
+# Longitud media de un término técnico bloqueado.
 _MARKER_FALLBACK_LEN = 6
 
 

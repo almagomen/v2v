@@ -34,6 +34,12 @@ class TestEntityLock(unittest.TestCase):
         self.assertIn("REA", mapping.values())
         self.assertIn("OpenCode", mapping.values())
 
+    def test_conjunto_vacio_no_bloquea_nada(self):
+        """Un conjunto explícito vacío significa «nada protegido», no «detecta todo»."""
+        locked, mapping = lock_text("Usa o Ghidra aqui.", known=set())
+        self.assertEqual(locked, "Usa o Ghidra aqui.")
+        self.assertEqual(mapping, {})
+
     def test_no_fusiona_tokens_contiguos(self):
         """Unir tokens contiguos congelaba 'Hermes Porém' y metía portugués en el español."""
         src = "Configura no Hermes hoje"

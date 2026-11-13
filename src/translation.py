@@ -4,7 +4,7 @@ import os
 import json
 import re
 import time
-from typing import Any, Callable, Optional, Sequence, Tuple
+from typing import Any, Callable, Iterable, Optional, Sequence, Tuple
 
 from google import genai
 
@@ -219,6 +219,7 @@ def translate_text_list(
         preserved = doubtful
     elif doubtful:
         judge_client = genai.Client(api_key=available_keys[0])
+        judge_contexts = _term_contexts(source_texts, doubtful)
 
         def _judge_with(model: str) -> set[str]:
             return _judge_preservable(
@@ -226,6 +227,7 @@ def translate_text_list(
                 sorted(doubtful),
                 source_lang_name,
                 target_lang_name,
+                contexts=judge_contexts,
             )
 
         try:
@@ -263,7 +265,11 @@ def translate_text_list(
             )
 
     known_terms = structural | preserved
-    source_sentences = [normalize_asr_casing(s.strip(), keep=known_terms) for s in source_texts]
+    # Las palabras dudosas conservan su mayúscula aunque el juez las libere: son
+    # términos con forma propia en el destino y el traductor necesita verlos tal
+    # cual para elegir esa forma con la capitalización correcta.
+    casing_keep = structural | doubtful
+    source_sentences = [normalize_asr_casing(s.strip(), keep=casing_keep) for s in source_texts]
     locked_sentences: list[str] = []
     lock_maps: list[dict[int, str]] = []
     for s in source_sentences:
@@ -378,6 +384,7 @@ Directrices obligatorias:
 9. MAYÚSCULAS DEL RECONOCIMIENTO DE VOZ (NO SON NOMBRES PROPIOS):
    El texto de entrada viene de un ASR que capitaliza la primera palabra de cada trozo separado por una pausa, aunque sea una palabra corriente. Una mayúscula a mitad de frase NO indica nombre propio: solo los marcadores ⟦E1⟧, ⟦E2⟧... son términos protegidos.
    Traduce TODAS las palabras, incluidas las que aparecen en mayúscula, salvo los marcadores protegidos. Dejar una palabra del {source_lang_name} sin traducir porque venía capitalizada es un error grave.
+   Si {target_lang_name} tiene una forma propia y establecida para un término, usa esa forma aunque el original use otra grafía o pronunciación.
 {contexto}
 Texto original ({source_lang_name}) indexado por segmento:
 ---
@@ -939,10 +946,10 @@ Devuelve ÚNICAMENTE un objeto JSON válido con exactamente las mismas claves nu
                 duration = time.perf_counter() - t_start
 
                 # ─── Variantes del ASR: una sola grafía por entidad ───
-                # `Guidra`/`Ghidra` o `DeepSeq`/`DeepSeek` son la misma entidad y el
-                # bloque las puede traducir por separado. Se unifican aquí, sobre el
-                # texto ya completo, porque la variante correcta se ve en el conjunto
-                # y no dentro de un bloque de 80 frases.
+                # Una misma entidad puede llegar escrita de dos formas y el bloque
+                # las puede traducir por separado. Se unifican aquí, sobre el texto
+                # ya completo, porque la variante correcta se ve en el conjunto y no
+                # dentro de un bloque de 80 frases.
                 if review_enabled:
                     try:
                         candidates = collect_term_variants(aligned_list)
@@ -1161,7 +1168,7 @@ def _translate_entity_retry(
 Cada entrada trae:
 - `source`: frase original con marcadores ⟦E1⟧, ⟦E2⟧... que representan términos técnicos.
 - `text`: su traducción, que perdió, inventó o duplicó algún marcador.
-- `problema`: el diagnóstico exacto de esa entrada (por ejemplo, `pierde ⟦E2⟧ «Ghidra»`).
+- `problema`: el diagnóstico exacto de esa entrada (qué marcador falta, sobra o se duplica).
 
 Corrige el campo `text` atacando solo el `problema` indicado, sin reescribir el resto:
 1. Cada marcador presente en `source` aparece exactamente una vez en el nuevo `text`.
@@ -1181,11 +1188,28 @@ Devuelve únicamente un JSON con las mismas claves:
     return _call_json_map(client, model, is_gemma, prompt, "[Rescate entidades]")
 
 
+def _term_contexts(
+    sentences: Sequence[str],
+    terms: Iterable[str],
+    limit: int = 180,
+) -> dict[str, str]:
+    """Primera frase donde aparece cada término, recortada, para el juez."""
+    out: dict[str, str] = {}
+    for term in terms:
+        pattern = re.compile(rf"(?<![\w'’-]){re.escape(term)}(?![\w'’-])")
+        for sentence in sentences:
+            if pattern.search(sentence or ""):
+                out[term] = re.sub(r"\s+", " ", sentence).strip()[:limit]
+                break
+    return out
+
+
 def _judge_preservable(
     call: Callable[[str], str],
     words: list[str],
     source_lang_name: str,
     target_lang_name: str,
+    contexts: Optional[dict[str, str]] = None,
 ) -> set[str]:
     """
     De una lista de términos capitalizados, devuelve los que deben conservarse.
@@ -1198,33 +1222,49 @@ def _judge_preservable(
     expone un nombre a una traducción imperfecta, mientras que un falso positivo
     congela una palabra del idioma origen dentro del doblaje.
 
-    El criterio es «se escribe igual en el idioma destino», no «es un nombre
-    propio»: los topónimos con forma propia (France→Francia, Caribbean→Caribe) y
-    los sustantivos comunes que el ASR capitalizó (`the French Empire`) se traducen.
-    Sin esa distinción el doblaje dejaba «France» sin traducir y producía
-    «el imperio francés Empire».
+    El criterio es general y no depende de la categoría: un término se traduce si
+    el idioma destino tiene una forma propia y establecida para él; se conserva si
+    el destino no tiene esa forma y lo reproduce tal cual. La mayúscula no decide
+    nada, porque el ASR capitaliza inicios de fragmento y palabras comunes.
 
     La respuesta se acota a la lista de entrada, así que un juicio errático no
-    puede inventar términos ni romper el lock.
+    puede inventar términos ni romper el lock. Cada término viaja con la frase
+    donde aparece para que un nombre compuesto se juzgue como unidad.
     """
     if not words:
         return set()
 
+    if contexts:
+        term_lines = "\n".join(
+            f"- {word} · contexto: {contexts[word]}" if contexts.get(word) else f"- {word}"
+            for word in words
+        )
+        context_rule = (
+            "Cada término va con la frase donde aparece. Juzga el término dentro de esa "
+            "frase, no de forma aislada: un nombre compuesto o una expresión fija se "
+            "decide como unidad. Si la unidad se conserva, incluye todos sus términos; "
+            "si se traduce, no incluyas ninguno.\n\n"
+        )
+    else:
+        term_lines = ", ".join(words)
+        context_rule = ""
+
     prompt = f"""Recibes términos que aparecen en mayúscula en la transcripción automática de un audio en {source_lang_name}. El doblaje es al {target_lang_name}.
 
-Devuelve SOLO los términos que deben conservarse sin traducir, es decir, los que en {target_lang_name} se escriben igual que en {source_lang_name}: nombres de personas, marcas, productos, empresas, obras y siglas.
+Decide, para cada término, si se conserva tal cual o se traduce. El criterio es el mismo para cualquier categoría y no depende de que el término sea un nombre propio:
 
-NO incluyas (se traducen):
-- Nombres de países, continentes, regiones, ríos, mares y accidentes geográficos cuando {target_lang_name} tiene su propia forma para ese lugar. Un topónimo con forma establecida en {target_lang_name} se traduce; solo se conserva si se escribe exactamente igual en los dos idiomas.
-- Sustantivos comunes, adjetivos, verbos, adverbios, conectores, pronombres, cargos, meses, días, idiomas, nacionalidades, gentilicios y unidades. Una palabra común capitalizada por el reconocimiento de voz no es un nombre propio: en `the French Empire`, `Empire` es un sustantivo común y se traduce.
-- Cualquier término que solo lleve mayúscula por abrir frase o por seguir una pausa.
+- Se TRADUCE cuando {target_lang_name} tiene una forma propia y establecida para ese término, distinta de la forma original. Esa forma propia es la que debe oírse en el doblaje.
+- Se CONSERVA cuando {target_lang_name} no tiene una forma propia para ese término y lo reproduce tal cual, conservando su grafía y su sonido de origen, de modo que sustituirlo no cambiaría nada.
 
-Ante la duda, NO lo incluyas. Es preferible traducir un nombre que congelar una palabra del idioma de origen.
+La mayúscula no es prueba de nombre propio: la transcripción automática capitaliza el inicio de cada fragmento y palabras comunes tras una pausa. Evalúa la forma real del término, no su grafía.
+
+{context_rule}Ante la duda, NO lo incluyas: es preferible que el traductor decida antes que congelar una palabra que sí tiene una forma propia en el destino.
 
 Responde únicamente con este JSON:
 {{"conservar": ["término"]}}
 
-Términos: {", ".join(words)}"""
+Términos:
+{term_lines}"""
 
     raw_text = call(prompt)
     parsed = _loads_loose(raw_text, "[Entidades] juicio de conservación")
@@ -1275,7 +1315,7 @@ def _judge_leaks(
 
 Devuelve SOLO las que siguen escritas en {source_lang_name} y deberían estar traducidas al {target_lang_name}.
 
-NO incluyas las que ya son palabras correctas del {target_lang_name} aunque se escriban igual, ni nombres propios, marcas ni términos técnicos.
+NO incluyas las que ya son palabras correctas del {target_lang_name} aunque se escriban igual, ni los términos que el {target_lang_name} reproduce con la misma grafía y pronunciación que el original. Un término que tiene una forma propia y establecida en {target_lang_name} sí es una fuga, aunque sea un nombre propio, una marca o un término técnico.
 
 Responde únicamente con este JSON:
 {{"fugas": ["palabra"]}}

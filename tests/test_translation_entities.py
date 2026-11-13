@@ -139,6 +139,14 @@ class TestEntityPipeline(unittest.TestCase):
         self.assertIn("TOKENS PROTEGIDOS", fake.interactions.translation_prompts[0])
         self.assertIn("⟦E1⟧", fake.interactions.translation_prompts[0])
 
+    def test_termino_liberado_conserva_la_mayuscula_en_el_prompt(self):
+        sentences = ["Napoleon controls a huge territory in France."]
+        good = {"1": {"text": "Napoleón controla un enorme territorio en Francia."}}
+        _texts, _meta, fake = _run([json.dumps(good)], sentences, judge_preserve=[])
+        prompt = fake.interactions.translation_prompts[0]
+        self.assertIn("France", prompt)
+        self.assertNotIn("france", prompt)
+
     def test_prompt_avisa_de_las_mayusculas_del_asr(self):
         """Whisper capitaliza tras cada pausa; el modelo no debe leerlo como nombre propio."""
         sentences = ["Instala o Ghidra 12.1 agora."]
@@ -355,8 +363,8 @@ class TestFitBudget(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_GENAI, "google-genai no instalado en este entorno")
 class TestJudgePreservablePrompt(unittest.TestCase):
-    """El juez decide qué se congela: su prompt es la única barrera contra
-    congelar topónimos y sustantivos comunes que sí tienen traducción."""
+    """El juez decide qué se congela: su prompt fija el criterio general, sin
+    ejemplos que sesguen la inferencia hacia un par de idiomas concreto."""
 
     def _prompt(self, words):
         from src.translation import _judge_preservable
@@ -370,21 +378,40 @@ class TestJudgePreservablePrompt(unittest.TestCase):
         _judge_preservable(call, words, "English", "Spanish")
         return captured["prompt"]
 
-    def test_obliga_a_traducir_toponimos_con_forma_propia(self):
-        prompt = self._prompt(["France", "Britain", "Caribbean"])
-        self.assertIn("geográficos", prompt)
-        self.assertIn("se traduce", prompt)
-        self.assertNotIn("lugares", prompt)
+    def test_pide_la_forma_propia_del_idioma_destino(self):
+        prompt = self._prompt(["Alpha", "Beta"])
+        self.assertIn("forma propia", prompt)
+        self.assertIn("Se TRADUCE", prompt)
+        self.assertIn("Se CONSERVA", prompt)
 
-    def test_obliga_a_traducir_sustantivos_comunes_capitalizados(self):
-        prompt = self._prompt(["Empire"])
-        self.assertIn("sustantivos comunes", prompt)
-        self.assertIn("Empire", prompt)
+    def test_no_sesga_con_ejemplos_de_pares_de_idiomas(self):
+        prompt = self._prompt(["Alpha", "Beta"])
+        for example in ("France", "Francia", "Empire", "Americas", "Napoleon"):
+            self.assertNotIn(example, prompt)
 
     def test_conserva_la_polaridad_segura(self):
-        """Ante la duda no se conserva: una omisión solo expone el nombre."""
-        prompt = self._prompt(["Napoleon"])
+        """Ante la duda no se conserva: una omisión solo expone el término."""
+        prompt = self._prompt(["Alpha"])
         self.assertIn("Ante la duda, NO lo incluyas", prompt)
+
+    def test_incluye_contexto_para_juzgar_la_unidad(self):
+        from src.translation import _judge_preservable
+
+        captured = {}
+
+        def call(prompt: str) -> str:
+            captured["prompt"] = prompt
+            return json.dumps({"conservar": []})
+
+        _judge_preservable(
+            call,
+            ["Alpha"],
+            "English",
+            "Spanish",
+            contexts={"Alpha": "Alpha Beta llegó."},
+        )
+        self.assertIn("contexto: Alpha Beta llegó.", captured["prompt"])
+        self.assertIn("como unidad", captured["prompt"])
 
 
 if __name__ == "__main__":

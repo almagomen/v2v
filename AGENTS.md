@@ -133,9 +133,10 @@ apps/web/src/v2v/
    - `huggingface_hub.login()` se llama **sin kwargs específicos de versión** (`login(token=...)`); `write_permission` ya no existe en las versiones actuales y hacía fallar el arranque aunque el token fuera correcto.
    - Los lanzadores marcan `/tmp/v2v_deps_ok` tras instalar dependencias: si el kernel sigue vivo, volver a ejecutar la celda **no reinstala** nada aunque la carga de modelos haya fallado antes.
 5. **Qué se congela y qué se traduce (`entity lock`)**:
-   - El criterio es **«se escribe igual en el idioma destino»**, no «es un nombre propio». Se conservan personas, marcas, productos, empresas, obras y siglas.
-   - Se **traducen** los topónimos con forma propia en el destino (`France`→`Francia`, `Britain`→`Gran Bretaña`, `Caribbean`→`Caribe`, `Americas`→`América`) y cualquier sustantivo común que el ASR capitalice (`the French Empire`: `Empire` es común). Congelarlos dejaba «France» sin traducir y producía «el imperio francés Empire».
-   - La consolidación de variantes del ASR (`America`/`Americas`) **nunca** agrupa formas que solo difieren en el plural: son palabras distintas, no dos grafías de la misma entidad.
+   - El criterio es general y vale para cualquier categoría: un término se **traduce** si el idioma destino tiene una forma propia y establecida para él; se **conserva** solo si el destino no tiene esa forma y lo reproduce con la misma grafía y pronunciación que el original.
+   - La mayúscula no decide nada: el ASR capitaliza inicios de fragmento y palabras comunes. Los términos que el juez no conserva se traducen en la llamada principal; los conservados viajan como marcadores y se restauran intactos.
+   - La consolidación de variantes del ASR **nunca** agrupa formas que solo difieran por una variación gramatical (número, género, conjugación): son palabras distintas, no dos grafías de la misma entidad.
+   - Los prompts no incluyen listas ni ejemplos de pares de palabras: un diccionario nunca cubre todos los pares de idiomas y un ejemplo sesga la inferencia.
 
 ---
 

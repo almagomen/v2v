@@ -6,10 +6,10 @@ modelo por lo que quedó marcado.
 
 Dos trabajos:
 
-1. **Variantes del ASR.** `Guidra`/`Ghidra`, `DeepSeq`/`DeepSeek`, `Anthropix`/
-   `Anthropic` son la misma entidad escrita de dos formas. Si viajan como entidades
-   protegidas, el doblaje locuta la variante equivocada. El modelo decide la grafía
-   canónica y el reemplazo es mecánico (palabra completa, sin tocar el resto).
+1. **Variantes del ASR.** Una misma entidad puede llegar escrita de dos formas
+   distintas. Si viajan como entidades protegidas, el doblaje locuta la variante
+   equivocada. El modelo decide la grafía canónica y el reemplazo es mecánico
+   (palabra completa, sin tocar el resto).
 2. **Segmentos marcados.** Los que todavía tienen una fuga de idioma, una entidad
    perdida o una desviación de duración severa. Se reescriben con instrucciones
    estrictas y se aceptan solo si mejoran y conservan las entidades.
@@ -133,21 +133,21 @@ def build_term_prompt(candidates: Sequence[dict], source_lang_name: str) -> str:
             f'- "{item["term"]}" ({item["count"]}) · contexto: {context}'
         )
     return f"""Recibes términos que el reconocimiento de voz escribió en mayúscula en la
-transcripción de un vídeo en {source_lang_name}. Muchos son la MISMA entidad escrita
-de dos formas (`Guidra`/`Ghidra`, `DeepSeq`/`DeepSeek`); otros son entidades distintas.
+transcripción de un vídeo en {source_lang_name}. Algunos son la MISMA entidad escrita
+de dos formas distintas; otros son entidades diferentes.
 
-Agrupa solo las variantes que se refieran al mismo objeto y devuelve la grafía
-canónica correcta (el nombre real del producto, empresa o persona):
+Agrupa solo las variantes que designen el mismo objeto y devuelve la grafía canónica
+correcta (el nombre real del producto, empresa o persona):
 
 - Si no estás seguro de que sean lo mismo, no las agrupes.
 - No inventes entidades que no estén en la lista.
 - La canónica tiene que ser una grafía real del término, no una explicación.
-- No agrupes una palabra con su plural ni con otra forma gramatical
-  (`America`/`Americas`, `Empire`/`Empires`): son palabras distintas, no variantes.
+- No agrupes formas que solo difieran por una variación gramatical (número, género,
+  conjugación o cualquier otra): son palabras distintas, no grafías de la misma entidad.
 - Si todas las variantes son correctas para cosas distintas, no devuelvas nada.
 
 Devuelve únicamente este JSON:
-{{"grupos": [{{"variantes": ["Guidra", "Ghidra"], "canonica": "Ghidra"}}]}}
+{{"grupos": [{{"variantes": ["...", "..."], "canonica": "..."}}]}}
 
 Términos:
 {chr(10).join(lines)}"""
@@ -189,16 +189,16 @@ def parse_term_groups(raw: object, known: Iterable[str]) -> dict[str, str]:
         real = [v for v in variants if str(v) in allowed]
         if len(real) < 2:
             continue
-        # `America`/`Americas` son dos palabras del idioma, no dos grafías de la
-        # misma entidad: unificarlas reescribe el guion y rompe la concordancia.
+        # Una variación gramatical no es una variante de grafía: unificarlas
+        # reescribe el guion y rompe la concordancia.
         if any(
             _is_word_inflection(real[i], real[j])
             for i in range(len(real))
             for j in range(i + 1, len(real))
         ):
             continue
-        # La canónica tiene que ser una grafía del lote, no una explicación:
-        # `Ghidra Pro` está a distancia 4 de `Ghidra` y no debe pasar.
+        # La canónica tiene que ser una grafía del lote, no una explicación ni un
+        # nombre ampliado: si añade palabras queda a más distancia y no debe pasar.
         if not any(levenshtein(canonical.lower(), v.lower()) <= 2 for v in real):
             continue
         for variant in real:

@@ -54,7 +54,7 @@ def normalize_pronunciation_dictionary(dict_input: Any) -> Optional[list[dict]]:
     Normaliza cualquier entrada de diccionario de pronunciación al formato oficial de Fish Audio S2:
     - Lista de reglas inline: [{"items": [{"key": "...", "value": "...", "case_sensitive": bool}]}]
     - Lista de managed dictionaries: [{"id": "...", "version": "..."}]
-    - Diccionario plano Python: {"Ghidra": "Gí-dra"} -> inline rules
+    - Diccionario plano Python: {"Término": "Tér-mi-no"} -> inline rules
     - Ruta (str o Path) hacia archivo JSON local
     """
     if dict_input is None:

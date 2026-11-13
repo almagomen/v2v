@@ -11,6 +11,7 @@ import unittest
 from src.review import (
     apply_term_map,
     audit_summary,
+    build_term_prompt,
     collect_term_variants,
     levenshtein,
     parse_review_map,
@@ -86,20 +87,38 @@ class TestParseTermGroups(unittest.TestCase):
         self.assertEqual(parse_term_groups({"grupos": "x"}, ["Guidra"]), {})
 
     def test_no_unifica_singular_y_plural(self):
-        # `America`/`Americas` son dos palabras: unificarlas producía
-        # «norte de Americas» y «en el Americas».
-        raw = {"grupos": [{"variantes": ["America", "Americas"], "canonica": "Americas"}]}
-        self.assertEqual(parse_term_groups(raw, ["America", "Americas"]), {})
+        # Una variación de número no es una variante de grafía: unificarla
+        # reescribiría el guion y rompería la concordancia.
+        raw = {"grupos": [{"variantes": ["Zorbal", "Zorbals"], "canonica": "Zorbals"}]}
+        self.assertEqual(parse_term_groups(raw, ["Zorbal", "Zorbals"]), {})
 
     def test_no_unifica_plural_con_es(self):
-        raw = {"grupos": [{"variantes": ["Empire", "Empires"], "canonica": "Empires"}]}
-        self.assertEqual(parse_term_groups(raw, ["Empire", "Empires"]), {})
+        raw = {"grupos": [{"variantes": ["Trepix", "Trepixes"], "canonica": "Trepixes"}]}
+        self.assertEqual(parse_term_groups(raw, ["Trepix", "Trepixes"]), {})
 
     def test_sigue_unificando_erratas_reales(self):
         raw = {"grupos": [{"variantes": ["Guidra", "Ghidra"], "canonica": "Ghidra"}]}
         self.assertEqual(
             parse_term_groups(raw, ["Guidra", "Ghidra"]), {"Guidra": "Ghidra"}
         )
+
+
+class TestTermPrompt(unittest.TestCase):
+    def test_no_sesga_con_ejemplos_de_pares_de_palabras(self):
+        prompt = build_term_prompt(
+            [{"term": "Alpha", "count": 2, "context": "Alpha aparece aquí."}],
+            "English",
+        )
+        for example in (
+            "Guidra",
+            "Ghidra",
+            "DeepSeq",
+            "DeepSeek",
+            "America",
+            "Empire",
+        ):
+            self.assertNotIn(example, prompt)
+        self.assertIn("variación gramatical", prompt)
 
 
 class TestApplyTermMap(unittest.TestCase):

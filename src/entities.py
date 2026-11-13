@@ -227,23 +227,24 @@ def _term_spans(text: str, term: str):
         yield s, e
 
 
-def lock_text(text: str, known: Iterable[str] = ()) -> tuple[str, dict[int, str]]:
+def lock_text(text: str, known: Optional[Iterable[str]] = None) -> tuple[str, dict[int, str]]:
     """
     Sustituye entidades por placeholders numerados desde 1.
 
     `known` viene de `collect_known_terms` sobre el lote completo, de modo que una
     entidad se bloquea también cuando abre oración en este segmento concreto.
+    Si se omite (`None`), se detecta sobre el propio texto; un conjunto vacío
+    significa «no bloquear nada» y no vuelve a detectar por su cuenta.
 
     Returns:
-        (texto_bloqueado, {1: "Ghidra", 2: "12.1", ...})
+        (texto_bloqueado, {1: "Término", 2: "12.1", ...})
     """
     if not text:
         return "", {}
 
-    given = [k for k in known if k]
+    source = collect_known_terms([text]) if known is None else known
+    given = [k for k in source if k]
     terms = {k for k in given if not _CLITIC_RE.search(k)}
-    if not given:
-        terms = collect_known_terms([text])
 
     spans: list[tuple[int, int, str]] = []
     for term in sorted(terms, key=len, reverse=True):
@@ -317,7 +318,7 @@ def _significant(nums: Sequence[str]) -> list[str]:
 
 
 def _marker_label(index: int, mapping: Optional[dict[int, str]] = None) -> str:
-    """Etiqueta legible de un marcador: `⟦E2⟧ «Ghidra»` o solo `⟦E2⟧`."""
+    """Etiqueta legible de un marcador: `⟦E2⟧ «Término»` o solo `⟦E2⟧`."""
     term = (mapping or {}).get(index)
     return f"⟦E{index}⟧ «{term}»" if term else f"⟦E{index}⟧"
 
