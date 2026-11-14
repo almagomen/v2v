@@ -15,6 +15,20 @@ from src.pacing import ends_sentence, visible_text
 STRETCH_FLOOR = 0.80    # estiramiento máximo al alargar un clip (nunca por debajo)
 SILENCE_RATE = 24000    # sample rate del silencio cuando no hay audio del que copiarlo
 
+# Un clip TTS puede tomar como máximo este tiempo de un silencio real antes del
+# siguiente segmento. No es un objetivo: acota lo que una síntesis anómala puede
+# invadir de un interludio, sin comprimir una síntesis normal cuando hay sitio.
+MAX_BORROWED_SILENCE = 1.8
+
+# Separación mínima entre el final de un clip y el arranque del siguiente. Los
+# clips pueden tocarse sin solaparse; no hace falta reservar más.
+EDGE_GUARD = 0.01
+
+# Rampa de salida. 5 ms basta cuando la voz ya decayó; si la cola todavía lleva
+# energía, 20 ms evitan que la última palabra termine en seco.
+TAIL_FADE_SEC = 0.005
+TAIL_FADE_LOUD_SEC = 0.020
+
 try:
     import torch
     import torchaudio
@@ -22,6 +36,50 @@ except ImportError:
     torch = None
     torchaudio = None
 
+
+def _pcm_rms(arr: Any) -> float:
+    """RMS de un clip, con torch o numpy."""
+    if arr is None or arr.shape[-1] == 0:
+        return 0.0
+    if torch is not None and isinstance(arr, torch.Tensor):
+        return float(arr.pow(2).mean().sqrt())
+    data = np.asarray(arr)
+    return float(np.sqrt(np.mean(np.square(data))))
+
+
+def _fade_out_tail(arr: Any, rate: int, seconds: float) -> Any:
+    """Rampa lineal al final del clip, compatible con torch y numpy."""
+    if arr is None or arr.shape[-1] == 0:
+        return arr
+    fade_len = min(int(seconds * rate), arr.shape[-1])
+    if fade_len <= 1:
+        return arr
+    if torch is not None and isinstance(arr, torch.Tensor):
+        fade = torch.linspace(1.0, 0.0, fade_len, device=arr.device, dtype=arr.dtype)
+        out = arr.clone()
+    else:
+        out = np.array(arr, copy=True)
+        fade = np.linspace(1.0, 0.0, fade_len, dtype=out.dtype)
+    out[..., -fade_len:] *= fade
+    return out
+
+
+def _tail_fade_seconds(arr: Any, rate: int) -> float:
+    """5 ms si la cola ya decayó; 20 ms si todavía lleva energía de voz."""
+    if arr is None or arr.shape[-1] == 0:
+        return TAIL_FADE_SEC
+    tail_len = min(int(TAIL_FADE_LOUD_SEC * rate), arr.shape[-1])
+    if tail_len <= 1:
+        return TAIL_FADE_SEC
+    if torch is not None and isinstance(arr, torch.Tensor):
+        tail_rms = float(arr[..., -tail_len:].pow(2).mean().sqrt())
+    else:
+        data = np.asarray(arr)
+        tail_rms = float(np.sqrt(np.mean(np.square(data[..., -tail_len:]))))
+    body_rms = _pcm_rms(arr)
+    if body_rms > 1e-6 and tail_rms > 0.5 * body_rms:
+        return TAIL_FADE_LOUD_SEC
+    return TAIL_FADE_SEC
 
 
 def _build_atempo_filter(tempo: float) -> str:
@@ -175,21 +233,21 @@ def adjust_audio_duration(
     tempo = audio.shape[-1] / target_duration_samples
     safe_tempo = max(min(tempo, max_tempo), min_tempo)
 
-    # Si la diferencia es imperceptible (<=4%), recortar es inocuo, pero alargar
-    # nunca debe rellenarse con ceros: se estira con atempo para que el clip ocupe
-    # el mismo tramo que el original. El silencio de cola falsearía el timeline.
-    if abs(safe_tempo - 1.0) <= 0.04:
-        if audio.shape[-1] > target_duration_samples:
-            trimmed = audio[..., :target_duration_samples]
-            fade_len = max(16, min(int(0.005 * sample_rate), target_duration_samples))
-            if torch is not None and isinstance(trimmed, torch.Tensor):
-                trimmed = trimmed.clone()
-                if fade_len > 0:
-                    fade = torch.linspace(1.0, 0.0, fade_len, device=trimmed.device)
-                    trimmed[..., -fade_len:] *= fade
-            return trimmed
-        if audio.shape[-1] == target_duration_samples:
-            return audio
+    if audio.shape[-1] == target_duration_samples:
+        return audio
+
+    # Un recorte del 4 % de un clip de varios segundos elimina cientos de
+    # milisegundos del final de la locución y se oye como una palabra cortada.
+    # Solo se recorta cuando sobran unos pocos milisegundos; cualquier otra
+    # diferencia se resuelve con atempo, que a estos factores es inaudible.
+    excess = int(audio.shape[-1]) - int(target_duration_samples)
+    trim_tolerance = max(16, int(0.005 * sample_rate))
+    if 0 < excess <= trim_tolerance:
+        return _fade_out_tail(
+            audio[..., :target_duration_samples],
+            sample_rate,
+            TAIL_FADE_SEC,
+        )
 
     filter_str = _build_atempo_filter(safe_tempo)
 
@@ -358,8 +416,9 @@ def distribute_silence_padding(
         if remaining <= 0:
             break
 
-    max_alloc = max(allocations, default=0)
-    fade_len = max(64, min(int(0.005 * rate), max_alloc // 2 if max_alloc > 0 else 64))
+    # La rampa cae dentro del silencio (el corte se hace en el punto medio del
+    # valle), así que 5 ms bastan; no se alarga para no invadir la voz vecina.
+    fade_len = max(8, int(0.005 * rate))
     fade_out = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
     fade_in = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
 
@@ -405,7 +464,8 @@ def compact_silence_valleys(
     """
     Comprime quirúrgicamente los valles de silencio internos (pausas entre oraciones / respiraciones)
     reduciendo el tiempo muerto sin alterar la velocidad ni el timbre de las partes habladas (1.00x natural).
-    Aplica micro-fades de 5ms en cada unión para erradicar cualquier artefacto o 'tip' acústico.
+    Conserva un borde del valle a cada lado para no borrar el decaimiento de la voz y aplica
+    micro-fades de 5 ms en las uniones para erradicar cualquier artefacto o 'tip' acústico.
     """
     if arr is None or arr.shape[-1] <= target_samples:
         return arr
@@ -478,27 +538,61 @@ def compact_silence_valleys(
 
     cut_ratio = min(1.0, needed_reduction / total_reducible)
 
-    fade_len = max(64, int(0.005 * rate))  # 5ms de rampa suave
+    # El reparto proporcional deja algunos samples sin recortar por el redondeo;
+    # se completan en los valles con más margen para que la duración final sea
+    # exacta y no haga falta un segundo ajuste.
+    cut_amounts = [int(can_cut * cut_ratio) for can_cut in reducible_samples_list]
+    remainder = needed_reduction - sum(cut_amounts)
+    for i in sorted(
+        range(len(cut_amounts)),
+        key=lambda k: reducible_samples_list[k] - cut_amounts[k],
+        reverse=True,
+    ):
+        if remainder <= 0:
+            break
+        room = reducible_samples_list[i] - cut_amounts[i]
+        add = min(remainder, room)
+        cut_amounts[i] += add
+        remainder -= add
+
+    fade_len = max(8, int(0.005 * rate))  # 5 ms de rampa suave
     fade_out = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
     fade_in = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
 
     parts = []
     prev_idx = 0
-    for (vs, ve), can_cut in zip(valleys, reducible_samples_list):
-        cut_amount = int(round(can_cut * cut_ratio))
+    for (vs, ve), cut_amount in zip(valleys, cut_amounts):
+        if cut_amount <= 0:
+            # Un valle que no se recorta se conserva tal cual: sustituir su
+            # centro por ceros dejaría un hueco digital en medio de la pausa.
+            chunk = arr_np[:, prev_idx:ve].copy()
+            if prev_idx > 0 and chunk.shape[-1] >= fade_len:
+                chunk[:, :fade_len] *= fade_in
+            parts.append(chunk)
+            prev_idx = ve
+            continue
+
         keep_silence = (ve - vs) - cut_amount
 
-        chunk_before = arr_np[:, prev_idx:vs].copy()
+        # El valle se detecta con ventanas de 40 ms: su inicio puede caer sobre
+        # la cola de la última consonante. Se conserva un borde a cada lado y se
+        # recorta solo el centro, para no borrar el decaimiento de la voz.
+        edge_keep = min(int(0.03 * rate), max(0, keep_silence // 2))
+        head_end = vs + edge_keep
+        tail_start = ve - edge_keep
+        zero_len = max(0, keep_silence - 2 * edge_keep)
+
+        chunk_before = arr_np[:, prev_idx:head_end].copy()
         if prev_idx > 0 and chunk_before.shape[-1] >= fade_len:
             chunk_before[:, :fade_len] *= fade_in
         if chunk_before.shape[-1] >= fade_len:
             chunk_before[:, -fade_len:] *= fade_out
         parts.append(chunk_before)
 
-        if keep_silence > 0:
-            parts.append(np.zeros((arr_np.shape[0], keep_silence), dtype=arr_np.dtype))
+        if zero_len > 0:
+            parts.append(np.zeros((arr_np.shape[0], zero_len), dtype=arr_np.dtype))
 
-        prev_idx = ve
+        prev_idx = tail_start
 
     chunk_last = arr_np[:, prev_idx:].copy()
     if prev_idx > 0 and chunk_last.shape[-1] >= fade_len:
@@ -581,7 +675,7 @@ def synthesize_segment_audio(
     1. Invoca tts_fn (o usa cached_arr_rate si fue precalculado en paralelo).
     2. Guarda copia intacta en raw_audio_path.
     3. Aplica ajuste de tempo, sincronía de duración o padding orgánico de respiros.
-    4. Aplica micro-fade out de 5ms al final para evitar artefactos o clicks.
+    4. Aplica una rampa de salida al final (5 ms, o 20 ms si la cola sigue sonando).
     5. Guarda el audio final en out_audio_path.
 
     Retorna: (arr, rate, raw_duration, final_duration, mode_tag)
@@ -717,13 +811,6 @@ def synthesize_segment_audio(
                     stretch_samples = int(arr.shape[-1] / effective_speed)
                     arr = adjust_audio_duration(arr, stretch_samples, rate)
 
-    # Micro-fade out suave (5ms estándar) al final para eliminar ruidos de corte abrupto
-    fade_len_5ms = max(16, min(int(0.005 * rate), arr.shape[-1]))
-    if arr.shape[-1] >= fade_len_5ms and torch is not None:
-        fade = torch.linspace(1.0, 0.0, fade_len_5ms, device=arr.device)
-        arr = arr.clone()
-        arr[:, -fade_len_5ms:] *= fade
-
     # Modo target_duration (fijar duración objetivo explícita)
     dur_after_sync = float(arr.shape[-1]) / float(rate)
     if target_duration is not None and target_duration > 0:
@@ -738,6 +825,10 @@ def synthesize_segment_audio(
         metrics["speed"] = float(speed)
         mode_tag = f"🎛️ {speed:.2f}x (manual)"
         arr = adjust_audio_duration(arr, target_samples, rate)
+
+    # La rampa va al final de todos los ajustes: un recorte posterior (target o
+    # velocidad manual) borraría el fade y dejaría la cola en seco.
+    arr = _fade_out_tail(arr, rate, _tail_fade_seconds(arr, rate))
 
     final_dur = float(arr.shape[-1]) / float(rate)
 
@@ -817,6 +908,31 @@ def apply_auto_emotions_to_segments(
     for text_dict, new_text in zip(targets, enhanced):
         if new_text:
             text_dict["text"] = new_text
+
+
+def available_duration(
+    dur_en: float,
+    src_start: float,
+    next_start: Optional[float] = None,
+    total_duration: Optional[float] = None,
+    guard: float = EDGE_GUARD,
+) -> float:
+    """
+    Duración máxima que puede ocupar el TTS sin invadir el clip siguiente.
+
+    `limit` es el hueco real hasta el arranque del próximo segmento. El TTS puede
+    usar ese silencio, pero no más de `MAX_BORROWED_SILENCE` extra: así una
+    síntesis normal no se comprime cuando hay sitio y una síntesis anómala no
+    llena un interludio entero.
+    """
+    if next_start is not None:
+        limit = next_start - src_start - guard
+    elif total_duration is not None:
+        limit = total_duration - src_start - guard
+    else:
+        limit = max(dur_en + 0.8, 2.0)
+    limit = max(0.2, limit)
+    return min(limit, dur_en + MAX_BORROWED_SILENCE)
 
 
 def clone_voice_segments(
@@ -982,21 +1098,16 @@ def clone_voice_segments(
         ]
         next_seg_start = min(next_starts) if next_starts else None
 
-        # Límite máximo disponible antes de chocar o invadir silencios musicales
-        if next_seg_start is not None:
-            hard_limit = max(0.2, next_seg_start - src_start - 0.04)
-        elif video_total_duration is not None:
-            hard_limit = max(0.2, video_total_duration - src_start - 0.05)
-        else:
-            hard_limit = max(dur_en + 0.8, 2.0)
-
-        # Para clips cortos (< 2.5s), permitimos margen elástico proporcional al silencio real disponible
-        # evitando aceleraciones forzadas (ej. 1.27x en siglas o muletillas breves)
-        if dur_en < 2.5:
-            dynamic_slack = max(0.9, min(1.8, hard_limit - dur_en))
-            max_allowed_dur = min(hard_limit, dur_en + dynamic_slack)
-        else:
-            max_allowed_dur = min(hard_limit, dur_en + 0.65)
+        # El TTS puede usar el silencio real hasta el siguiente clip, no un tope
+        # fijo: comprimir una locución que cabe entera es lo que la cortaba antes
+        # de tiempo. `available_duration` deja la guarda mínima y acota cuánto
+        # puede invadir un interludio.
+        max_allowed_dur = available_duration(
+            dur_en=dur_en,
+            src_start=src_start,
+            next_start=next_seg_start,
+            total_duration=video_total_duration,
+        )
 
         audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.m4a"
         raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"

@@ -47,7 +47,7 @@ class TestFormatReport(unittest.TestCase):
         text = "\n".join(format_report(_report()))
 
         self.assertIn("Desborde (p95): 0%", text)
-        self.assertIn("Variación de volumen (σ RMS): sin datos", text)
+        self.assertIn("Var. de volumen (σ RMS): sin datos", text)
         self.assertIn("se necesita más de un segmento", text)
         self.assertNotIn("— —", text)
 

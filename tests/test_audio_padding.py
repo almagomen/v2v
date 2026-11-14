@@ -6,6 +6,9 @@ import numpy as np
 
 from src.audio_utils import (
     _format_aligned_segment_texts,
+    adjust_audio_duration,
+    available_duration,
+    compact_silence_valleys,
     distribute_silence_padding,
     synthesize_segment_audio,
 )
@@ -19,6 +22,12 @@ def _speech(seconds: float, amplitude: float = 0.5) -> np.ndarray:
 
 def _silence(seconds: float) -> np.ndarray:
     return np.zeros((1, int(seconds * RATE)), dtype=np.float32)
+
+
+def _tail_energy(arr: np.ndarray, seconds: float = 0.10) -> float:
+    """Pico de la cola: comprueba que no se añadió un bloque de ceros."""
+    n = min(int(seconds * RATE), arr.shape[-1])
+    return float(np.abs(arr[..., -n:]).max())
 
 
 def _silence_runs(arr: np.ndarray) -> list[float]:
@@ -163,7 +172,7 @@ class TestSyncToOriginal(unittest.TestCase):
         self.assertAlmostEqual(final_dur, 2.0, places=3)
         self.assertEqual(arr.shape[-1], int(2.0 * RATE))
         # La cola sigue siendo voz estirada, no una cola de ceros.
-        self.assertNotEqual(float(arr[..., -1][0]), 0.0)
+        self.assertGreater(_tail_energy(arr), 0.1)
 
     def test_no_toca_el_audio_si_ya_es_mas_largo_pero_cabe(self):
         arr, _rate, raw_dur, final_dur, _tag = self._synth(
@@ -187,7 +196,7 @@ class TestSyncToOriginal(unittest.TestCase):
 
         self.assertAlmostEqual(final_dur, 2.4, places=3)
         self.assertEqual(arr.shape[-1], int(2.4 * RATE))
-        self.assertNotEqual(float(arr[..., -1][0]), 0.0)
+        self.assertGreater(_tail_energy(arr), 0.1)
 
     def test_suelo_de_estiramiento_sin_relleno_artificial(self):
         # 1.0s de voz para un hueco de 2.0s: el suelo 0.80x solo llega a 1.25s.
@@ -196,7 +205,99 @@ class TestSyncToOriginal(unittest.TestCase):
 
         self.assertAlmostEqual(final_dur, 1.25, places=3)
         self.assertEqual(arr.shape[-1], int(1.25 * RATE))
-        self.assertNotEqual(float(arr[..., -1][0]), 0.0)
+        self.assertGreater(_tail_energy(arr), 0.1)
+
+
+class TestAvailableDuration(unittest.TestCase):
+    """El TTS usa el silencio real antes de comprimir su locución."""
+
+    def test_no_reserva_un_margen_fijo_de_40ms(self):
+        limit = available_duration(3.0, 0.0, next_start=3.0)
+        self.assertAlmostEqual(limit, 3.0 - 0.01, places=6)
+        self.assertGreater(limit, 3.0 - 0.04)
+
+    def test_usa_un_silencio_largo_en_vez_de_comprimir(self):
+        # 3 s de clip y 5 s de silencio real: puede tomar 1.8 s extra, no 0.65.
+        limit = available_duration(3.0, 0.0, next_start=8.0)
+        self.assertAlmostEqual(limit, 4.8, places=6)
+
+    def test_nunca_invade_el_siguiente_clip(self):
+        limit = available_duration(3.0, 0.0, next_start=2.5)
+        self.assertAlmostEqual(limit, 2.49, places=6)
+
+    def test_ultimo_clip_termina_antes_del_final(self):
+        limit = available_duration(2.0, 8.0, total_duration=10.0)
+        self.assertAlmostEqual(limit, 1.99, places=6)
+
+    def test_clip_corto_no_toma_mas_de_1_8s(self):
+        limit = available_duration(1.0, 0.0, next_start=10.0)
+        self.assertAlmostEqual(limit, 2.8, places=6)
+
+
+class TestAdjustAudioDuration(unittest.TestCase):
+    def test_una_diferencia_pequena_se_estira_no_se_recorta(self):
+        # 3 % más largo: antes se recortaba el 3 % del final (cientos de ms de
+        # voz). Ahora se resuelve con atempo, que a ese factor es inaudible.
+        audio = _speech(1.03)
+        target = int(1.0 * RATE)
+        stretched = _speech(1.0)
+        with mock.patch(
+            "src.audio_utils._adjust_audio_duration_ffmpeg",
+            return_value=stretched,
+        ) as ffmpeg:
+            out = adjust_audio_duration(audio, target, RATE)
+        ffmpeg.assert_called_once()
+        self.assertEqual(out.shape[-1], stretched.shape[-1])
+
+    def test_solo_recorta_unos_milisegundos(self):
+        audio = _speech(1.003)
+        target = int(1.0 * RATE)
+        out = adjust_audio_duration(audio, target, RATE)
+        self.assertEqual(out.shape[-1], target)
+        self.assertEqual(float(np.abs(out[..., -1]).max()), 0.0)
+
+
+class TestFinalFade(unittest.TestCase):
+    def test_la_rampa_se_aplica_despues_del_ajuste_manual(self):
+        # `speed` recorta el clip después del punto donde antes se aplicaba el
+        # fade; si la rampa va antes, el recorte la borra y la cola queda en seco.
+        def fake_tts(text, lang, speaker, **kwargs):
+            return _speech(1.0), RATE
+
+        with mock.patch(
+            "src.audio_utils._adjust_audio_duration_ffmpeg",
+            return_value=_speech(1.0 / 1.1),
+        ):
+            arr, _rate, _raw, final_dur, _tag = synthesize_segment_audio(
+                text="Texto de prueba.",
+                lang="es",
+                speaker="default",
+                sync_to_original=False,
+                speed=1.1,
+                tts_fn=fake_tts,
+            )
+
+        self.assertAlmostEqual(final_dur, 1.0 / 1.1, places=3)
+        self.assertEqual(float(np.abs(arr[..., -1]).max()), 0.0)
+
+
+class TestCompactSilenceValleys(unittest.TestCase):
+    def test_conserva_el_decaimiento_al_inicio_del_valle(self):
+        # Voz + cola de baja energía (bajo el umbral) + silencio + voz. El valle
+        # detectado empieza sobre esa cola; recortar desde su inicio borraría
+        # el final de la última consonante.
+        decay = np.full((1, int(0.10 * RATE)), 0.01, dtype=np.float32)
+        arr = np.concatenate([
+            _speech(0.5), decay, _silence(0.5), _speech(0.5),
+        ], axis=-1)
+        target = arr.shape[-1] - int(0.40 * RATE)
+
+        out = compact_silence_valleys(arr, RATE, target)
+
+        self.assertEqual(out.shape[-1], target)
+        start = int(0.5 * RATE)
+        kept = out[..., start:start + int(0.02 * RATE)]
+        self.assertGreater(float(np.abs(kept).max()), 0.0)
 
 
 class TestAlignedSegmentTexts(unittest.TestCase):
