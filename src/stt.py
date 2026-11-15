@@ -27,6 +27,7 @@ from src.diarization import get_diarization_model, speaker_diarization, process_
 from src.translation import translate_text_list, generate_tiktok_title
 from src.result_store import create_segment_entry
 from src.lang_utils import same_language
+from src.segmentation import SegmentationParams
 
 WHISPER_DIR = DRIVE_DIR / "whisper_turbo" if DRIVE_DIR else None
 if not WHISPER_DIR and KAGGLE_INPUT_DIR and KAGGLE_INPUT_DIR.exists():
@@ -152,7 +153,6 @@ def transcribe_and_process(
         if media_path is None:
             raise ValueError("Se requiere media_path o segments.")
 
-        t0_stt_wall = time.perf_counter()
         stt_engine = get_stt_engine()
 
         def _run_whisper():
@@ -209,15 +209,34 @@ def transcribe_and_process(
         except Exception as e:
             print(f"⚠️ No se pudo guardar whisper_raw.json: {e}")
 
-        t0_group = time.perf_counter()
+        params = SegmentationParams().with_overrides(
+            {"hard_gap": gap if gap is not None else 1.3}
+        )
+        assigned_words: list[dict] = []
         result = process_audio(
             segments,
             diarize_segments,
             group_segments=True,
-            hard_gap=gap if gap is not None else 1.3,
+            params=params,
+            words_out=assigned_words,
         )
-        t_group = time.perf_counter() - t0_group
-        total_stt_wall = time.perf_counter() - t0_stt_wall
+
+        # Palabras con su hablante exacto: la simulación de cortes reutiliza esta
+        # asignación en vez de aproximarla por solape con los segmentos actuales.
+        if assigned_words:
+            try:
+                words_path = Path(media_path).parent / "words_assigned.json"
+                import json
+                words_path.write_text(
+                    json.dumps(
+                        {"language": detected_language, "words": assigned_words},
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+            except Exception as e:
+                print(f"⚠️ No se pudo guardar words_assigned.json: {e}")
+
         return result, detected_language, {"whisper": t_whisper, "diarization": t_diarize}
 
     raise ValueError("Pasando segments sin media_path no soportado aquí.")

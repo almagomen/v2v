@@ -1,11 +1,12 @@
 import React from "react";
-import { Youtube, ListChecks, X, Loader2 } from "lucide-react";
+import { Youtube, ListChecks, X, Loader2, Scissors } from "lucide-react";
 import { useProjectStore } from "@/stores/project-store";
 import { useV2VStore } from "../stores/v2v-store";
 import { useColabExportStore } from "../stores/colab-export-store";
 import { folderNameFromTitle } from "../utils/v2v-utils";
 import { V2VPanel } from "./V2VPanel";
 import { V2VSegmentBulkEditor } from "./V2VSegmentBulkEditor";
+import { V2VSegmentationPreview } from "./V2VSegmentationPreview";
 
 export const V2VToolbarEntry: React.FC = () => {
   const { project } = useProjectStore();
@@ -48,6 +49,8 @@ export const V2VToolbarEntry: React.FC = () => {
   const exportStatus = useColabExportStore((s) => s.status);
   const isExporting = exportStatus === "uploading" || exportStatus === "rendering";
 
+  const [segmentationOpen, setSegmentationOpen] = React.useState(false);
+
   // Atajo global Alt+V para alternar el panel de Video2Video en Web y Desktop
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -89,6 +92,23 @@ export const V2VToolbarEntry: React.FC = () => {
         )}
       </button>
 
+      {/* Banco de cortes: solo cuando hay un video importado al timeline. */}
+      {bulkEditorContext && (
+        <button
+          type="button"
+          onClick={() => setSegmentationOpen((v) => !v)}
+          className={`flex items-center gap-1.5 rounded-[8px] px-2.5 py-[9px] text-[13px] font-semibold transition-colors mr-2 ${
+            segmentationOpen
+              ? "bg-accent/15 text-accent hover:bg-accent/20"
+              : "bg-bg-2 text-fg-2 hover:text-fg hover:bg-bg-3"
+          }`}
+          title="Banco de cortes – comparar segmentaciones sobre el timeline"
+        >
+          <Scissors size={14} />
+          <span className="hidden md:inline">Cortes</span>
+        </button>
+      )}
+
       {/* Drawer lateral de Video2Video (no bloqueante, permite interactuar con el timeline) */}
       {isV2VOpen && (
         <div className="fixed top-topbar right-0 bottom-0 w-full max-w-md bg-bg-1 border-l border-border z-50 shadow-2xl animate-in slide-in-from-right duration-200 flex flex-col pointer-events-auto">
@@ -109,6 +129,15 @@ export const V2VToolbarEntry: React.FC = () => {
               <V2VPanel embedInDrawer />
             </div>
           </div>
+      )}
+
+      {/* Banco de cortes sobre el timeline real (overlay + panel de parámetros) */}
+      {segmentationOpen && bulkEditorContext && (
+        <V2VSegmentationPreview
+          jobId={bulkEditorContext.jobId}
+          videoIndex={bulkEditorContext.videoIndex}
+          onClose={() => setSegmentationOpen(false)}
+        />
       )}
 
       {/* Diálogo flotante no-bloqueante para edición en lote de segmentos */}

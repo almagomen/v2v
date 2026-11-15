@@ -297,3 +297,91 @@ class GeminiModelsResponse(BaseModel):
 class SetDefaultGeminiModelRequest(BaseModel):
     model_name: str
 
+
+# ─── Banco de cortes (segmentación) ─────────────────────────────────────────
+
+
+class SegmentationPreviewRequest(BaseModel):
+    params: dict[str, float | int] = Field(
+        default_factory=dict,
+        description="Override de SegmentationParams; vacío = valores de producción",
+    )
+
+
+class SegmentationClip(BaseModel):
+    start: float
+    end: float
+    text: str
+    speaker: str
+
+
+class SegmentationMetrics(BaseModel):
+    count: int
+    avg_slot: float
+    short_ratio: float
+    dead_air: float
+
+
+class SegmentationSide(BaseModel):
+    clips: list[SegmentationClip]
+    metrics: SegmentationMetrics
+
+
+class SegmentationDiffRow(BaseModel):
+    index: Optional[int] = None
+    status: str
+    current_index: Optional[int] = None
+    current: Optional[dict[str, Any]] = None
+    proposed: Optional[dict[str, Any]] = None
+    needs_retranslation: bool = False
+    phonemes_carry: bool = False
+
+
+class SegmentationSummary(BaseModel):
+    changed: int
+    retranslate: int
+    resynthesize: int
+    resync: int
+    phonemes_dropped: int
+
+
+class SegmentationPreviewResponse(BaseModel):
+    params: dict[str, float | int]
+    words_source: Literal["assigned", "raw", "segments"]
+    total_duration: float
+    current: SegmentationSide
+    proposed: SegmentationSide
+    rows: list[SegmentationDiffRow]
+    summary: SegmentationSummary
+
+
+class SegmentationApplyRequest(BaseModel):
+    params: dict[str, float | int] = Field(
+        default_factory=dict,
+        description="Override de SegmentationParams; vacío = valores de producción",
+    )
+    mode: Literal["resync", "regenerate_changed", "regenerate_all"] = Field(
+        description=(
+            "resync: solo márgenes, sin Fish ni Gemini. "
+            "regenerate_changed: re-traduce y re-sintetiza solo lo que cambia. "
+            "regenerate_all: rehace todo."
+        )
+    )
+
+
+class SegmentationApplySummary(BaseModel):
+    count: int
+    reused: int
+    retranslated: int
+    resynthesized: int
+    phonemes_dropped: int
+
+
+class SegmentationApplyResponse(BaseModel):
+    mode: Literal["resync", "regenerate_changed", "regenerate_all"]
+    words_source: Literal["assigned", "raw", "segments"]
+    params: dict[str, float | int]
+    segments: list[dict[str, Any]]
+    summary: SegmentationApplySummary
+    qa: dict[str, Any]
+

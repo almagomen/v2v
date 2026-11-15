@@ -942,6 +942,7 @@ def clone_voice_segments(
     audio_ref: str | Path,
     tts_fn: callable,
     only_indices: Optional[list[int]] = None,
+    cached_arrays: Optional[dict[int, tuple]] = None,
     sync_to_original: bool = True,
     speed: float = 1.0,
     target_duration: Optional[float] = None,
@@ -970,6 +971,10 @@ def clone_voice_segments(
             should_enhance = is_enabled()
         except Exception:
             should_enhance = False
+    # En una re-sincronización el texto ya pasó por el etiquetado: volver a
+    # aplicarlo lo duplicaría o lo reescribiría sin necesidad.
+    if cached_arrays:
+        should_enhance = False
     if should_enhance:
         apply_auto_emotions_to_segments(
             texts_to_process,
@@ -1030,6 +1035,9 @@ def clone_voice_segments(
         seg_phonemes = text_dict.get("phonemes") or {}
         if not visible_text(text):
             # Sin habla no se pide TTS: el silencio se genera en el bucle principal.
+            continue
+        if cached_arrays and seq_num in cached_arrays:
+            # Re-sincronización desde el máster: no se llama a Fish.
             continue
         tts_tasks.append((idx, text, seg_audio_ref, seq_num, seg_phonemes))
 
@@ -1112,7 +1120,9 @@ def clone_voice_segments(
         audio_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}.m4a"
         raw_es_path = seqs_trg_dir / f"tts_{safe_speaker}_{seq_num:03d}_raw.wav"
 
-        cached_tts = tts_results.get(idx)
+        cached_tts = (
+            cached_arrays.get(seq_num) if cached_arrays else tts_results.get(idx)
+        )
         no_speech = not visible_text(text)
         if no_speech:
             # Silencio con el mismo sample rate del clip de origen: no hay llamada TTS

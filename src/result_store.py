@@ -190,6 +190,21 @@ def update_result_segments(folder: Path, segments: list[dict]) -> None:
     save_result(folder, data)
 
 
+def update_result_original_segments(folder: Path, segments: list[dict]) -> None:
+    """
+    Actualiza el reparto STT original en result.json.
+
+    Se escribe junto con `segments` cuando se re-corta el audio: `Seqs_src` y la
+    pista original del timeline tienen que medir el mismo tramo que la nueva
+    agrupación, no la del procesamiento anterior.
+    """
+    data = load_result(folder)
+    if data is None:
+        return
+    data["original_segments"] = segments
+    save_result(folder, data)
+
+
 def update_result_qa(folder: Path, qa: dict) -> None:
     """Persiste el bloque de QA del doblaje (umbrales, métricas y fallos)."""
     data = load_result(folder)

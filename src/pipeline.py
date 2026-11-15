@@ -19,6 +19,7 @@ from src.download import yt
 from src.stt import run_main
 from src.config import QUEUE_DIR
 from src.pacing import source_bounds
+from src.segmentation import SegmentationParams
 from src.result_store import (
     load_result,
     save_result,
@@ -245,12 +246,16 @@ def split_audio_sequences(
     texts: list[dict],
     output_dir: Optional[Path] = None,
     edit_indices: Optional[list[int]] = None,
+    params: SegmentationParams | None = None,
 ) -> list[Path]:
     """Divide el audio en secuencias según los segmentos de texto.
 
     Lee solo el tramo de cada segmento (`frame_offset`/`num_frames`). Cargar entero un
     vocals.wav de 2 h son ~1.2 GB en RAM (44.1 kHz mono float32) y ese pico tumba el job
     en Colab antes de llegar al TTS.
+
+    `params` permite recortar con márgenes distintos a los de producción (banco de
+    cortes); sin argumentos se comporta igual que siempre.
     """
     if output_dir is None:
         output_dir = audio_path.parent / "Seqs_src"
@@ -295,7 +300,7 @@ def split_audio_sequences(
     for idx, text_dict in enumerate(texts_to_process):
         real_idx = (edit_indices[idx] - 1) if edit_indices else idx
         # Mismo cálculo que usan el presupuesto de traducción y la sincronía del TTS.
-        src_start, src_end = source_bounds(all_times, real_idx, total_audio_sec)
+        src_start, src_end = source_bounds(all_times, real_idx, total_audio_sec, params)
 
         start = max(0, int(round(src_start * org_sr)))
         end = min(total_samples, int(round(src_end * org_sr)))

@@ -783,6 +783,95 @@ export interface SegmentsEditorResponse {
 }
 
 
+// --- Banco de cortes (simulación de segmentación) ---
+
+export type SegmentationParamsMap = Record<string, number>;
+
+export type SegmentationStatus =
+  | "igual"
+  | "ajustado"
+  | "partido"
+  | "ampliado"
+  | "fusionado"
+  | "modificado"
+  | "nuevo"
+  | "eliminado";
+
+export interface SegmentationClip {
+  start: number;
+  end: number;
+  text: string;
+  speaker: string;
+}
+
+export interface SegmentationMetrics {
+  count: number;
+  avg_slot: number;
+  short_ratio: number;
+  dead_air: number;
+}
+
+export interface SegmentationSide {
+  clips: SegmentationClip[];
+  metrics: SegmentationMetrics;
+}
+
+export interface SegmentationDiffClip {
+  start: number;
+  end: number;
+  slot: number;
+  text: string;
+  speaker: string;
+}
+
+export interface SegmentationDiffRow {
+  index: number | null;
+  status: SegmentationStatus;
+  current_index: number | null;
+  current: SegmentationDiffClip | null;
+  proposed: SegmentationDiffClip | null;
+  needs_retranslation: boolean;
+  phonemes_carry: boolean;
+}
+
+export interface SegmentationSummary {
+  changed: number;
+  retranslate: number;
+  resynthesize: number;
+  resync: number;
+  phonemes_dropped: number;
+}
+
+export interface SegmentationPreviewResponse {
+  params: SegmentationParamsMap;
+  words_source: "assigned" | "raw" | "segments";
+  total_duration: number;
+  current: SegmentationSide;
+  proposed: SegmentationSide;
+  rows: SegmentationDiffRow[];
+  summary: SegmentationSummary;
+}
+
+export type SegmentationApplyMode = "resync" | "regenerate_changed" | "regenerate_all";
+
+export interface SegmentationApplySummary {
+  count: number;
+  reused: number;
+  retranslated: number;
+  resynthesized: number;
+  phonemes_dropped: number;
+}
+
+export interface SegmentationApplyResponse {
+  mode: SegmentationApplyMode;
+  words_source: "assigned" | "raw" | "segments";
+  params: SegmentationParamsMap;
+  segments: Segment[];
+  summary: SegmentationApplySummary;
+  qa: Record<string, unknown>;
+}
+
+
 export interface JobUrlItem {
   url: string;
   status: string;
@@ -1377,6 +1466,71 @@ export const v2vApi = {
       throw new Error(err.detail || "Error al cargar segmentos para edición");
     }
     return readJsonOrThrow<SegmentsEditorResponse>(res);
+  },
+
+  /**
+   * Simula una variación de segmentación sin tocar nada. Read-only y barato:
+   * no llama a Gemini ni a Fish, así que se puede pedir en cada movimiento de
+   * un slider (con debounce).
+   */
+  async previewSegmentation(
+    jobId: string,
+    videoIndex: number,
+    params: SegmentationParamsMap,
+    signal?: AbortSignal,
+  ): Promise<SegmentationPreviewResponse> {
+    const res = await fetch(
+      url(`/api/job/${jobId}/segmentation/preview/${videoIndex}`),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal,
+        body: JSON.stringify({ params }),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Error al simular la segmentación");
+    }
+    return readJsonOrThrow<SegmentationPreviewResponse>(res);
+  },
+
+  /**
+   * Aplica la variación al video abierto y devuelve los segmentos nuevos.
+   *
+   * `resync` solo re-corta y re-sincroniza desde el máster (sin Fish ni Gemini);
+   * los otros dos modos pueden tardar minutos. El cuerpo se consume con la
+   * guarda de estancamiento: sin tope hasta las cabeceras, pero con aborto si
+   * deja de avanzar.
+   */
+  async applySegmentation(
+    jobId: string,
+    videoIndex: number,
+    params: SegmentationParamsMap,
+    mode: SegmentationApplyMode,
+    signal?: AbortSignal,
+  ): Promise<SegmentationApplyResponse> {
+    const { blob, res } = await fetchBlobWithStallGuard(
+      url(`/api/job/${jobId}/segmentation/apply/${videoIndex}`),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ params, mode }),
+        signal,
+      },
+      { label: `aplicar cortes (${mode})` },
+    );
+    if (!res.ok) {
+      const err = await blob.text().catch(() => "");
+      let detail = "Error al aplicar la segmentación";
+      try {
+        detail = JSON.parse(err)?.detail || detail;
+      } catch {
+        // El cuerpo no era JSON: se conserva el mensaje genérico.
+      }
+      throw new Error(detail);
+    }
+    return JSON.parse(await blob.text()) as SegmentationApplyResponse;
   },
 
   async retranslateSegments(

@@ -27,6 +27,7 @@ from collections import Counter
 from typing import Mapping, Optional, Sequence
 
 from src.lang_utils import SENTENCE_END_CHARS, primary_lang
+from src.segmentation import SegmentationParams
 
 # Caracteres por segundo en locución, medidos sobre audio real. Cada entrada es una
 # medición propia de ese idioma; los códigos sin medición usan `DEFAULT_RATE`.
@@ -65,23 +66,33 @@ FIT_MIN_GAIN = 0.02
 # última palabra transcrita y el resto de habla quedaba como aire muerto al final del
 # clip. El margen recupera ese tramo del silencio vecino sin invadir al segmento de al
 # lado: entre ataque y cola nunca se toma más del 80% del hueco disponible.
-SOURCE_LEAD_MAX = 0.150
-SOURCE_TAIL_MAX = 0.400
-SOURCE_MARGIN_SHARE = 0.40
+#
+# Los valores viven en `SegmentationParams` para poder simular variaciones; estas
+# constantes son los defaults y existen para no repetir los números.
+_DEFAULT_MARGINS = SegmentationParams()
+SOURCE_LEAD_MAX = _DEFAULT_MARGINS.lead_max
+SOURCE_TAIL_MAX = _DEFAULT_MARGINS.tail_max
+SOURCE_MARGIN_SHARE = _DEFAULT_MARGINS.margin_share
 
 
-def source_margins(gap_before: float, gap_after: float) -> tuple[float, float]:
+def source_margins(
+    gap_before: float,
+    gap_after: float,
+    params: SegmentationParams | None = None,
+) -> tuple[float, float]:
     """
     Segundos que el clip de origen toma del silencio anterior y posterior.
 
-    Los dos márgenes salen del mismo hueco y cada uno se queda con el 40%, así que
-    nunca se cruzan aunque el segmento vecino también esté recortado.
+    Los dos márgenes salen del mismo hueco y cada uno se queda con la cuota
+    configurada (40% por defecto), así que nunca se cruzan aunque el segmento
+    vecino también esté recortado.
     """
+    p = params or _DEFAULT_MARGINS
     gb = max(0.0, float(gap_before))
     ga = max(0.0, float(gap_after))
     return (
-        min(SOURCE_LEAD_MAX, gb * SOURCE_MARGIN_SHARE),
-        min(SOURCE_TAIL_MAX, ga * SOURCE_MARGIN_SHARE),
+        min(p.lead_max, gb * p.margin_share),
+        min(p.tail_max, ga * p.margin_share),
     )
 
 
@@ -89,6 +100,7 @@ def source_bounds(
     times: Sequence[tuple[float, float]],
     index: int,
     total_duration: float,
+    params: SegmentationParams | None = None,
 ) -> tuple[float, float]:
     """
     Arranque y fin del clip de origen de un segmento, márgenes incluidos.
@@ -117,7 +129,7 @@ def source_bounds(
     prev_end = float(times[index - 1][1]) if index > 0 else 0.0
     next_start = float(times[index + 1][0]) if index + 1 < n else float(total_duration)
 
-    lead, tail = source_margins(s_sec - prev_end, next_start - e_sec)
+    lead, tail = source_margins(s_sec - prev_end, next_start - e_sec, params)
     start = max(0.0, s_sec - lead)
     end = min(float(total_duration), e_sec + tail)
     return round(start, 3), round(end, 3)

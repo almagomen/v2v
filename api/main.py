@@ -18,7 +18,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import process, files, regenerate, speakers, share, transcribe_audio, render, video_ops, segments
+from api.routes import process, files, regenerate, speakers, share, transcribe_audio, render, video_ops, segments, segmentation
 from api.websocket_manager import ws_manager
 from api.job_store import get_job
 
@@ -55,6 +55,7 @@ app.include_router(transcribe_audio.router)
 app.include_router(render.router)
 app.include_router(video_ops.router)
 app.include_router(segments.router)
+app.include_router(segmentation.router)
 
 
 @app.websocket("/ws/job/{job_id}")
