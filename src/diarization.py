@@ -334,23 +334,15 @@ def smart_group_segments_strict(
             if gap >= 0.32:
                 internal_pause_time += gap
 
-        net_dur = max(0.1, round(dur - internal_pause_time, 3))
-        w_count = len(words_list)
         syl_count = count_syllables_approx(clean_text)
-        c_count = len(clean_text)
         return {
             "start": start_t,
             "end": end_t,
             "duration": dur,
-            "net_speech_duration": net_dur,
             "internal_pause_sec": round(internal_pause_time, 3),
             "text": clean_text,
             "speaker": words_list[0]["speaker"],
-            "word_count": w_count,
             "syllable_count": syl_count,
-            "char_count": c_count,
-            "speech_rate": round(w_count / net_dur, 2) if net_dur > 0 else 0.0,
-            "syllable_rate": round(syl_count / net_dur, 2) if net_dur > 0 else 0.0,
             "words": words_list,
         }
 
@@ -409,11 +401,6 @@ def smart_group_segments_strict(
                         chosen_cut_idx = curr - 1
                         break
 
-                    # 3. Pausa acústica real (gap >= min_silence_gap)
-                    if gap_before_curr >= p.min_silence_gap:
-                        chosen_cut_idx = curr - 1
-                        break
-
             if curr == n - 1:
                 chosen_cut_idx = curr
                 break
@@ -437,7 +424,7 @@ def smart_group_segments_strict(
                 if remaining_words_count > 0:
                     remaining_dur = all_words[peek - 1]["end"] - peek_start
                     # Si la cola residual antes del próximo silencio es corta, absorberla
-                    if remaining_dur < p.orphan_absorb_max_dur or remaining_words_count <= p.orphan_absorb_max_words:
+                    if remaining_dur < p.orphan_absorb_max_dur:
                         chosen_cut_idx = peek - 1
 
         seg_words = all_words[start_idx : chosen_cut_idx + 1]
@@ -446,7 +433,7 @@ def smart_group_segments_strict(
             grouped_segments.append(seg)
         start_idx = chosen_cut_idx + 1
 
-    # ─── PASO 2: Fusión limpia de micro-segmentos huérfanos (< 2.8s o <= 3 palabras) ───
+    # ─── PASO 2: Fusión limpia de micro-segmentos huérfanos (< min_duration) ───
     if len(grouped_segments) <= 1:
         return grouped_segments
 
@@ -454,26 +441,21 @@ def smart_group_segments_strict(
     i = 0
     while i < len(grouped_segments):
         cur_seg = grouped_segments[i]
-        is_tiny = cur_seg["duration"] < p.merge_min_duration or cur_seg["word_count"] <= p.merge_max_words
+        is_tiny = cur_seg["duration"] < p.min_duration
 
         if is_tiny:
-            cur_last_word = cur_seg["words"][-1]["word"] if cur_seg.get("words") else ""
-            cur_ends_sentence = has_major_punct(cur_last_word)
-
             can_merge_prev = False
             gap_prev = float("inf")
             if merged_segments and merged_segments[-1]["speaker"] == cur_seg["speaker"]:
                 gap_prev = cur_seg["start"] - merged_segments[-1]["end"]
-                prev_last_word = merged_segments[-1]["words"][-1]["word"] if merged_segments[-1].get("words") else ""
-                prev_ended_sentence = has_major_punct(prev_last_word)
-                if gap_prev <= p.merge_max_gap and not (prev_ended_sentence and gap_prev >= p.merge_sentence_gap):
+                if gap_prev <= p.merge_max_gap:
                     can_merge_prev = True
 
             can_merge_next = False
             gap_next = float("inf")
             if i + 1 < len(grouped_segments) and grouped_segments[i + 1]["speaker"] == cur_seg["speaker"]:
                 gap_next = grouped_segments[i + 1]["start"] - cur_seg["end"]
-                if gap_next <= p.merge_max_gap and not (cur_ends_sentence and gap_next >= p.merge_sentence_gap):
+                if gap_next <= p.merge_max_gap:
                     can_merge_next = True
 
             # Priorizar el vecino con menor separación de silencio

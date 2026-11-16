@@ -14,35 +14,42 @@ Los valores por defecto son exactamente los que usa el pipeline en producción,
 así que construir `SegmentationParams()` sin argumentos reproduce el
 comportamiento actual. El módulo es puro: no importa torch, red ni el resto del
 pipeline, y se puede simular cualquier variación sin cargar modelos.
+
+Solo nueve umbrales deciden algo. Los que había antes y no aportaban se
+retiraron midiendo: cinco no cambiaban ni un borde con los valores de
+producción (uno estaba sombreado por otro, dos los cubría la regla de duración,
+uno nunca llegaba a dispararse y otro no era un umbral sino una garantía) y dos
+medían lo mismo que otro umbral con distinto nombre. La cuota del margen
+(`margin_share`) no es un ajuste de estilo —por encima de 0.5 los clips vecinos
+se solapan— y vive como constante en `src.pacing`.
 """
 
 from dataclasses import dataclass, fields, replace
 from typing import Any, Mapping
 
-# Parámetros que un ajuste normal mueve: pausa que corta, duración mínima,
-# silencio duro y los dos márgenes del clip.
+# El respiro que se exige cuando el ASR capitaliza sin puntuar es mayor que el
+# de una puntuación explícita: la mayúscula es un indicio más débil que un
+# punto, así que necesita más aire para justificar un corte. Es una relación
+# fija, no un ajuste: los dos umbrales miden lo mismo con distinta fiabilidad.
+UPPERCASE_GAP_RATIO = 1.78
+
+# Parámetros que un ajuste normal mueve: la pausa que corta, la duración mínima
+# y los dos márgenes del clip.
 BASIC_FIELDS: tuple[str, ...] = (
-    "min_silence_gap",
-    "min_duration",
     "hard_gap",
+    "min_duration",
     "lead_max",
     "tail_max",
 )
 
-# Reglas finas: reparto del margen, pausa tras puntuación, absorción de colas
-# huérfanas y fusión de micro-segmentos.
+# Reglas finas: respiro de frase, tolerancia a la diarización, absorción de
+# colas huérfanas y fusión de micro-segmentos.
 ADVANCED_FIELDS: tuple[str, ...] = (
-    "margin_share",
     "min_sentence_gap",
-    "uppercase_gap",
     "jitter_max_gap",
     "orphan_absorb_gap",
     "orphan_absorb_max_dur",
-    "orphan_absorb_max_words",
     "merge_max_gap",
-    "merge_sentence_gap",
-    "merge_min_duration",
-    "merge_max_words",
 )
 
 
@@ -58,24 +65,32 @@ class SegmentationParams:
     """
 
     # ─── Nivel 1: agrupación de palabras ───
+    # Pausa que siempre separa, sin exigir duración previa: es el corte de
+    # escena. Antes había un segundo umbral (`min_silence_gap`) para la pausa
+    # que solo corta tras `min_duration`; con los dos en 0.85 el segundo era
+    # inalcanzable, porque el primero ya había cortado.
     hard_gap: float = 0.85
-    min_silence_gap: float = 0.85
-    min_sentence_gap: float = 0.18
-    uppercase_gap: float = 0.32
+    # Antes de esta duración no se aplican las reglas de corte (salvo el silencio
+    # duro) y, después, un segmento más corto se considera micro y se fusiona
+    # con su vecino. Un solo número para las dos ideas: antes eran dos campos
+    # con el mismo valor que se estorbaban al moverlos por separado.
     min_duration: float = 2.8
+    min_sentence_gap: float = 0.18
+    # Tolerancia al ruido de pyannote: corrige una palabra aislada etiquetada
+    # con otro hablante si los huecos a ambos lados son menores que esto.
     jitter_max_gap: float = 0.40
     orphan_absorb_gap: float = 0.60
     orphan_absorb_max_dur: float = 2.2
-    orphan_absorb_max_words: int = 3
     merge_max_gap: float = 0.55
-    merge_sentence_gap: float = 0.35
-    merge_min_duration: float = 2.8
-    merge_max_words: int = 3
 
     # ─── Nivel 2: márgenes del clip de origen ───
     lead_max: float = 0.150
     tail_max: float = 0.400
-    margin_share: float = 0.40
+
+    @property
+    def uppercase_gap(self) -> float:
+        """Respiro exigido cuando la palabra siguiente abre oración en mayúscula."""
+        return round(self.min_sentence_gap * UPPERCASE_GAP_RATIO, 3)
 
     def with_overrides(self, overrides: Mapping[str, Any] | None) -> "SegmentationParams":
         """

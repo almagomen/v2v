@@ -11,7 +11,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.pacing import SOURCE_LEAD_MAX, SOURCE_TAIL_MAX, source_bounds, source_margins
+from dataclasses import fields
+
+from src.pacing import (
+    SOURCE_LEAD_MAX,
+    SOURCE_MARGIN_SHARE,
+    SOURCE_TAIL_MAX,
+    source_bounds,
+    source_margins,
+)
 from src.segmentation import (
     ADVANCED_FIELDS,
     BASIC_FIELDS,
@@ -73,12 +81,28 @@ class TestSegmentationParams(unittest.TestCase):
         # El pipeline llama siempre con gap=0.85; el 1.3 de la función es un
         # default engañoso que no debe filtrarse al dataclass.
         self.assertEqual(p.hard_gap, 0.85)
-        self.assertEqual(p.min_silence_gap, 0.85)
         self.assertEqual(p.min_sentence_gap, 0.18)
         self.assertEqual(p.min_duration, 2.8)
+        # `uppercase_gap` ya no es un campo: es la propiedad derivada que
+        # conserva el respiro de mayúscula de producción.
         self.assertEqual(p.uppercase_gap, 0.32)
         self.assertEqual(p.lead_max, SOURCE_LEAD_MAX)
         self.assertEqual(p.tail_max, SOURCE_TAIL_MAX)
+
+    def test_los_campos_retirados_ya_no_existen(self):
+        names = {f.name for f in fields(SegmentationParams)}
+        for gone in (
+            "min_silence_gap",
+            "orphan_absorb_max_words",
+            "merge_max_words",
+            "merge_sentence_gap",
+            "merge_min_duration",
+            "margin_share",
+        ):
+            self.assertNotIn(gone, names)
+        # Sigue existiendo como propiedad, nunca como campo ajustable.
+        self.assertNotIn("uppercase_gap", names)
+        self.assertNotIn("uppercase_gap", SegmentationParams().as_dict())
 
     def test_niveles_no_se_solapan(self):
         basic = set(BASIC_FIELDS)
@@ -86,14 +110,24 @@ class TestSegmentationParams(unittest.TestCase):
         self.assertFalse(basic & advanced)
         known = {f for f in SegmentationParams().as_dict()}
         self.assertEqual(basic | advanced, known)
+        self.assertEqual(len(basic), 4)
+        self.assertEqual(len(advanced), 5)
 
     def test_with_overrides_ignora_claves_y_valores_invalidos(self):
         p = SegmentationParams().with_overrides(
-            {"hard_gap": 1.2, "desconocido": 9, "min_duration": None, "merge_max_words": "4"}
+            {
+                "hard_gap": 1.2,
+                "desconocido": 9,
+                "min_duration": None,
+                "orphan_absorb_max_dur": "4",
+                "merge_max_words": 3,
+            }
         )
         self.assertEqual(p.hard_gap, 1.2)
         self.assertEqual(p.min_duration, 2.8)
-        self.assertEqual(p.merge_max_words, 4)
+        self.assertEqual(p.orphan_absorb_max_dur, 4.0)
+        # Una clave retirada se ignora: no puede reaparecer por la API.
+        self.assertFalse(hasattr(p, "merge_max_words"))
 
     def test_with_overrides_no_muta_el_original(self):
         base = SegmentationParams()
@@ -102,9 +136,22 @@ class TestSegmentationParams(unittest.TestCase):
         self.assertEqual(changed.lead_max, 0.5)
 
     def test_source_margins_respeta_los_parametros(self):
-        p = SegmentationParams().with_overrides({"lead_max": 0.05, "margin_share": 0.5})
+        p = SegmentationParams().with_overrides({"lead_max": 0.05})
         lead, tail = source_margins(2.0, 2.0, p)
         self.assertEqual(lead, 0.05)
+        self.assertEqual(tail, SOURCE_TAIL_MAX)
+
+    def test_la_cuota_del_margen_es_una_constante(self):
+        # La cuota no es un ajuste de estilo: garantiza que dos vecinos no se
+        # cruzan. Por encima de 0.5 los clips empiezan a solaparse, así que ya
+        # no se expone en `SegmentationParams`.
+        self.assertEqual(SOURCE_MARGIN_SHARE, 0.40)
+        lead, tail = source_margins(0.2, 0.2)
+        self.assertAlmostEqual(lead, 0.08)
+        self.assertAlmostEqual(tail, 0.08)
+        # Con huecos grandes mandan los topes, no la cuota.
+        lead, tail = source_margins(10.0, 10.0)
+        self.assertEqual(lead, SOURCE_LEAD_MAX)
         self.assertEqual(tail, SOURCE_TAIL_MAX)
 
     def test_source_bounds_acepta_parametros(self):

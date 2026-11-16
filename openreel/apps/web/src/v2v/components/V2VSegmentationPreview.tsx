@@ -32,52 +32,37 @@ interface FieldMeta {
   max: number;
   step: number;
   hint: string;
-  integer?: boolean;
 }
 
 const BASIC_ORDER = [
-  "min_silence_gap",
-  "min_duration",
   "hard_gap",
+  "min_duration",
   "lead_max",
   "tail_max",
 ] as const;
 
 const ADVANCED_ORDER = [
-  "margin_share",
   "min_sentence_gap",
-  "uppercase_gap",
   "jitter_max_gap",
   "orphan_absorb_gap",
   "orphan_absorb_max_dur",
-  "orphan_absorb_max_words",
   "merge_max_gap",
-  "merge_sentence_gap",
-  "merge_min_duration",
-  "merge_max_words",
 ] as const;
 
 const FIELD_META: Record<string, FieldMeta> = {
-  min_silence_gap: {
+  hard_gap: {
     label: "Pausa que corta",
     min: 0.2,
-    max: 2,
+    max: 3,
     step: 0.05,
-    hint: "Silencio mínimo para abrir un segmento nuevo.",
+    hint: "Silencio que siempre abre un segmento nuevo: el corte de escena.",
   },
   min_duration: {
     label: "Duración mínima",
     min: 0.5,
     max: 8,
     step: 0.1,
-    hint: "Antes de este tiempo no se aplican las reglas de corte.",
-  },
-  hard_gap: {
-    label: "Silencio duro",
-    min: 0.2,
-    max: 3,
-    step: 0.05,
-    hint: "Corte de escena: pausa que siempre separa.",
+    hint: "Antes de este tiempo no se aplican las reglas de corte. Por debajo, el segmento se fusiona con su vecino.",
   },
   lead_max: {
     label: "Margen inicial",
@@ -93,26 +78,12 @@ const FIELD_META: Record<string, FieldMeta> = {
     step: 0.01,
     hint: "Silencio que el clip toma por detrás.",
   },
-  margin_share: {
-    label: "Cuota del margen",
-    min: 0,
-    max: 1,
-    step: 0.05,
-    hint: "Fracción del hueco que se queda cada margen.",
-  },
   min_sentence_gap: {
-    label: "Pausa tras puntuación",
+    label: "Respiro de frase",
     min: 0,
     max: 0.8,
     step: 0.02,
-    hint: "Respiro mínimo tras un signo de cierre.",
-  },
-  uppercase_gap: {
-    label: "Pausa antes de mayúscula",
-    min: 0,
-    max: 1,
-    step: 0.02,
-    hint: "Respiro que se exige cuando empieza una oración nueva.",
+    hint: "Pausa mínima tras un signo de cierre. Cuando el ASR capitaliza sin puntuar se exige 1.78× este respiro.",
   },
   jitter_max_gap: {
     label: "Tolerancia de cambio de voz",
@@ -135,42 +106,12 @@ const FIELD_META: Record<string, FieldMeta> = {
     step: 0.1,
     hint: "Duración máxima de la cola que se absorbe.",
   },
-  orphan_absorb_max_words: {
-    label: "Absorber cola (palabras)",
-    min: 0,
-    max: 10,
-    step: 1,
-    integer: true,
-    hint: "Palabras máximas de la cola que se absorbe.",
-  },
   merge_max_gap: {
     label: "Fusionar micro (hueco)",
     min: 0,
     max: 2,
     step: 0.05,
     hint: "Hueco máximo para unir un micro-segmento al vecino.",
-  },
-  merge_sentence_gap: {
-    label: "Fusionar micro (respiro)",
-    min: 0,
-    max: 2,
-    step: 0.05,
-    hint: "Si el vecino cerró frase, hace falta este respiro para unir.",
-  },
-  merge_min_duration: {
-    label: "Fusionar micro (duración)",
-    min: 0,
-    max: 8,
-    step: 0.1,
-    hint: "Por debajo de esta duración el segmento se considera micro.",
-  },
-  merge_max_words: {
-    label: "Fusionar micro (palabras)",
-    min: 0,
-    max: 10,
-    step: 1,
-    integer: true,
-    hint: "Palabras máximas de un micro-segmento.",
   },
 };
 
@@ -488,7 +429,7 @@ export const V2VSegmentationPreview: React.FC<PanelProps> = ({ jobId, videoIndex
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-medium text-fg-2">{meta.label}</span>
                     <span className="text-[11px] tabular-nums text-fg-muted">
-                      {meta.integer ? value.toFixed(0) : `${value.toFixed(2)}s`}
+                      {value.toFixed(2)}s
                     </span>
                   </div>
                   <input
